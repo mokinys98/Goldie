@@ -1,0 +1,203 @@
+"use client";
+
+import { useEffect, useState } from "react";
+import { useParams, useRouter } from "next/navigation";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { api, openBotStream } from "@/lib/api";
+import type { Bot, BotStatus, ConfigVersion, Run, Signal } from "@/lib/types";
+import { ConfigEditor } from "@/components/config-editor";
+import { MarketChart } from "@/components/market-chart";
+import { StatusPill } from "@/components/status-pill";
+
+const tabs = ["Overview", "Configuration", "Live Monitor", "Signals", "Run History"] as const;
+type Tab = (typeof tabs)[number];
+
+export default function BotDetailPage() {
+  const router = useRouter();
+  const { id } = useParams<{ id: string }>();
+  const client = useQueryClient();
+  const [tab, setTab] = useState<Tab>("Overview");
+
+  const bot = useQuery({ queryKey: ["bot", id], queryFn: () => api<Bot>(`/api/v1/bots/${id}`) });
+  const status = useQuery({
+    queryKey: ["bot-status", id],
+    queryFn: () => api<BotStatus>(`/api/v1/bots/${id}/status`),
+    refetchInterval: 5000,
+  });
+  const configs = useQuery({
+    queryKey: ["configs", id],
+    queryFn: () => api<ConfigVersion[]>(`/api/v1/bots/${id}/config-versions`),
+  });
+  const signals = useQuery({
+    queryKey: ["signals", id],
+    queryFn: () => api<Signal[]>(`/api/v1/bots/${id}/signals`),
+  });
+  const runs = useQuery({
+    queryKey: ["runs", id],
+    queryFn: () => api<Run[]>(`/api/v1/bots/${id}/runs`),
+  });
+
+  useEffect(
+    () =>
+      openBotStream(id, () => {
+        client.invalidateQueries({ queryKey: ["bot-status", id] });
+        client.invalidateQueries({ queryKey: ["signals", id] });
+      }),
+    [client, id],
+  );
+
+  const refreshConfig = () => {
+    client.invalidateQueries({ queryKey: ["configs", id] });
+    client.invalidateQueries({ queryKey: ["bot", id] });
+    client.invalidateQueries({ queryKey: ["bot-status", id] });
+    client.invalidateQueries({ queryKey: ["runs", id] });
+  };
+
+  if (bot.isLoading) return <div className="panel">Loading bot...</div>;
+  if (bot.error || !bot.data) {
+    return (
+      <div className="error-box">
+        Could not load bot. <button onClick={() => router.push("/bots")}>Back</button>
+      </div>
+    );
+  }
+
+  const live = status.data;
+  return (
+    <section>
+      <header className="page-header bot-header">
+        <div>
+          <span className="eyebrow">BOT INSTANCE</span>
+          <h1>{bot.data.name}</h1>
+          <p>{bot.data.description || "No description"}</p>
+        </div>
+        <div className="header-statuses">
+          <StatusPill value={bot.data.mode} />
+          <StatusPill value={live?.agent_effective_status ?? "OFFLINE"} />
+          <span className="readonly-badge">NO ORDER EXECUTION</span>
+        </div>
+      </header>
+      <div className="tabs">
+        {tabs.map((item) => (
+          <button className={tab === item ? "active" : ""} key={item} onClick={() => setTab(item)}>
+            {item}
+          </button>
+        ))}
+      </div>
+
+      {tab === "Overview" && (
+        <div className="dashboard-grid">
+          <Metric label="Agent" value={live?.agent_effective_status ?? "OFFLINE"} />
+          <Metric label="Data" value={live?.data_state ?? "MISSING"} />
+          <Metric label="Bid" value={live?.latest_tick?.bid ?? "—"} />
+          <Metric label="Ask" value={live?.latest_tick?.ask ?? "—"} />
+          <Metric label="Latest signal" value={live?.latest_signal?.signal ?? "—"} />
+          <Metric label="Run" value={live?.active_run_id?.slice(0, 8) ?? "Not active"} />
+          <div className="panel grid-span-2">
+            <h2>Completed M1 close</h2>
+            <MarketChart candles={live?.recent_candles ?? []} />
+          </div>
+          <div className="panel">
+            <h2>Account</h2>
+            <KeyValues values={live?.latest_account ?? null} />
+          </div>
+          <div className="panel">
+            <h2>Symbol specification</h2>
+            <KeyValues values={live?.symbol_specification ?? null} />
+          </div>
+        </div>
+      )}
+
+      {tab === "Configuration" && configs.data && (
+        <ConfigEditor botId={id} versions={configs.data} onChanged={refreshConfig} />
+      )}
+
+      {tab === "Live Monitor" && (
+        <div className="dashboard-grid">
+          <div className="panel grid-span-2">
+            <div className="section-title">
+              <div><h2>Market stream</h2><p>Only completed M1 candles feed the strategy.</p></div>
+              <StatusPill value={live?.data_state ?? "MISSING"} />
+            </div>
+            <MarketChart candles={live?.recent_candles ?? []} />
+          </div>
+          <div className="panel">
+            <h2>Latest tick</h2>
+            <KeyValues values={live?.latest_tick ?? null} />
+          </div>
+          <div className="panel">
+            <h2>Latest decision</h2>
+            <KeyValues values={live?.latest_signal ?? null} />
+          </div>
+        </div>
+      )}
+
+      {tab === "Signals" && (
+        <DataTable
+          empty="No theoretical signals yet."
+          headers={["Time", "Decision", "Reason", "Momentum", "Spread", "Entry", "SL", "TP"]}
+          rows={(signals.data ?? []).map((signal) => [
+            new Date(signal.observed_at).toLocaleString(),
+            signal.signal,
+            signal.reason_code,
+            signal.momentum_points ?? "—",
+            signal.spread_points ?? "—",
+            signal.entry_price ?? "—",
+            signal.stop_loss ?? "—",
+            signal.take_profit ?? "—",
+          ])}
+        />
+      )}
+
+      {tab === "Run History" && (
+        <DataTable
+          empty="Activate a validated configuration to create the first run."
+          headers={["Run", "Mode", "Status", "Started", "Ended"]}
+          rows={(runs.data ?? []).map((run) => [
+            run.id.slice(0, 8),
+            run.mode,
+            run.status,
+            new Date(run.created_at).toLocaleString(),
+            run.ended_at ? new Date(run.ended_at).toLocaleString() : "—",
+          ])}
+        />
+      )}
+    </section>
+  );
+}
+
+function Metric({ label, value }: { label: string; value: string }) {
+  return <div className="metric-card"><span>{label}</span><strong>{value}</strong></div>;
+}
+
+function KeyValues({ values }: { values: Record<string, unknown> | null }) {
+  if (!values) return <p className="muted">Waiting for agent data.</p>;
+  return (
+    <dl className="key-values">
+      {Object.entries(values).map(([key, value]) => (
+        <div key={key}><dt>{key.replaceAll("_", " ")}</dt><dd>{String(value)}</dd></div>
+      ))}
+    </dl>
+  );
+}
+
+function DataTable({
+  headers,
+  rows,
+  empty,
+}: {
+  headers: string[];
+  rows: string[][];
+  empty: string;
+}) {
+  if (!rows.length) return <div className="empty-state"><p>{empty}</p></div>;
+  return (
+    <div className="table-wrap">
+      <table>
+        <thead><tr>{headers.map((header) => <th key={header}>{header}</th>)}</tr></thead>
+        <tbody>{rows.map((row, index) => <tr key={index}>{row.map((cell, cellIndex) => <td key={cellIndex}>{cell}</td>)}</tr>)}</tbody>
+      </table>
+    </div>
+  );
+}
+

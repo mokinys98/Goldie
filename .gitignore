@@ -1,0 +1,59 @@
+# Environment variables and local secrets
+.env
+.env.*
+!.env.example
+
+# Python environments
+.venv/
+venv/
+env/
+
+# Python bytecode and tool caches
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.pytest-*
+.mypy_cache/
+.ruff_cache/
+.pyright/
+.tox/
+.nox/
+.hypothesis/
+
+# Python test and coverage output
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+
+# Python build and packaging output
+build/
+dist/
+*.egg-info/
+.eggs/
+pip-wheel-metadata/
+
+# Node.js, pnpm, Next.js, and Vitest
+node_modules/
+.pnpm-store/
+.next/
+out/
+coverage/
+*.tsbuildinfo
+.turbo/
+
+# Runtime data and logs
+*.log
+*.pid
+data/*
+!data/.gitkeep
+
+# Editors and operating systems
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+Desktop.ini

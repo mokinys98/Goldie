@@ -1,0 +1,10 @@
+{
+  "name": "goldie",
+  "private": true,
+  "packageManager": "pnpm@10.12.1",
+  "scripts": {
+    "dev:web": "pnpm --dir apps/web dev",
+    "build:web": "pnpm --dir apps/web build",
+    "test:web": "pnpm --dir apps/web test"
+  }
+}

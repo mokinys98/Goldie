@@ -1,0 +1,7 @@
+overrides:
+  postcss: 8.5.10
+
+onlyBuiltDependencies:
+  - esbuild
+  - sharp
+  - unrs-resolver
