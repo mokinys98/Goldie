@@ -28,3 +28,9 @@ No order placement API or execution code exists in this phase.
 
 Detailed setup and acceptance checks are in
 [`docs/implementation`](docs/implementation/00_LOCAL_MVP_ROADMAP.md).
+
+Stage II managed database purchasing requirements are in
+[`docs/implementation/09_STAGE_II_MANAGED_DATABASE_REQUIREMENTS.md`](docs/implementation/09_STAGE_II_MANAGED_DATABASE_REQUIREMENTS.md).
+
+Railway Hobby deployment instructions are in
+[`docs/implementation/10_RAILWAY_DEPLOYMENT.md`](docs/implementation/10_RAILWAY_DEPLOYMENT.md).
