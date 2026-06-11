@@ -17,6 +17,31 @@ The variable template is
 [`infrastructure/railway.env.example`](../../infrastructure/railway.env.example).
 Never store actual production values in Git.
 
+## GitHub automatic deployments
+
+Railway automatic deployments are configured per service in the Railway
+dashboard. Configure all three application services (`goldie-api`,
+`goldie-worker`, and `goldie-web`) as follows:
+
+1. Open the service and go to **Settings > Source**.
+2. Connect the `mokinys98/Goldie` GitHub repository.
+3. Set the deployment trigger branch to `main`.
+4. Set **Autodeploy** to **Enabled**.
+5. Leave **Watch Paths** empty.
+
+With this configuration, every commit pushed to GitHub `main` triggers a new
+deployment of API, worker, and Web. PostgreSQL and Redis are managed data
+services and are not redeployed from GitHub.
+
+Do not add service-specific Watch Paths when the requirement is to redeploy
+the whole platform after every push. Watch Paths can cause Railway to skip a
+service when a commit changes files outside its configured patterns.
+
+Verify the integration with a normal push to `main`, then confirm that all
+three application services show a deployment for the same commit SHA. If a
+service does not deploy, open its **Settings > Source** page and check that
+the repository, branch, and Autodeploy state match the values above.
+
 ## Data services
 
 Add PostgreSQL and Redis from Railway templates. Keep both services private:
