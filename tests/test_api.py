@@ -1,4 +1,5 @@
 import os
+import uuid
 from datetime import UTC, datetime
 
 os.environ["DATABASE_URL"] = "sqlite:///./.pytest-goldie.db"
@@ -11,7 +12,7 @@ from fastapi.testclient import TestClient
 
 from goldie_api.db import Base, engine
 from goldie_api.main import app
-from goldie_api.models import Candle
+from goldie_api.models import Candle, ConfigVersion, Run, Signal, SignalOutcome
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -123,3 +124,86 @@ def test_duplicate_candle_is_idempotent() -> None:
         with Session(engine) as db:
             rows = list(db.scalars(select(Candle)))
         assert len(rows) == 1
+
+
+def test_shadow_trade_and_performance_endpoints() -> None:
+    Base.metadata.drop_all(engine)
+    Base.metadata.create_all(engine)
+    with TestClient(app) as client:
+        headers = login(client)
+        bot = client.post(
+            "/api/v1/bots",
+            headers=headers,
+            json={"name": "Performance bot", "mode": "SHADOW"},
+        ).json()
+        bot_id = uuid.UUID(bot["id"])
+        with Session(engine) as db:
+            config = db.scalar(
+                select(ConfigVersion).where(ConfigVersion.bot_id == bot_id)
+            )
+            run = Run(
+                bot_id=bot_id,
+                config_version_id=config.id,
+                mode="SHADOW",
+            )
+            db.add(run)
+            db.flush()
+            signal = Signal(
+                bot_id=bot_id,
+                run_id=run.id,
+                config_version_id=config.id,
+                observed_at=datetime(2026, 6, 11, 10, 0, tzinfo=UTC),
+                signal="BUY",
+                reason_code="MOMENTUM_UP",
+                entry_price="2350.20",
+                stop_loss="2349.50",
+                take_profit="2351.20",
+                inputs={},
+            )
+            db.add(signal)
+            db.flush()
+            db.add(
+                SignalOutcome(
+                    signal_id=signal.id,
+                    bot_id=bot_id,
+                    run_id=run.id,
+                    config_version_id=config.id,
+                    direction="BUY",
+                    status="CLOSED",
+                    result="WIN",
+                    close_reason="TAKE_PROFIT",
+                    opened_at=datetime(2026, 6, 11, 10, 0, tzinfo=UTC),
+                    closed_at=datetime(2026, 6, 11, 10, 2, tzinfo=UTC),
+                    entry_price="2350.20",
+                    exit_price="2351.20",
+                    stop_loss="2349.50",
+                    take_profit="2351.20",
+                    volume="0.08",
+                    risk_amount="5.60",
+                    gross_pnl="8.00",
+                    net_pnl="8.00",
+                    pnl_points="100",
+                    r_multiple="1.42857143",
+                    mfe_points="110",
+                    mae_points="10",
+                    duration_seconds=120,
+                )
+            )
+            db.commit()
+            run_id = run.id
+
+        trades = client.get(
+            f"/api/v1/bots/{bot['id']}/shadow-trades?result=WIN&direction=BUY",
+            headers=headers,
+        )
+        performance = client.get(
+            f"/api/v1/runs/{run_id}/performance",
+            headers=headers,
+        )
+
+        assert trades.status_code == 200
+        assert len(trades.json()) == 1
+        assert performance.status_code == 200
+        assert performance.json()["closed_trades"] == 1
+        assert performance.json()["win_rate"] == "100"
+        assert performance.json()["net_pnl"] == "8.00000000"

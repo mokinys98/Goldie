@@ -22,6 +22,7 @@ from ..schemas import (
     SymbolSpecificationIn,
 )
 from ..services import evaluate_latest_signal
+from ..shadow import create_signal_outcome, evaluate_open_outcome
 from ..websocket import manager
 from .agents import require_agent_token
 
@@ -87,6 +88,8 @@ async def ingest_tick(
         raise HTTPException(status_code=422, detail="Ask cannot be lower than bid")
     row = MarketTick(**payload.model_dump())
     db.add(row)
+    db.flush()
+    outcome = evaluate_open_outcome(db, row)
     db.commit()
     await manager.broadcast(
         {
@@ -94,6 +97,7 @@ async def ingest_tick(
             "occurred_at": datetime.now(UTC).isoformat(),
             "bot_instance_id": str(payload.bot_id),
             "data": jsonable_encoder(payload),
+            "shadow_outcome_id": str(outcome.id) if outcome else None,
         }
     )
     return {"accepted": True}
@@ -132,7 +136,15 @@ async def ingest_candle(
     if payload.is_complete:
         bot = db.get(Bot, payload.bot_id)
         if bot:
-            signal = evaluate_latest_signal(db, bot)
+            signal, created = evaluate_latest_signal(db, bot)
+            if created and signal:
+                tick = db.scalar(
+                    select(MarketTick)
+                    .where(MarketTick.bot_id == payload.bot_id)
+                    .order_by(MarketTick.observed_at.desc())
+                )
+                if tick:
+                    create_signal_outcome(db, signal, tick)
             db.commit()
     await manager.broadcast(
         {

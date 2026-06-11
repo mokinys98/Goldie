@@ -9,7 +9,7 @@ from sqlalchemy import select, text
 
 from .db import SessionLocal, engine
 from .models import User
-from .routers import agents, auth, bots, market, status
+from .routers import agents, analytics, auth, bots, market, status
 from .security import hash_password
 from .settings import get_settings
 from .websocket import manager
@@ -51,6 +51,7 @@ app.include_router(bots.router)
 app.include_router(agents.router)
 app.include_router(market.router)
 app.include_router(status.router)
+app.include_router(analytics.router)
 
 
 @app.exception_handler(Exception)

@@ -4,12 +4,28 @@ import { useEffect, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, openBotStream } from "@/lib/api";
-import type { Bot, BotStatus, ConfigVersion, Run, Signal } from "@/lib/types";
+import type {
+  Bot,
+  BotStatus,
+  ConfigVersion,
+  Performance,
+  Run,
+  ShadowTrade,
+  Signal,
+} from "@/lib/types";
 import { ConfigEditor } from "@/components/config-editor";
 import { MarketChart } from "@/components/market-chart";
+import { PerformancePanel } from "@/components/performance-panel";
 import { StatusPill } from "@/components/status-pill";
 
-const tabs = ["Overview", "Configuration", "Live Monitor", "Signals", "Run History"] as const;
+const tabs = [
+  "Overview",
+  "Configuration",
+  "Live Monitor",
+  "Signals",
+  "Performance",
+  "Run History",
+] as const;
 type Tab = (typeof tabs)[number];
 
 export default function BotDetailPage() {
@@ -18,7 +34,10 @@ export default function BotDetailPage() {
   const client = useQueryClient();
   const [tab, setTab] = useState<Tab>("Overview");
 
-  const bot = useQuery({ queryKey: ["bot", id], queryFn: () => api<Bot>(`/api/v1/bots/${id}`) });
+  const bot = useQuery({
+    queryKey: ["bot", id],
+    queryFn: () => api<Bot>(`/api/v1/bots/${id}`),
+  });
   const status = useQuery({
     queryKey: ["bot-status", id],
     queryFn: () => api<BotStatus>(`/api/v1/bots/${id}/status`),
@@ -36,12 +55,24 @@ export default function BotDetailPage() {
     queryKey: ["runs", id],
     queryFn: () => api<Run[]>(`/api/v1/bots/${id}/runs`),
   });
+  const performance = useQuery({
+    queryKey: ["performance", id],
+    queryFn: () => api<Performance>(`/api/v1/bots/${id}/performance`),
+    refetchInterval: 10000,
+  });
+  const shadowTrades = useQuery({
+    queryKey: ["shadow-trades", id],
+    queryFn: () => api<ShadowTrade[]>(`/api/v1/bots/${id}/shadow-trades?limit=200`),
+    refetchInterval: 10000,
+  });
 
   useEffect(
     () =>
       openBotStream(id, () => {
         client.invalidateQueries({ queryKey: ["bot-status", id] });
         client.invalidateQueries({ queryKey: ["signals", id] });
+        client.invalidateQueries({ queryKey: ["performance", id] });
+        client.invalidateQueries({ queryKey: ["shadow-trades", id] });
       }),
     [client, id],
   );
@@ -79,7 +110,11 @@ export default function BotDetailPage() {
       </header>
       <div className="tabs">
         {tabs.map((item) => (
-          <button className={tab === item ? "active" : ""} key={item} onClick={() => setTab(item)}>
+          <button
+            className={tab === item ? "active" : ""}
+            key={item}
+            onClick={() => setTab(item)}
+          >
             {item}
           </button>
         ))}
@@ -89,10 +124,14 @@ export default function BotDetailPage() {
         <div className="dashboard-grid">
           <Metric label="Agent" value={live?.agent_effective_status ?? "OFFLINE"} />
           <Metric label="Data" value={live?.data_state ?? "MISSING"} />
-          <Metric label="Bid" value={live?.latest_tick?.bid ?? "—"} />
-          <Metric label="Ask" value={live?.latest_tick?.ask ?? "—"} />
-          <Metric label="Latest signal" value={live?.latest_signal?.signal ?? "—"} />
+          <Metric label="Bid" value={live?.latest_tick?.bid ?? "--"} />
+          <Metric label="Ask" value={live?.latest_tick?.ask ?? "--"} />
+          <Metric label="Latest signal" value={live?.latest_signal?.signal ?? "--"} />
           <Metric label="Run" value={live?.active_run_id?.slice(0, 8) ?? "Not active"} />
+          <Metric label="Shadow net P&L" value={money(performance.data?.net_pnl)} />
+          <Metric label="Win rate" value={percent(performance.data?.win_rate)} />
+          <Metric label="Profit factor" value={metric(performance.data?.profit_factor)} />
+          <Metric label="Max drawdown" value={money(performance.data?.max_drawdown)} />
           <div className="panel grid-span-2">
             <h2>Completed M1 close</h2>
             <MarketChart candles={live?.recent_candles ?? []} />
@@ -105,6 +144,10 @@ export default function BotDetailPage() {
             <h2>Symbol specification</h2>
             <KeyValues values={live?.symbol_specification ?? null} />
           </div>
+          <div className="panel">
+            <h2>Active shadow position</h2>
+            <KeyValues values={live?.active_shadow_trade ?? null} />
+          </div>
         </div>
       )}
 
@@ -116,7 +159,10 @@ export default function BotDetailPage() {
         <div className="dashboard-grid">
           <div className="panel grid-span-2">
             <div className="section-title">
-              <div><h2>Market stream</h2><p>Only completed M1 candles feed the strategy.</p></div>
+              <div>
+                <h2>Market stream</h2>
+                <p>Only completed M1 candles feed the strategy.</p>
+              </div>
               <StatusPill value={live?.data_state ?? "MISSING"} />
             </div>
             <MarketChart candles={live?.recent_candles ?? []} />
@@ -129,23 +175,48 @@ export default function BotDetailPage() {
             <h2>Latest decision</h2>
             <KeyValues values={live?.latest_signal ?? null} />
           </div>
+          <div className="panel">
+            <h2>Active shadow position</h2>
+            <KeyValues values={live?.active_shadow_trade ?? null} />
+          </div>
         </div>
       )}
 
       {tab === "Signals" && (
         <DataTable
           empty="No theoretical signals yet."
-          headers={["Time", "Decision", "Reason", "Momentum", "Spread", "Entry", "SL", "TP"]}
+          headers={[
+            "Time",
+            "Decision",
+            "Reason",
+            "Momentum",
+            "Spread",
+            "Entry",
+            "SL",
+            "TP",
+            "Outcome",
+          ]}
           rows={(signals.data ?? []).map((signal) => [
             new Date(signal.observed_at).toLocaleString(),
             signal.signal,
             signal.reason_code,
-            signal.momentum_points ?? "—",
-            signal.spread_points ?? "—",
-            signal.entry_price ?? "—",
-            signal.stop_loss ?? "—",
-            signal.take_profit ?? "—",
+            signal.momentum_points ?? "--",
+            signal.spread_points ?? "--",
+            signal.entry_price ?? "--",
+            signal.stop_loss ?? "--",
+            signal.take_profit ?? "--",
+            signal.outcome?.result ??
+              signal.outcome?.skip_reason ??
+              signal.outcome?.status ??
+              "--",
           ])}
+        />
+      )}
+
+      {tab === "Performance" && (
+        <PerformancePanel
+          performance={performance.data}
+          trades={shadowTrades.data ?? []}
         />
       )}
 
@@ -158,7 +229,7 @@ export default function BotDetailPage() {
             run.mode,
             run.status,
             new Date(run.created_at).toLocaleString(),
-            run.ended_at ? new Date(run.ended_at).toLocaleString() : "—",
+            run.ended_at ? new Date(run.ended_at).toLocaleString() : "--",
           ])}
         />
       )}
@@ -167,15 +238,23 @@ export default function BotDetailPage() {
 }
 
 function Metric({ label, value }: { label: string; value: string }) {
-  return <div className="metric-card"><span>{label}</span><strong>{value}</strong></div>;
+  return (
+    <div className="metric-card">
+      <span>{label}</span>
+      <strong>{value}</strong>
+    </div>
+  );
 }
 
 function KeyValues({ values }: { values: Record<string, unknown> | null }) {
-  if (!values) return <p className="muted">Waiting for agent data.</p>;
+  if (!values) return <p className="muted">Waiting for data.</p>;
   return (
     <dl className="key-values">
       {Object.entries(values).map(([key, value]) => (
-        <div key={key}><dt>{key.replaceAll("_", " ")}</dt><dd>{String(value)}</dd></div>
+        <div key={key}>
+          <dt>{key.replaceAll("_", " ")}</dt>
+          <dd>{String(value)}</dd>
+        </div>
       ))}
     </dl>
   );
@@ -190,14 +269,49 @@ function DataTable({
   rows: string[][];
   empty: string;
 }) {
-  if (!rows.length) return <div className="empty-state"><p>{empty}</p></div>;
+  if (!rows.length) {
+    return (
+      <div className="empty-state">
+        <p>{empty}</p>
+      </div>
+    );
+  }
   return (
     <div className="table-wrap">
       <table>
-        <thead><tr>{headers.map((header) => <th key={header}>{header}</th>)}</tr></thead>
-        <tbody>{rows.map((row, index) => <tr key={index}>{row.map((cell, cellIndex) => <td key={cellIndex}>{cell}</td>)}</tr>)}</tbody>
+        <thead>
+          <tr>{headers.map((header) => <th key={header}>{header}</th>)}</tr>
+        </thead>
+        <tbody>
+          {rows.map((row, index) => (
+            <tr key={index}>
+              {row.map((cell, cellIndex) => <td key={cellIndex}>{cell}</td>)}
+            </tr>
+          ))}
+        </tbody>
       </table>
     </div>
   );
 }
 
+function money(value: string | number | null | undefined): string {
+  return formatDecimal(value, 2);
+}
+
+function percent(value: string | number | null | undefined): string {
+  const formatted = formatDecimal(value, 1);
+  return formatted === "--" ? formatted : `${formatted}%`;
+}
+
+function metric(value: string | number | null | undefined): string {
+  return formatDecimal(value, 2);
+}
+
+function formatDecimal(
+  value: string | number | null | undefined,
+  digits: number,
+): string {
+  if (value === null || value === undefined) return "--";
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed.toFixed(digits) : "--";
+}

@@ -17,6 +17,7 @@ from ..models import (
     MarketTick,
     Run,
     Signal,
+    SignalOutcome,
     SymbolSpecification,
     User,
 )
@@ -71,6 +72,12 @@ def get_bot_status(
         select(Run)
         .where(Run.bot_id == bot_id, Run.status == "ACTIVE")
         .order_by(desc(Run.created_at))
+    )
+    active_shadow_trade = db.scalar(
+        select(SignalOutcome).where(
+            SignalOutcome.bot_id == bot_id,
+            SignalOutcome.status == "OPEN",
+        )
     )
 
     now = datetime.now(UTC)
@@ -151,6 +158,7 @@ def get_bot_status(
             for candle in reversed(candles)
         ],
         latest_signal=SignalRead.model_validate(signal) if signal else None,
+        active_shadow_trade=active_shadow_trade,
         active_run_id=run.id if run else None,
         data_state=data_state,
     )

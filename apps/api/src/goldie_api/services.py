@@ -51,12 +51,12 @@ def next_config_version(db: Session, bot_id: uuid.UUID) -> int:
     return (current or 0) + 1
 
 
-def evaluate_latest_signal(db: Session, bot: Bot) -> Signal | None:
+def evaluate_latest_signal(db: Session, bot: Bot) -> tuple[Signal | None, bool]:
     if bot.active_config_version_id is None:
-        return None
+        return None, False
     config_row = db.get(ConfigVersion, bot.active_config_version_id)
     if config_row is None or config_row.status != "ACTIVE":
-        return None
+        return None, False
     active_run = db.scalar(
         select(Run)
         .where(Run.bot_id == bot.id, Run.status == "ACTIVE")
@@ -71,7 +71,7 @@ def evaluate_latest_signal(db: Session, bot: Bot) -> Signal | None:
         .order_by(desc(SymbolSpecification.updated_at))
     )
     if active_run is None or tick is None or spec is None:
-        return None
+        return None, False
 
     config = BotConfiguration.model_validate(config_row.config)
     rows = list(
@@ -88,7 +88,7 @@ def evaluate_latest_signal(db: Session, bot: Bot) -> Signal | None:
         )
     )
     if not rows:
-        return None
+        return None, False
 
     latest_candle = max(rows, key=lambda row: row.opened_at)
     duplicate = db.scalar(
@@ -99,7 +99,7 @@ def evaluate_latest_signal(db: Session, bot: Bot) -> Signal | None:
         )
     )
     if duplicate is not None:
-        return duplicate
+        return duplicate, False
 
     decision = BasicMomentumStrategy().evaluate(
         MarketContext(
@@ -137,4 +137,4 @@ def evaluate_latest_signal(db: Session, bot: Bot) -> Signal | None:
     )
     db.add(signal)
     db.flush()
-    return signal
+    return signal, True

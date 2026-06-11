@@ -37,3 +37,6 @@ Railway Hobby deployment instructions are in
 
 Windows fake and MT5 agent setup is in
 [`docs/implementation/11_WINDOWS_AGENT_SETUP.md`](docs/implementation/11_WINDOWS_AGENT_SETUP.md).
+
+Shadow trade outcome rules, Railway migration checks and quality gates are in
+[`docs/implementation/12_SHADOW_OUTCOME_EVALUATION.md`](docs/implementation/12_SHADOW_OUTCOME_EVALUATION.md).

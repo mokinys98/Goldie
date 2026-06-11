@@ -25,6 +25,7 @@ ignore = ["B008"]
 
 [tool.ruff.lint.per-file-ignores]
 "tests/test_api.py" = ["E402", "I001"]
+"tests/test_shadow_service.py" = ["E402", "I001"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

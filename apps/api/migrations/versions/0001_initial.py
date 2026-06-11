@@ -9,10 +9,30 @@ down_revision = None
 branch_labels = None
 depends_on = None
 
+INITIAL_TABLE_NAMES = {
+    "users",
+    "bots",
+    "config_versions",
+    "runs",
+    "agents",
+    "account_snapshots",
+    "symbol_specifications",
+    "market_ticks",
+    "candles",
+    "signals",
+    "audit_events",
+}
+
 
 def upgrade() -> None:
-    Base.metadata.create_all(bind=op.get_bind())
+    bind = op.get_bind()
+    for table in Base.metadata.sorted_tables:
+        if table.name in INITIAL_TABLE_NAMES:
+            table.create(bind=bind)
 
 
 def downgrade() -> None:
-    Base.metadata.drop_all(bind=op.get_bind())
+    bind = op.get_bind()
+    for table in reversed(Base.metadata.sorted_tables):
+        if table.name in INITIAL_TABLE_NAMES:
+            table.drop(bind=bind)
