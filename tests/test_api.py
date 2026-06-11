@@ -1,4 +1,5 @@
 import os
+from datetime import UTC, datetime
 
 os.environ["DATABASE_URL"] = "sqlite:///./.pytest-goldie.db"
 os.environ["JWT_SECRET"] = "test-secret-that-is-longer-than-thirty-two-bytes"
@@ -10,6 +11,9 @@ from fastapi.testclient import TestClient
 
 from goldie_api.db import Base, engine
 from goldie_api.main import app
+from goldie_api.models import Candle
+from sqlalchemy import select
+from sqlalchemy.orm import Session
 
 
 def login(client: TestClient) -> dict[str, str]:
@@ -67,3 +71,55 @@ def test_agent_token_is_required() -> None:
             },
         )
         assert response.status_code == 401
+
+
+def test_duplicate_candle_is_idempotent() -> None:
+    Base.metadata.drop_all(engine)
+    Base.metadata.create_all(engine)
+    with TestClient(app) as client:
+        headers = login(client)
+        bot = client.post(
+            "/api/v1/bots",
+            headers=headers,
+            json={"name": "Candle idempotency bot", "mode": "SHADOW"},
+        ).json()
+        agent = client.post(
+            "/api/v1/agents/register",
+            headers={"X-Agent-Token": "test-agent-token"},
+            json={
+                "bot_id": bot["id"],
+                "name": "test-agent",
+                "adapter": "fake",
+            },
+        ).json()
+        candle = {
+            "agent_id": agent["id"],
+            "bot_id": bot["id"],
+            "symbol": "XAUUSD",
+            "timeframe": "M1",
+            "opened_at": datetime(2026, 6, 11, 10, 0, tzinfo=UTC).isoformat(),
+            "open": "2350.00",
+            "high": "2351.00",
+            "low": "2349.00",
+            "close": "2350.50",
+            "tick_volume": 100,
+            "is_complete": True,
+        }
+
+        first = client.post(
+            "/api/v1/market/candles",
+            headers={"X-Agent-Token": "test-agent-token"},
+            json=candle,
+        )
+        duplicate = client.post(
+            "/api/v1/market/candles",
+            headers={"X-Agent-Token": "test-agent-token"},
+            json=candle,
+        )
+
+        assert first.status_code == 202
+        assert duplicate.status_code == 202
+        assert duplicate.json() == {"accepted": True, "duplicate": True}
+        with Session(engine) as db:
+            rows = list(db.scalars(select(Candle)))
+        assert len(rows) == 1

@@ -26,6 +26,7 @@ def run() -> None:
     client = ApiClient(settings)
     adapter = create_adapter(settings)
     agent_id = client.register(settings.bot_id, settings.agent_name, settings.agent_mode)
+    sent_candles: set[tuple[str, str, str]] = set()
     last_heartbeat = 0.0
     last_metadata = 0.0
 
@@ -60,10 +61,18 @@ def run() -> None:
                     with_identity(adapter.tick(), agent_id, settings.bot_id),
                 )
                 for candle in adapter.completed_m1_candles(10):
+                    candle_key = (
+                        candle.symbol,
+                        candle.timeframe,
+                        candle.opened_at.isoformat(),
+                    )
+                    if candle_key in sent_candles:
+                        continue
                     client.post(
                         "/api/v1/market/candles",
                         with_identity(candle, agent_id, settings.bot_id),
                     )
+                    sent_candles.add(candle_key)
                 time.sleep(settings.poll_seconds)
         except KeyboardInterrupt:
             adapter.close()

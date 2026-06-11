@@ -19,4 +19,5 @@ class AgentSettings(BaseSettings):
     mt5_login: int | None = None
     mt5_password: str | None = None
     mt5_server: str | None = None
+    mt5_symbol: str | None = None
     mt5_symbol_hint: str = "XAU"

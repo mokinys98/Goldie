@@ -2,6 +2,7 @@ from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.encoders import jsonable_encoder
+from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -109,6 +110,16 @@ async def ingest_candle(
         payload.open, payload.close
     ):
         raise HTTPException(status_code=422, detail="Invalid candle OHLC values")
+    existing = db.scalar(
+        select(Candle).where(
+            Candle.bot_id == payload.bot_id,
+            Candle.symbol == payload.symbol,
+            Candle.timeframe == payload.timeframe,
+            Candle.opened_at == payload.opened_at,
+        )
+    )
+    if existing is not None:
+        return {"accepted": True, "duplicate": True}
     row = Candle(**payload.model_dump())
     db.add(row)
     try:

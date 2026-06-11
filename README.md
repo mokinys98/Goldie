@@ -34,3 +34,6 @@ Stage II managed database purchasing requirements are in
 
 Railway Hobby deployment instructions are in
 [`docs/implementation/10_RAILWAY_DEPLOYMENT.md`](docs/implementation/10_RAILWAY_DEPLOYMENT.md).
+
+Windows fake and MT5 agent setup is in
+[`docs/implementation/11_WINDOWS_AGENT_SETUP.md`](docs/implementation/11_WINDOWS_AGENT_SETUP.md).

@@ -34,22 +34,54 @@ Create `goldie-api` from the GitHub repository and configure:
 | Setting | Value |
 | --- | --- |
 | Branch | `main` |
-| Root directory | repository root |
+| Root directory | leave empty (repository root) |
 | `RAILWAY_DOCKERFILE_PATH` | `/apps/api/Dockerfile` |
 | Healthcheck path | `/health/ready` |
 | Restart policy | `On Failure`, maximum 10 retries |
 
-Set these variables:
+Do not set the API Root Directory to `/apps/api`. The API Dockerfile needs the
+full repository build context because it copies both `apps/api` and the shared
+`packages/trading-domain` package.
+
+### Where to add API variables
+
+Open the Railway project, select the **Goldie API** service, and open the
+**Variables** tab. The variables must be added under **Service Variables**,
+not under the PostgreSQL or Redis service.
+
+The quickest method is:
+
+1. Click **Raw Editor** in `Goldie API > Variables`.
+2. Paste the block below.
+3. Replace the four `<...>` placeholders with the real values.
+4. Click the Railway save/update button.
+5. Open **Deployments** and redeploy the latest deployment if Railway does not
+   start a deployment automatically.
+
+Paste into **Raw Editor**:
 
 ```text
 DATABASE_URL=${{Postgres.DATABASE_URL}}
 REDIS_URL=${{Redis.REDIS_URL}}
-JWT_SECRET=<random secret>
-LOCAL_ADMIN_EMAIL=<production admin email>
-LOCAL_ADMIN_PASSWORD=<random password>
-AGENT_SERVICE_TOKEN=<random agent token>
-CORS_ORIGINS=https://${{goldie-web.RAILWAY_PUBLIC_DOMAIN}}
+JWT_SECRET=<first generated random value>
+LOCAL_ADMIN_EMAIL=<your login email>
+LOCAL_ADMIN_PASSWORD=<second generated random value>
+AGENT_SERVICE_TOKEN=<third generated random value>
+CORS_ORIGINS=https://<exact Goldie Web Railway domain>
 ```
+
+If the Web service has not been created yet, temporarily use:
+
+```text
+CORS_ORIGINS=http://localhost:3000
+```
+
+Replace it with the exact `goldie-web` Railway domain after the Web service
+exists, then redeploy the API.
+
+The collapsed **variables added by Railway** section contains platform
+variables such as `PORT` and Railway service metadata. Do not edit or copy
+those values. `PORT` is supplied automatically and must not be added manually.
 
 Generate a Railway domain for the API. The container runs
 `alembic upgrade head` before Uvicorn, uses Railway's dynamic `PORT`, creates
@@ -62,7 +94,7 @@ Create `goldie-worker` from the same repository:
 | Setting | Value |
 | --- | --- |
 | Branch | `main` |
-| Root directory | repository root |
+| Root directory | leave empty (repository root) |
 | `RAILWAY_DOCKERFILE_PATH` | `/apps/worker/Dockerfile` |
 | Restart policy | `On Failure`, maximum 10 retries |
 
@@ -90,30 +122,43 @@ Create `goldie-web` from the same repository:
 Set the build-time variables before deploying:
 
 ```text
-NEXT_PUBLIC_API_URL=https://${{goldie-api.RAILWAY_PUBLIC_DOMAIN}}
-NEXT_PUBLIC_WS_URL=wss://${{goldie-api.RAILWAY_PUBLIC_DOMAIN}}
+NEXT_PUBLIC_API_URL=https://<exact Goldie API Railway domain>
+NEXT_PUBLIC_WS_URL=wss://<exact Goldie API Railway domain>
 ```
 
 Generate a Railway domain for Web. `NEXT_PUBLIC_*` values are embedded during
 `next build`, so changing either URL requires a Web redeploy.
 
-After both domains exist, confirm the API `CORS_ORIGINS` reference resolves to
-the exact Web origin, then redeploy API and Web.
+Use literal public domain values for these Web build variables. A Railway
+service reference can resolve to an empty value during the Web image build,
+which produces an invalid `https:///api/...` URL in the browser bundle.
+
+Example:
+
+```text
+NEXT_PUBLIC_API_URL=https://goldie-api-production.up.railway.app
+NEXT_PUBLIC_WS_URL=wss://goldie-api-production.up.railway.app
+```
+
+Do not add `/` at the end of either URL. The Web client also strips trailing
+slashes defensively, but keeping the Railway values canonical avoids stale
+build confusion.
+
+After both domains exist, set the API CORS value to the literal Web origin:
+
+```text
+CORS_ORIGINS=https://goldie-web-production.up.railway.app
+```
+
+Redeploy API and Web. Redeploying Web is mandatory because the public URL
+values are embedded during the Docker build.
 
 ## Windows agent
 
-The MT5 agent remains on Windows and connects outbound to Railway:
-
-```powershell
-$env:GOLDIE_API_URL="https://<goldie-api-domain>"
-$env:GOLDIE_AGENT_TOKEN="<same value as API AGENT_SERVICE_TOKEN>"
-$env:GOLDIE_BOT_ID="<bot UUID created in Web>"
-$env:GOLDIE_AGENT_MODE="fake" # Change to mt5 after the fake acceptance test.
-uv run --package goldie-mt5-agent python -m goldie_agent
-```
-
-Do not put MT5 credentials in Railway or Git because the MT5 terminal and
-agent run locally on Windows.
+The agent remains on the Windows computer and connects outbound to Railway.
+Complete the fake adapter test before configuring MetaTrader 5. The full
+installation and troubleshooting guide is
+[`11_WINDOWS_AGENT_SETUP.md`](11_WINDOWS_AGENT_SETUP.md).
 
 ## Acceptance checks
 

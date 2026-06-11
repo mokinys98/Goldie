@@ -1,3 +1,4 @@
+import logging
 import math
 import random
 from datetime import UTC, datetime, timedelta
@@ -6,6 +7,8 @@ from typing import Protocol
 
 from .models import AccountData, CandleData, SymbolData, TickData
 from .settings import AgentSettings
+
+logger = logging.getLogger("goldie-agent")
 
 
 class ReadOnlyBrokerAdapter(Protocol):
@@ -127,14 +130,23 @@ class Mt5ReadOnlyAdapter:
         symbols = self._mt5.symbols_get()
         if symbols is None:
             raise RuntimeError(f"Cannot read MT5 symbols: {self._mt5.last_error()}")
-        hint = self.settings.mt5_symbol_hint.upper()
-        candidates = [item.name for item in symbols if hint in item.name.upper()]
-        if not candidates:
-            raise RuntimeError(f"No symbol contains hint '{hint}'")
-        candidates.sort(key=lambda value: (len(value), value))
-        symbol = candidates[0]
+        names = [item.name for item in symbols]
+        if self.settings.mt5_symbol:
+            expected = self.settings.mt5_symbol.upper()
+            exact = next((name for name in names if name.upper() == expected), None)
+            if exact is None:
+                raise RuntimeError(f"Exact MT5 symbol '{self.settings.mt5_symbol}' not found")
+            symbol = exact
+        else:
+            hint = self.settings.mt5_symbol_hint.upper()
+            candidates = [name for name in names if hint in name.upper()]
+            if not candidates:
+                raise RuntimeError(f"No symbol contains hint '{hint}'")
+            candidates.sort(key=lambda value: (len(value), value))
+            symbol = candidates[0]
         if not self._mt5.symbol_select(symbol, True):
             raise RuntimeError(f"Cannot select symbol '{symbol}'")
+        logger.info("Selected MT5 symbol %s", symbol)
         return symbol
 
     def account(self) -> AccountData:

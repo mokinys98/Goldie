@@ -3,6 +3,7 @@ from typing import Any
 
 import requests
 from pydantic import BaseModel
+from requests import HTTPError
 
 from .settings import AgentSettings
 
@@ -20,7 +21,18 @@ class ApiClient:
             headers=self.headers,
             timeout=10,
         )
-        response.raise_for_status()
+        try:
+            response.raise_for_status()
+        except HTTPError as exc:
+            try:
+                body = response.json()
+                detail = body.get("detail") or body.get("error", {}).get("message")
+            except ValueError:
+                detail = response.text.strip()
+            message = f"{response.status_code} {response.reason} for {path}"
+            if detail:
+                message = f"{message}: {detail}"
+            raise RuntimeError(message) from exc
         return response.json()
 
     def register(self, bot_id: uuid.UUID, name: str, adapter: str) -> uuid.UUID:
