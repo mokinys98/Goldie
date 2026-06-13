@@ -1,7 +1,7 @@
 FROM node:22-alpine AS dependencies
 WORKDIR /app
 RUN corepack enable
-COPY apps/web/package.json apps/web/pnpm-lock.yaml apps/web/pnpm-workspace.yaml ./
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 RUN pnpm install --frozen-lockfile
 
 FROM node:22-alpine AS build
@@ -11,7 +11,7 @@ ARG NEXT_PUBLIC_WS_URL=ws://localhost:8000
 ENV NEXT_PUBLIC_API_URL=$NEXT_PUBLIC_API_URL
 ENV NEXT_PUBLIC_WS_URL=$NEXT_PUBLIC_WS_URL
 COPY --from=dependencies /app/node_modules ./node_modules
-COPY apps/web .
+COPY . .
 RUN corepack enable && pnpm build
 
 FROM node:22-alpine AS runtime

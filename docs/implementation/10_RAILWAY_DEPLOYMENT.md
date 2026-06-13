@@ -19,7 +19,8 @@ diegimo, kintamųjų ir priėmimo patikrų planas aprašytas
 2. Paleisti API. Starto komanda prieš Uvicorn automatiškai vykdo
    `alembic upgrade head`.
 3. Sukonfigūruoti Web build kintamuosius `NEXT_PUBLIC_API_URL` ir
-   `NEXT_PUBLIC_WS_URL`, tada paleisti Web.
+   `NEXT_PUBLIC_WS_URL`, nustatyti Web serviso Root Directory į `/apps/web`,
+   Config File į `/railway/web.toml`, tada paleisti Web.
 4. Collector servise nustatyti OANDA practice credentials, vidinį API URL ir
    bendrą `AGENT_SERVICE_TOKEN`.
 5. Paleisti collector tik po sėkmingo API `/health/ready` patikrinimo.

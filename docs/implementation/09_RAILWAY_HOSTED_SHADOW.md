@@ -6,7 +6,8 @@ Create one Railway project with five services:
 
 1. PostgreSQL.
 2. `api` using `railway/api.toml`.
-3. `web` using `railway/web.toml`.
+3. `web` using Config File `/railway/web.toml`, with Railway Root Directory
+   set to `/apps/web`.
 4. `market-data-collector` using `railway/collector.toml`.
 5. `maintenance` using `railway/maintenance.toml`.
 
