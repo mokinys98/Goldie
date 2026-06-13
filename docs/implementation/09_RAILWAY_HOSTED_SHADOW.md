@@ -63,6 +63,11 @@ If OANDA returns HTTP 403, verify that:
 3. the account appears in OANDA `GET /v3/accounts` for that token;
 4. the account is enabled for the v20 API.
 
+If `/v3/accounts` succeeds but
+`/v3/accounts/{accountID}/instruments` returns 403, the token can see the
+account but OANDA has not allowed account-scoped instrument/pricing access.
+Send the OANDA `RequestID` from the collector log to `api@oanda.com`.
+
 Maintenance needs only `DATABASE_URL` and `QUOTE_RETENTION_DAYS`.
 
 ## Startup and acceptance

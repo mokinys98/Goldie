@@ -14,7 +14,9 @@ logger = logging.getLogger(__name__)
 
 
 class OandaApiError(RuntimeError):
-    pass
+    def __init__(self, message: str, *, status_code: int) -> None:
+        super().__init__(message)
+        self.status_code = status_code
 
 
 class MarketDataProvider(Protocol):
@@ -63,7 +65,8 @@ class OandaProvider:
                 )
             raise OandaApiError(
                 f"OANDA returned HTTP {response.status_code} for {path}"
-                f"{detail}{request_detail}.{hint}"
+                f"{detail}{request_detail}.{hint}",
+                status_code=response.status_code,
             ) from exc
         return response.json()
 
@@ -83,10 +86,21 @@ class OandaProvider:
 
     def validate_instrument(self) -> Instrument:
         self.validate_account_access()
-        payload = self._get(
-            f"/v3/accounts/{self.settings.oanda_account_id}/instruments",
-            instruments=self.settings.provider_symbol,
-        )
+        try:
+            payload = self._get(
+                f"/v3/accounts/{self.settings.oanda_account_id}/instruments",
+                instruments=self.settings.provider_symbol,
+            )
+        except OandaApiError as exc:
+            if exc.status_code == 403:
+                raise RuntimeError(
+                    "The token can see GOLDIE_OANDA_ACCOUNT_ID, but OANDA does "
+                    "not permit account-scoped instrument/pricing access. The "
+                    "account may not be API-tradable. Verify the account status "
+                    "with OANDA support and provide the RequestID from the "
+                    "preceding error."
+                ) from exc
+            raise
         rows = payload.get("instruments", [])
         if not rows:
             raise RuntimeError(

@@ -135,3 +135,22 @@ def test_account_access_rejects_account_not_visible_to_token(monkeypatch) -> Non
 
     with pytest.raises(RuntimeError, match="101-001-correct-001"):
         provider.validate_account_access()
+
+
+def test_instrument_403_explains_account_is_not_api_tradable(monkeypatch) -> None:
+    provider = object.__new__(OandaProvider)
+    provider.settings = SimpleNamespace(
+        oanda_account_id="101-001-visible-002",
+        provider_symbol="XAU_USD",
+    )
+    monkeypatch.setattr(provider, "validate_account_access", lambda: None)
+    monkeypatch.setattr(
+        provider,
+        "_get",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            OandaApiError("forbidden", status_code=403)
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="may not be API-tradable"):
+        provider.validate_instrument()
