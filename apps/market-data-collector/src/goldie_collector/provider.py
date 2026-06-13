@@ -89,7 +89,6 @@ class OandaProvider:
         try:
             payload = self._get(
                 f"/v3/accounts/{self.settings.oanda_account_id}/instruments",
-                instruments=self.settings.provider_symbol,
             )
         except OandaApiError as exc:
             if exc.status_code == 403:
@@ -102,11 +101,29 @@ class OandaProvider:
                 ) from exc
             raise
         rows = payload.get("instruments", [])
-        if not rows:
-            raise RuntimeError(
-                f"{self.settings.provider_symbol} is not available for this OANDA account"
+        item = next(
+            (
+                instrument
+                for instrument in rows
+                if instrument.get("name") == self.settings.provider_symbol
+            ),
+            None,
+        )
+        if item is None:
+            candidates = sorted(
+                str(instrument["name"])
+                for instrument in rows
+                if instrument.get("name")
+                and (
+                    "XAU" in str(instrument["name"]).upper()
+                    or "GOLD" in str(instrument.get("displayName", "")).upper()
+                )
             )
-        item = rows[0]
+            candidate_text = ", ".join(candidates) if candidates else "none"
+            raise RuntimeError(
+                f"{self.settings.provider_symbol} is not tradeable for this OANDA "
+                f"account. Available gold candidates: {candidate_text}"
+            )
         return Instrument(
             canonical_symbol=self.settings.canonical_symbol,
             provider_symbol=item["name"],

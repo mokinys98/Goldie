@@ -154,3 +154,25 @@ def test_instrument_403_explains_account_is_not_api_tradable(monkeypatch) -> Non
 
     with pytest.raises(RuntimeError, match="may not be API-tradable"):
         provider.validate_instrument()
+
+
+def test_missing_xau_usd_reports_available_gold_candidates(monkeypatch) -> None:
+    provider = object.__new__(OandaProvider)
+    provider.settings = SimpleNamespace(
+        oanda_account_id="101-001-visible-002",
+        provider_symbol="XAU_USD",
+    )
+    monkeypatch.setattr(provider, "validate_account_access", lambda: None)
+    monkeypatch.setattr(
+        provider,
+        "_get",
+        lambda *args, **kwargs: {
+            "instruments": [
+                {"name": "EUR_USD", "displayName": "EUR/USD"},
+                {"name": "XAU_EUR", "displayName": "Gold/EUR"},
+            ]
+        },
+    )
+
+    with pytest.raises(RuntimeError, match="Available gold candidates: XAU_EUR"):
+        provider.validate_instrument()

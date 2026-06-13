@@ -68,6 +68,10 @@ If `/v3/accounts` succeeds but
 account but OANDA has not allowed account-scoped instrument/pricing access.
 Send the OANDA `RequestID` from the collector log to `api@oanda.com`.
 
+If OANDA reports that `XAU_USD` is not tradeable, the collector requests the
+full account instrument list and reports available XAU/GOLD candidates. Do not
+replace the symbol blindly: Goldie currently expects USD-denominated XAU/USD.
+
 Maintenance needs only `DATABASE_URL` and `QUOTE_RETENTION_DAYS`.
 
 ## Startup and acceptance
