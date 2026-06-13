@@ -33,3 +33,12 @@ Detailed setup and acceptance checks are in
 
 Railway deployment is documented in
 [`09_RAILWAY_HOSTED_SHADOW.md`](docs/implementation/09_RAILWAY_HOSTED_SHADOW.md).
+
+Stage II managed database purchasing requirements are in
+[`docs/implementation/09_STAGE_II_MANAGED_DATABASE_REQUIREMENTS.md`](docs/implementation/09_STAGE_II_MANAGED_DATABASE_REQUIREMENTS.md).
+
+Railway Hobby deployment instructions are in
+[`docs/implementation/10_RAILWAY_DEPLOYMENT.md`](docs/implementation/10_RAILWAY_DEPLOYMENT.md).
+
+Shadow trade outcome rules, Railway migration checks and quality gates are in
+[`docs/implementation/12_SHADOW_OUTCOME_EVALUATION.md`](docs/implementation/12_SHADOW_OUTCOME_EVALUATION.md).

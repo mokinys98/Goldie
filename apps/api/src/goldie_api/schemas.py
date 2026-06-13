@@ -84,6 +84,35 @@ class SignalRead(OrmModel):
     momentum_points: Decimal | None
     spread_points: Decimal | None
     inputs: dict
+    outcome: "SignalOutcomeRead | None" = None
+
+
+class SignalOutcomeRead(OrmModel):
+    id: uuid.UUID
+    signal_id: uuid.UUID
+    bot_id: uuid.UUID
+    run_id: uuid.UUID
+    config_version_id: uuid.UUID
+    direction: str
+    status: str
+    result: str | None
+    close_reason: str | None
+    skip_reason: str | None
+    opened_at: datetime | None
+    closed_at: datetime | None
+    entry_price: Decimal | None
+    exit_price: Decimal | None
+    stop_loss: Decimal | None
+    take_profit: Decimal | None
+    volume: Decimal | None
+    risk_amount: Decimal | None
+    gross_pnl: Decimal | None
+    net_pnl: Decimal | None
+    pnl_points: Decimal | None
+    r_multiple: Decimal | None
+    mfe_points: Decimal
+    mae_points: Decimal
+    duration_seconds: int | None
 
 
 class BotStatus(BaseModel):
@@ -95,6 +124,7 @@ class BotStatus(BaseModel):
     latest_tick: dict | None
     recent_candles: list[dict]
     latest_signal: SignalRead | None
+    active_shadow_trade: SignalOutcomeRead | None
     active_run_id: uuid.UUID | None
     data_state: str
 

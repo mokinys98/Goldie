@@ -29,6 +29,7 @@ from ..schemas import (
 )
 from ..security import get_current_user
 from ..services import evaluate_latest_signal
+from ..shadow import create_signal_outcome, evaluate_open_outcome
 from ..websocket import manager
 
 router = APIRouter(prefix="/api/v1/market-feeds", tags=["market-feeds"])
@@ -222,21 +223,24 @@ async def ingest_quotes(
 ) -> dict:
     feed = get_feed_or_404(db, feed_id)
     validate_feed_agent(db, feed_id, payload.agent_id)
+    bots = list(db.scalars(select(Bot).where(Bot.market_feed_id == feed.id)))
     for quote in payload.quotes:
         if quote.ask < quote.bid:
             raise HTTPException(status_code=422, detail="Ask cannot be lower than bid")
-        db.add(
-            MarketTick(
-                market_feed_id=feed.id,
-                agent_id=payload.agent_id,
-                symbol=feed.canonical_symbol,
-                observed_at=quote.observed_at.astimezone(UTC),
-                received_at=datetime.now(UTC),
-                source=feed.provider,
-                bid=quote.bid,
-                ask=quote.ask,
-            )
+        tick = MarketTick(
+            market_feed_id=feed.id,
+            agent_id=payload.agent_id,
+            symbol=feed.canonical_symbol,
+            observed_at=quote.observed_at.astimezone(UTC),
+            received_at=datetime.now(UTC),
+            source=feed.provider,
+            bid=quote.bid,
+            ask=quote.ask,
         )
+        db.add(tick)
+        db.flush()
+        for bot in bots:
+            evaluate_open_outcome(db, bot, tick)
     db.commit()
     await broadcast_to_feed_bots(
         db,
@@ -306,9 +310,17 @@ async def ingest_candles(
             )
         )
         for bot in bots:
-            signal = evaluate_latest_signal(db, bot)
+            signal, created = evaluate_latest_signal(db, bot)
             if signal is not None:
                 signal_ids.append(str(signal.id))
+            if created and signal is not None:
+                tick = db.scalar(
+                    select(MarketTick)
+                    .where(MarketTick.market_feed_id == feed.id)
+                    .order_by(desc(MarketTick.observed_at))
+                )
+                if tick is not None:
+                    create_signal_outcome(db, signal, tick)
     db.commit()
     await broadcast_to_feed_bots(
         db,

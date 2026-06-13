@@ -22,6 +22,9 @@ export const botConfigSchema = z.object({
   theoretical_trade: z.object({
     stop_loss_points: z.coerce.number().positive().max(100000),
     take_profit_points: z.coerce.number().positive().max(100000),
+    risk_per_trade_pct: z.coerce.number().positive().max(100),
+    max_trade_duration_minutes: z.coerce.number().int().min(1).max(1440),
+    max_open_shadow_positions: z.coerce.number().int().min(1).max(1),
   }),
 });
 
@@ -38,6 +41,12 @@ export const defaultBotConfig = {
     start_time: "10:00:00",
     end_time: "18:00:00",
   },
-  theoretical_trade: { stop_loss_points: 70, take_profit_points: 100 },
+  theoretical_trade: {
+    stop_loss_points: 70,
+    take_profit_points: 100,
+    risk_per_trade_pct: 0.25,
+    max_trade_duration_minutes: 5,
+    max_open_shadow_positions: 1,
+  },
 };
 

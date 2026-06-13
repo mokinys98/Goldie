@@ -7,12 +7,14 @@ from sqlalchemy import (
     Boolean,
     DateTime,
     ForeignKey,
+    Index,
     Integer,
     Numeric,
     String,
     Text,
     UniqueConstraint,
     Uuid,
+    text,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.sql import func
@@ -228,6 +230,55 @@ class Signal(Base):
     momentum_points: Mapped[Decimal | None] = mapped_column(Numeric(20, 8))
     spread_points: Mapped[Decimal | None] = mapped_column(Numeric(20, 8))
     inputs: Mapped[dict] = mapped_column(JSON, default=dict)
+    outcome: Mapped["SignalOutcome | None"] = relationship(
+        back_populates="signal", uselist=False
+    )
+
+
+class SignalOutcome(Base, TimestampMixin):
+    __tablename__ = "signal_outcomes"
+    __table_args__ = (
+        UniqueConstraint("signal_id", name="uq_signal_outcome_signal"),
+        Index(
+            "uq_signal_outcomes_one_open_per_bot",
+            "bot_id",
+            unique=True,
+            postgresql_where=text("status = 'OPEN'"),
+            sqlite_where=text("status = 'OPEN'"),
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    signal_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("signals.id"), index=True)
+    bot_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("bots.id"), index=True)
+    run_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("runs.id"), index=True)
+    config_version_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("config_versions.id"), index=True
+    )
+    direction: Mapped[str] = mapped_column(String(8))
+    status: Mapped[str] = mapped_column(String(16))
+    result: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    close_reason: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    skip_reason: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    opened_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    closed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_evaluated_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    entry_price: Mapped[Decimal | None] = mapped_column(Numeric(20, 8), nullable=True)
+    exit_price: Mapped[Decimal | None] = mapped_column(Numeric(20, 8), nullable=True)
+    stop_loss: Mapped[Decimal | None] = mapped_column(Numeric(20, 8), nullable=True)
+    take_profit: Mapped[Decimal | None] = mapped_column(Numeric(20, 8), nullable=True)
+    volume: Mapped[Decimal | None] = mapped_column(Numeric(20, 8), nullable=True)
+    risk_amount: Mapped[Decimal | None] = mapped_column(Numeric(20, 8), nullable=True)
+    gross_pnl: Mapped[Decimal | None] = mapped_column(Numeric(20, 8), nullable=True)
+    net_pnl: Mapped[Decimal | None] = mapped_column(Numeric(20, 8), nullable=True)
+    pnl_points: Mapped[Decimal | None] = mapped_column(Numeric(20, 8), nullable=True)
+    r_multiple: Mapped[Decimal | None] = mapped_column(Numeric(20, 8), nullable=True)
+    mfe_points: Mapped[Decimal] = mapped_column(Numeric(20, 8), default=Decimal("0"))
+    mae_points: Mapped[Decimal] = mapped_column(Numeric(20, 8), default=Decimal("0"))
+    duration_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    signal: Mapped[Signal] = relationship(back_populates="outcome")
 
 
 class AuditEvent(Base):

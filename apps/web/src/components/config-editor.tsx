@@ -3,7 +3,7 @@
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useForm } from "react-hook-form";
 import { api } from "@/lib/api";
-import { botConfigSchema } from "@/lib/config";
+import { botConfigSchema, defaultBotConfig } from "@/lib/config";
 import type { BotConfig, ConfigVersion } from "@/lib/types";
 import { StatusPill } from "./status-pill";
 
@@ -19,7 +19,16 @@ export function ConfigEditor({
   const latest = versions[0];
   const form = useForm<BotConfig>({
     resolver: zodResolver(botConfigSchema),
-    values: latest?.config,
+    values: latest
+      ? {
+          ...defaultBotConfig,
+          ...latest.config,
+          theoretical_trade: {
+            ...defaultBotConfig.theoretical_trade,
+            ...latest.config.theoretical_trade,
+          },
+        }
+      : defaultBotConfig,
   });
 
   async function create(values: BotConfig) {
@@ -66,9 +75,12 @@ export function ConfigEditor({
           <label>End time<input type="time" step="1" {...form.register("session.end_time")} /></label>
         </fieldset>
         <fieldset>
-          <legend>Theoretical levels</legend>
+          <legend>Shadow trade model</legend>
           <label>Stop loss points<input type="number" step="0.01" {...form.register("theoretical_trade.stop_loss_points")} /></label>
           <label>Take profit points<input type="number" step="0.01" {...form.register("theoretical_trade.take_profit_points")} /></label>
+          <label>Risk per trade %<input type="number" step="0.01" {...form.register("theoretical_trade.risk_per_trade_pct")} /></label>
+          <label>Maximum duration minutes<input type="number" {...form.register("theoretical_trade.max_trade_duration_minutes")} /></label>
+            <label>Maximum open shadow positions<input type="number" min="1" max="1" {...form.register("theoretical_trade.max_open_shadow_positions")} /></label>
         </fieldset>
         {Object.keys(form.formState.errors).length > 0 && (
           <div className="error-box">Configuration contains invalid values.</div>

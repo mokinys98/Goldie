@@ -24,5 +24,17 @@ describe("botConfigSchema", () => {
     };
     expect(botConfigSchema.safeParse(invalid).success).toBe(false);
   });
+
+  it("rejects invalid shadow risk and duration", () => {
+    const invalid = {
+      ...defaultBotConfig,
+      theoretical_trade: {
+        ...defaultBotConfig.theoretical_trade,
+        risk_per_trade_pct: 0,
+        max_trade_duration_minutes: 0,
+      },
+    };
+    expect(botConfigSchema.safeParse(invalid).success).toBe(false);
+  });
 });
 

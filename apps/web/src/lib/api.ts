@@ -1,4 +1,7 @@
-const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
+const API_URL = (process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000").replace(
+  /\/+$/,
+  "",
+);
 
 export class ApiError extends Error {
   constructor(
@@ -14,6 +17,14 @@ export function getToken(): string | null {
   return window.localStorage.getItem("goldie_token");
 }
 
+function redirectToLogin(): void {
+  if (typeof window === "undefined") return;
+  window.localStorage.removeItem("goldie_token");
+  if (window.location.pathname !== "/login") {
+    window.location.assign("/login");
+  }
+}
+
 export async function api<T>(
   path: string,
   options: RequestInit = {},
@@ -23,7 +34,11 @@ export async function api<T>(
   headers.set("Content-Type", "application/json");
   if (authenticated) {
     const token = getToken();
-    if (token) headers.set("Authorization", `Bearer ${token}`);
+    if (!token) {
+      redirectToLogin();
+      throw new ApiError("Authentication required", 401);
+    }
+    headers.set("Authorization", `Bearer ${token}`);
   }
   const response = await fetch(`${API_URL}${path}`, {
     ...options,
@@ -38,6 +53,9 @@ export async function api<T>(
     } catch {
       // Keep the status-based message.
     }
+    if (authenticated && response.status === 401) {
+      redirectToLogin();
+    }
     throw new ApiError(message, response.status);
   }
   return response.json() as Promise<T>;
@@ -48,7 +66,10 @@ export function openBotStream(
   onEvent: () => void,
 ): () => void {
   const token = getToken();
-  const base = process.env.NEXT_PUBLIC_WS_URL ?? "ws://localhost:8000";
+  const base = (process.env.NEXT_PUBLIC_WS_URL ?? "ws://localhost:8000").replace(
+    /\/+$/,
+    "",
+  );
   if (!token) return () => undefined;
   const socket = new WebSocket(
     `${base}/api/v1/stream?token=${encodeURIComponent(token)}`,

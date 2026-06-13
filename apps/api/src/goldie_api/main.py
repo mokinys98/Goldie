@@ -9,7 +9,7 @@ from sqlalchemy import select, text
 
 from .db import SessionLocal, engine
 from .models import User
-from .routers import auth, bots, feeds, status
+from .routers import analytics, auth, bots, feeds, status
 from .security import hash_password
 from .settings import get_settings
 from .websocket import manager
@@ -50,6 +50,7 @@ app.include_router(auth.router)
 app.include_router(bots.router)
 app.include_router(feeds.router)
 app.include_router(status.router)
+app.include_router(analytics.router)
 
 
 @app.exception_handler(Exception)

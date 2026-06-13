@@ -47,6 +47,9 @@ class TheoreticalTradeConfig(BaseModel):
 
     stop_loss_points: Decimal = Field(default=Decimal("70"), gt=0, le=100000)
     take_profit_points: Decimal = Field(default=Decimal("100"), gt=0, le=100000)
+    risk_per_trade_pct: Decimal = Field(default=Decimal("0.25"), gt=0, le=100)
+    max_trade_duration_minutes: int = Field(default=5, ge=1, le=1440)
+    max_open_shadow_positions: int = Field(default=1, ge=1, le=1)
 
 
 class BotConfiguration(BaseModel):
