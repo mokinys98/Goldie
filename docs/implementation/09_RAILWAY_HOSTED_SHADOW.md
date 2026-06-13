@@ -38,7 +38,7 @@ NEXT_PUBLIC_WS_URL=wss://<api-domain>
 Collector:
 
 ```text
-GOLDIE_API_URL=http://<api-service>.railway.internal:<private-port>
+GOLDIE_API_URL=https://<goldie-api-public-domain>
 GOLDIE_AGENT_TOKEN=<same value as AGENT_SERVICE_TOKEN>
 GOLDIE_PROVIDER_ENVIRONMENT=practice
 GOLDIE_CANONICAL_SYMBOL=XAUUSD
@@ -51,6 +51,17 @@ GOLDIE_OANDA_ACCOUNT_ID=<OANDA practice account ID>
 GOLDIE_OANDA_REST_URL=https://api-fxpractice.oanda.com
 GOLDIE_OANDA_STREAM_URL=https://stream-fxpractice.oanda.com
 ```
+
+`GOLDIE_API_URL` must point to the API service domain, never the Web domain.
+For the first deployment, use the API public Railway domain. A wrong Web URL
+returns HTTP 404 for `/api/v1/market-feeds/register`.
+
+If OANDA returns HTTP 403, verify that:
+
+1. the token and account ID belong to the same OANDA login;
+2. `practice` accounts use `api-fxpractice` and `stream-fxpractice`;
+3. the account appears in OANDA `GET /v3/accounts` for that token;
+4. the account is enabled for the v20 API.
 
 Maintenance needs only `DATABASE_URL` and `QUOTE_RETENTION_DAYS`.
 

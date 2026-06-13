@@ -23,7 +23,19 @@ class GoldieApiClient:
             headers=self.headers,
             timeout=self.timeout,
         )
-        response.raise_for_status()
+        try:
+            response.raise_for_status()
+        except requests.HTTPError as exc:
+            hint = ""
+            if response.status_code == 404 and path == "/api/v1/market-feeds/register":
+                hint = (
+                    " GOLDIE_API_URL must point to the Goldie API service, "
+                    "not the Web service."
+                )
+            raise RuntimeError(
+                f"Goldie API request failed with HTTP {response.status_code} "
+                f"for {response.url}.{hint}"
+            ) from exc
         return response.json()
 
     def register(self, settings: CollectorSettings) -> datetime | None:

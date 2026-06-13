@@ -13,6 +13,10 @@ from .settings import CollectorSettings
 logger = logging.getLogger(__name__)
 
 
+class OandaApiError(RuntimeError):
+    pass
+
+
 class MarketDataProvider(Protocol):
     def validate_instrument(self) -> Instrument: ...
     def start(self) -> None: ...
@@ -40,10 +44,45 @@ class OandaProvider:
             headers=self.headers,
             timeout=self.settings.request_timeout_seconds,
         )
-        response.raise_for_status()
+        try:
+            response.raise_for_status()
+        except requests.HTTPError as exc:
+            try:
+                payload = response.json()
+            except ValueError:
+                payload = {}
+            message = payload.get("errorMessage") or response.text.strip()
+            request_id = response.headers.get("RequestID")
+            detail = f": {message}" if message else ""
+            request_detail = f" (RequestID: {request_id})" if request_id else ""
+            hint = ""
+            if response.status_code == 403:
+                hint = (
+                    " Verify that the token can access this account and that "
+                    "practice/live URLs match the account environment."
+                )
+            raise OandaApiError(
+                f"OANDA returned HTTP {response.status_code} for {path}"
+                f"{detail}{request_detail}.{hint}"
+            ) from exc
         return response.json()
 
+    def validate_account_access(self) -> None:
+        payload = self._get("/v3/accounts")
+        authorized_ids = {
+            str(account.get("id"))
+            for account in payload.get("accounts", [])
+            if account.get("id")
+        }
+        if self.settings.oanda_account_id not in authorized_ids:
+            visible = ", ".join(sorted(authorized_ids)) or "none"
+            raise RuntimeError(
+                "GOLDIE_OANDA_ACCOUNT_ID is not authorized by the configured "
+                f"token/environment. Authorized account IDs: {visible}"
+            )
+
     def validate_instrument(self) -> Instrument:
+        self.validate_account_access()
         payload = self._get(
             f"/v3/accounts/{self.settings.oanda_account_id}/instruments",
             instruments=self.settings.provider_symbol,
