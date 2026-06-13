@@ -8,7 +8,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 class MarketConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    symbol: str = Field(default="XAUUSD", min_length=1, max_length=32)
+    symbol: str = Field(default="EURUSD", min_length=1, max_length=32)
     timeframe: str = Field(default="M1", pattern="^M1$")
 
 

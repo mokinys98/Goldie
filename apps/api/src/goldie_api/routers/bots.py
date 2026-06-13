@@ -32,6 +32,21 @@ def get_bot_or_404(db: Session, bot_id: uuid.UUID) -> Bot:
     return bot
 
 
+def ensure_config_matches_feed(
+    db: Session,
+    bot: Bot,
+    config: BotConfiguration,
+) -> None:
+    if bot.market_feed_id is None:
+        return
+    feed = db.get(MarketFeed, bot.market_feed_id)
+    if feed is not None and config.market.symbol != feed.canonical_symbol:
+        raise HTTPException(
+            status_code=409,
+            detail="Configuration symbol does not match the assigned market feed",
+        )
+
+
 @router.get("/bots", response_model=list[BotRead])
 def list_bots(db: Session = Depends(get_db), _: User = Depends(get_current_user)) -> list[Bot]:
     return list(db.scalars(select(Bot).order_by(Bot.created_at)))
@@ -49,19 +64,35 @@ def create_bot(
     initial_config = payload.initial_config or BotConfiguration.model_validate(
         DEFAULT_BOT_CONFIGURATION
     )
-    default_feed = db.scalar(
-        select(MarketFeed)
-        .where(
-            MarketFeed.canonical_symbol == initial_config.market.symbol,
-            MarketFeed.provider == "oanda",
-        )
-        .order_by(desc(MarketFeed.created_at))
+    selected_feed = (
+        db.get(MarketFeed, payload.market_feed_id)
+        if payload.market_feed_id is not None
+        else None
     )
+    if payload.market_feed_id is not None and selected_feed is None:
+        raise HTTPException(status_code=404, detail="Market feed not found")
+    if selected_feed is not None:
+        initial_config = initial_config.model_copy(
+            update={
+                "market": initial_config.market.model_copy(
+                    update={"symbol": selected_feed.canonical_symbol}
+                )
+            }
+        )
+    else:
+        selected_feed = db.scalar(
+            select(MarketFeed)
+            .where(
+                MarketFeed.canonical_symbol == initial_config.market.symbol,
+                MarketFeed.provider == "oanda",
+            )
+            .order_by(desc(MarketFeed.created_at))
+        )
     bot = Bot(
         name=payload.name,
         description=payload.description,
         mode=payload.mode,
-        market_feed_id=default_feed.id if default_feed else None,
+        market_feed_id=selected_feed.id if selected_feed else None,
     )
     db.add(bot)
     db.flush()
@@ -178,7 +209,8 @@ def create_config_version(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ) -> ConfigVersion:
-    get_bot_or_404(db, bot_id)
+    bot = get_bot_or_404(db, bot_id)
+    ensure_config_matches_feed(db, bot, payload.config)
     row = ConfigVersion(
         bot_id=bot_id,
         version=next_config_version(db, bot_id),
@@ -247,6 +279,11 @@ def activate_config(
     if row.status != "VALIDATED":
         raise HTTPException(status_code=409, detail="Config must be validated first")
     bot = get_bot_or_404(db, row.bot_id)
+    ensure_config_matches_feed(
+        db,
+        bot,
+        BotConfiguration.model_validate(row.config),
+    )
     previous = db.scalar(
         select(ConfigVersion).where(
             ConfigVersion.bot_id == bot.id, ConfigVersion.status == "ACTIVE"

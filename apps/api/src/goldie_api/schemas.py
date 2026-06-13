@@ -24,6 +24,7 @@ class BotCreate(BaseModel):
     name: str = Field(min_length=2, max_length=120)
     description: str = Field(default="", max_length=1000)
     mode: str = Field(default="SHADOW", pattern="^(SHADOW|PAPER)$")
+    market_feed_id: uuid.UUID | None = None
     initial_config: BotConfiguration | None = None
 
 
@@ -132,8 +133,11 @@ class BotStatus(BaseModel):
 class MarketFeedRegister(BaseModel):
     provider: str = Field(pattern="^oanda$")
     environment: str = Field(default="practice", pattern="^(practice|live)$")
-    canonical_symbol: str = Field(default="XAUUSD", pattern="^XAUUSD$")
-    provider_symbol: str = Field(default="XAU_USD", pattern="^XAU_USD$")
+    canonical_symbol: str = Field(default="EURUSD", pattern="^[A-Z0-9]{3,32}$")
+    provider_symbol: str = Field(
+        default="EUR_USD",
+        pattern="^[A-Z0-9]+_[A-Z0-9]+$",
+    )
     agent_name: str = Field(default="railway-oanda-collector", min_length=1, max_length=120)
     details: dict = Field(default_factory=dict)
 
@@ -161,8 +165,8 @@ class FeedHeartbeatRequest(HeartbeatRequest):
 
 class InstrumentSpecificationIn(BaseModel):
     agent_id: uuid.UUID
-    canonical_symbol: str = Field(pattern="^XAUUSD$")
-    provider_symbol: str = Field(pattern="^XAU_USD$")
+    canonical_symbol: str = Field(pattern="^[A-Z0-9]{3,32}$")
+    provider_symbol: str = Field(pattern="^[A-Z0-9]+_[A-Z0-9]+$")
     display_precision: int = Field(ge=0, le=10)
     pip_location: int = Field(ge=-10, le=10)
     minimum_trade_size: Decimal | None = Field(default=None, gt=0)

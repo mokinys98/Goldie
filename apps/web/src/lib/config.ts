@@ -29,7 +29,7 @@ export const botConfigSchema = z.object({
 });
 
 export const defaultBotConfig = {
-  market: { symbol: "XAUUSD", timeframe: "M1" as const },
+  market: { symbol: "EURUSD", timeframe: "M1" as const },
   strategy: {
     name: "basic_momentum" as const,
     lookback_candles: 5,

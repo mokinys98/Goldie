@@ -2,15 +2,23 @@
 
 import { FormEvent, useState } from "react";
 import { useRouter } from "next/navigation";
+import { useQuery } from "@tanstack/react-query";
 import { api } from "@/lib/api";
-import type { Bot } from "@/lib/types";
+import { defaultBotConfig } from "@/lib/config";
+import type { Bot, MarketFeed } from "@/lib/types";
 
 export default function NewBotPage() {
   const router = useRouter();
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
+  const [marketFeedId, setMarketFeedId] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const feeds = useQuery({
+    queryKey: ["market-feeds"],
+    queryFn: () => api<MarketFeed[]>("/api/v1/market-feeds"),
+  });
+  const selectedFeed = feeds.data?.find((feed) => feed.id === marketFeedId);
 
   async function submit(event: FormEvent) {
     event.preventDefault();
@@ -19,7 +27,19 @@ export default function NewBotPage() {
     try {
       const bot = await api<Bot>("/api/v1/bots", {
         method: "POST",
-        body: JSON.stringify({ name, description, mode: "SHADOW" }),
+        body: JSON.stringify({
+          name,
+          description,
+          mode: "SHADOW",
+          market_feed_id: marketFeedId || null,
+          initial_config: {
+            ...defaultBotConfig,
+            market: {
+              ...defaultBotConfig.market,
+              symbol: selectedFeed?.canonical_symbol ?? defaultBotConfig.market.symbol,
+            },
+          },
+        }),
       });
       router.push(`/bots/${bot.id}`);
     } catch (reason) {
@@ -47,7 +67,7 @@ export default function NewBotPage() {
             maxLength={120}
             value={name}
             onChange={(event) => setName(event.target.value)}
-            placeholder="XAU M1 Local Shadow"
+            placeholder="EURUSD M1 Shadow"
           />
         </label>
         <label>
@@ -59,9 +79,26 @@ export default function NewBotPage() {
           />
         </label>
         <label>
+          Market feed
+          <select
+            value={marketFeedId}
+            onChange={(event) => setMarketFeedId(event.target.value)}
+          >
+            <option value="">No feed yet</option>
+            {(feeds.data ?? []).map((feed) => (
+              <option key={feed.id} value={feed.id}>
+                {feed.canonical_symbol} · {feed.provider} · {feed.status}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label>
           Mode
           <input value="SHADOW" disabled />
         </label>
+        {feeds.isError && (
+          <div className="error-box">Could not load available market feeds.</div>
+        )}
         {error && <div className="error-box">{error}</div>}
         <div className="button-row">
           <button
@@ -79,4 +116,3 @@ export default function NewBotPage() {
     </section>
   );
 }
-

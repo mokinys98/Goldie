@@ -41,11 +41,11 @@ Collector:
 GOLDIE_API_URL=https://<goldie-api-public-domain>
 GOLDIE_AGENT_TOKEN=<same value as AGENT_SERVICE_TOKEN>
 GOLDIE_PROVIDER_ENVIRONMENT=practice
-GOLDIE_CANONICAL_SYMBOL=XAUUSD
-GOLDIE_PROVIDER_SYMBOL=XAU_USD
+GOLDIE_INSTRUMENTS=EUR_USD,GBP_USD,USD_JPY,USD_CHF,USD_CAD,AUD_USD,NZD_USD,EUR_GBP,EUR_JPY,GBP_JPY
 GOLDIE_QUOTE_INTERVAL_SECONDS=5
 GOLDIE_CANDLE_POLL_SECONDS=15
 GOLDIE_BACKFILL_DAYS=30
+GOLDIE_CONFIGURATION_RETRY_SECONDS=900
 GOLDIE_OANDA_API_TOKEN=<OANDA practice token>
 GOLDIE_OANDA_ACCOUNT_ID=<OANDA practice account ID>
 GOLDIE_OANDA_REST_URL=https://api-fxpractice.oanda.com
@@ -68,9 +68,14 @@ If `/v3/accounts` succeeds but
 account but OANDA has not allowed account-scoped instrument/pricing access.
 Send the OANDA `RequestID` from the collector log to `api@oanda.com`.
 
-If OANDA reports that `XAU_USD` is not tradeable, the collector requests the
-full account instrument list and reports available XAU/GOLD candidates. Do not
-replace the symbol blindly: Goldie currently expects USD-denominated XAU/USD.
+`GOLDIE_INSTRUMENTS` is a comma-separated list of OANDA symbols. The collector
+starts an isolated worker and creates one shared Goldie feed for each symbol.
+One failing symbol does not stop the remaining feeds. Keep the list to markets
+that will actually have bots; one collector supports at most 20 instruments.
+
+If a configured instrument is unavailable for the account, its feed heartbeat
+is set to `ERROR`, the log reports the first 50 available instruments, and that
+worker retries every 15 minutes instead of producing a retry storm.
 
 Maintenance needs only `DATABASE_URL` and `QUOTE_RETENTION_DAYS`.
 
@@ -87,7 +92,7 @@ Maintenance needs only `DATABASE_URL` and `QUOTE_RETENTION_DAYS`.
 7. Confirm PAPER starts at 10,000 USD and SHADOW has no paper account.
 
 The collector is read-only. There are no OANDA order credentials, order
-endpoints, or execution interfaces in this stage. XAU/USD updates are expected
+endpoints, or execution interfaces in this stage. FX updates are expected
 24/5; weekend heartbeat status is `MARKET_CLOSED`.
 
 Railway config-as-code files must be selected as each service's config file in

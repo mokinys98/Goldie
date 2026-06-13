@@ -19,6 +19,10 @@ class OandaApiError(RuntimeError):
         self.status_code = status_code
 
 
+class OandaConfigurationError(RuntimeError):
+    pass
+
+
 class MarketDataProvider(Protocol):
     def validate_instrument(self) -> Instrument: ...
     def start(self) -> None: ...
@@ -53,7 +57,11 @@ class OandaProvider:
                 payload = response.json()
             except ValueError:
                 payload = {}
-            message = payload.get("errorMessage") or response.text.strip()
+            message = payload.get("errorMessage")
+            if not message:
+                message = " ".join(response.text.split())
+                if len(message) > 500:
+                    message = f"{message[:500]}..."
             request_id = response.headers.get("RequestID")
             detail = f": {message}" if message else ""
             request_detail = f" (RequestID: {request_id})" if request_id else ""
@@ -79,7 +87,7 @@ class OandaProvider:
         }
         if self.settings.oanda_account_id not in authorized_ids:
             visible = ", ".join(sorted(authorized_ids)) or "none"
-            raise RuntimeError(
+            raise OandaConfigurationError(
                 "GOLDIE_OANDA_ACCOUNT_ID is not authorized by the configured "
                 f"token/environment. Authorized account IDs: {visible}"
             )
@@ -92,7 +100,7 @@ class OandaProvider:
             )
         except OandaApiError as exc:
             if exc.status_code == 403:
-                raise RuntimeError(
+                raise OandaConfigurationError(
                     "The token can see GOLDIE_OANDA_ACCOUNT_ID, but OANDA does "
                     "not permit account-scoped instrument/pricing access. The "
                     "account may not be API-tradable. Verify the account status "
@@ -110,19 +118,15 @@ class OandaProvider:
             None,
         )
         if item is None:
-            candidates = sorted(
+            available = sorted(
                 str(instrument["name"])
                 for instrument in rows
                 if instrument.get("name")
-                and (
-                    "XAU" in str(instrument["name"]).upper()
-                    or "GOLD" in str(instrument.get("displayName", "")).upper()
-                )
             )
-            candidate_text = ", ".join(candidates) if candidates else "none"
-            raise RuntimeError(
+            available_text = ", ".join(available[:50]) if available else "none"
+            raise OandaConfigurationError(
                 f"{self.settings.provider_symbol} is not tradeable for this OANDA "
-                f"account. Available gold candidates: {candidate_text}"
+                f"account. Available instruments (first 50): {available_text}"
             )
         return Instrument(
             canonical_symbol=self.settings.canonical_symbol,

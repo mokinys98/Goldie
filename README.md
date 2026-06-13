@@ -1,7 +1,7 @@
 # Goldie
 
-Read-only XAU/USD trading research platform. The hosted shadow/paper platform
-provides a Next.js control UI, FastAPI API, PostgreSQL persistence, a
+Read-only multi-market trading research platform. The hosted shadow/paper
+platform provides a Next.js control UI, FastAPI API, PostgreSQL persistence, a
 deterministic signal engine, and a 24/7 OANDA market-data collector.
 
 No order placement API or execution code exists in this phase.
@@ -23,6 +23,7 @@ No order placement API or execution code exists in this phase.
    uv sync --all-packages
    $env:GOLDIE_API_URL="http://localhost:8000"
    $env:GOLDIE_AGENT_TOKEN="<same value as AGENT_SERVICE_TOKEN>"
+   $env:GOLDIE_INSTRUMENTS="EUR_USD,GBP_USD,USD_JPY"
    $env:GOLDIE_OANDA_API_TOKEN="<OANDA practice token>"
    $env:GOLDIE_OANDA_ACCOUNT_ID="<OANDA practice account ID>"
    uv run --package goldie-market-data-collector python -m goldie_collector

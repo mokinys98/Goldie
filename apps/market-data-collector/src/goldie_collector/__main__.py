@@ -1,10 +1,11 @@
 import logging
 import random
+import threading
 import time
 from datetime import UTC, datetime, timedelta
 
 from .client import GoldieApiClient
-from .provider import OandaProvider
+from .provider import OandaConfigurationError, OandaProvider
 from .settings import CollectorSettings
 
 logging.basicConfig(
@@ -14,7 +15,7 @@ logging.basicConfig(
 logger = logging.getLogger("goldie-market-data-collector")
 
 
-def run_once(settings: CollectorSettings) -> None:
+def run_instrument(settings: CollectorSettings) -> None:
     client = GoldieApiClient(settings)
     provider = OandaProvider(settings)
     latest_candle_at = client.register(settings)
@@ -91,15 +92,33 @@ def run_once(settings: CollectorSettings) -> None:
         provider.close()
 
 
-def main() -> None:
-    settings = CollectorSettings()
+def instrument_worker(settings: CollectorSettings) -> None:
     attempt = 0
     while True:
         try:
-            run_once(settings)
+            run_instrument(settings)
             attempt = 0
-        except KeyboardInterrupt:
-            return
+        except OandaConfigurationError as exc:
+            delay = settings.configuration_retry_seconds
+            logger.error(
+                "Collector configuration error; retrying in %.0f seconds: %s",
+                delay,
+                exc,
+            )
+            try:
+                client = GoldieApiClient(settings)
+                client.register(settings)
+                client.heartbeat(
+                    "ERROR",
+                    {
+                        "error": type(exc).__name__,
+                        "message": str(exc),
+                        "retry_seconds": round(delay, 1),
+                    },
+                )
+            except Exception:
+                logger.warning("Could not report collector configuration failure")
+            time.sleep(delay)
         except Exception as exc:
             attempt += 1
             delay = min(60, 2 ** min(attempt, 5)) + random.uniform(0, 1)
@@ -114,6 +133,30 @@ def main() -> None:
             except Exception:
                 logger.warning("Could not report collector failure")
             time.sleep(delay)
+
+
+def main() -> None:
+    settings = CollectorSettings()
+    threads: list[threading.Thread] = []
+    for provider_symbol in settings.instrument_symbols:
+        instrument_settings = settings.for_instrument(provider_symbol)
+        thread = threading.Thread(
+            target=instrument_worker,
+            args=(instrument_settings,),
+            name=f"collector-{provider_symbol.lower()}",
+            daemon=True,
+        )
+        thread.start()
+        threads.append(thread)
+        logger.info("Started collector worker for %s", provider_symbol)
+        time.sleep(1)
+
+    try:
+        while all(thread.is_alive() for thread in threads):
+            time.sleep(5)
+    except KeyboardInterrupt:
+        return
+    raise RuntimeError("One or more collector workers stopped unexpectedly")
 
 
 if __name__ == "__main__":

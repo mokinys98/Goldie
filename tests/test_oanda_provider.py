@@ -4,7 +4,12 @@ from types import SimpleNamespace
 
 import pytest
 from goldie_collector.client import GoldieApiClient
-from goldie_collector.provider import OandaApiError, OandaProvider
+from goldie_collector.provider import (
+    OandaApiError,
+    OandaConfigurationError,
+    OandaProvider,
+)
+from goldie_collector.settings import CollectorSettings
 
 
 def test_oanda_price_message_is_normalized() -> None:
@@ -133,7 +138,7 @@ def test_account_access_rejects_account_not_visible_to_token(monkeypatch) -> Non
         lambda path: {"accounts": [{"id": "101-001-correct-001"}]},
     )
 
-    with pytest.raises(RuntimeError, match="101-001-correct-001"):
+    with pytest.raises(OandaConfigurationError, match="101-001-correct-001"):
         provider.validate_account_access()
 
 
@@ -152,11 +157,11 @@ def test_instrument_403_explains_account_is_not_api_tradable(monkeypatch) -> Non
         ),
     )
 
-    with pytest.raises(RuntimeError, match="may not be API-tradable"):
+    with pytest.raises(OandaConfigurationError, match="may not be API-tradable"):
         provider.validate_instrument()
 
 
-def test_missing_xau_usd_reports_available_gold_candidates(monkeypatch) -> None:
+def test_missing_instrument_reports_available_instruments(monkeypatch) -> None:
     provider = object.__new__(OandaProvider)
     provider.settings = SimpleNamespace(
         oanda_account_id="101-001-visible-002",
@@ -174,5 +179,66 @@ def test_missing_xau_usd_reports_available_gold_candidates(monkeypatch) -> None:
         },
     )
 
-    with pytest.raises(RuntimeError, match="Available gold candidates: XAU_EUR"):
+    with pytest.raises(
+        OandaConfigurationError,
+        match="Available instruments.*EUR_USD, XAU_EUR",
+    ):
         provider.validate_instrument()
+
+
+def test_oanda_html_error_body_is_truncated(monkeypatch) -> None:
+    response = SimpleNamespace(
+        status_code=522,
+        text="<html>" + "x" * 5000 + "</html>",
+        headers={},
+        json=lambda: (_ for _ in ()).throw(ValueError()),
+    )
+
+    def raise_for_status() -> None:
+        import requests
+
+        raise requests.HTTPError("522")
+
+    response.raise_for_status = raise_for_status
+    monkeypatch.setattr(
+        "goldie_collector.provider.requests.get",
+        lambda *args, **kwargs: response,
+    )
+    provider = object.__new__(OandaProvider)
+    provider.settings = SimpleNamespace(
+        oanda_rest_url="https://api-fxpractice.oanda.com",
+        request_timeout_seconds=20,
+    )
+    provider.headers = {"Authorization": "Bearer hidden"}
+
+    with pytest.raises(OandaApiError) as error:
+        provider._get("/v3/accounts")
+
+    assert len(str(error.value)) < 700
+
+
+def test_collector_settings_parse_multiple_instruments() -> None:
+    settings = CollectorSettings(
+        api_url="https://goldie-api.example",
+        agent_token="agent-token",
+        oanda_api_token="oanda-token",
+        oanda_account_id="practice-account",
+        instruments="eur_usd, USD_JPY,EUR_USD",
+    )
+
+    assert settings.instrument_symbols == ["EUR_USD", "USD_JPY"]
+    usd_jpy = settings.for_instrument("USD_JPY")
+    assert usd_jpy.provider_symbol == "USD_JPY"
+    assert usd_jpy.canonical_symbol == "USDJPY"
+    assert usd_jpy.agent_name.endswith("-usd_jpy")
+
+
+def test_collector_settings_reject_invalid_instrument() -> None:
+    with pytest.raises(ValueError, match="Invalid OANDA instrument"):
+        CollectorSettings(
+            api_url="https://goldie-api.example",
+            agent_token="agent-token",
+            oanda_api_token="oanda-token",
+            oanda_account_id="practice-account",
+            instruments="EURUSD",
+        )

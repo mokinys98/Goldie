@@ -76,8 +76,8 @@ def test_agent_token_is_required() -> None:
             json={
                 "provider": "oanda",
                 "environment": "practice",
-                "canonical_symbol": "XAUUSD",
-                "provider_symbol": "XAU_USD",
+                "canonical_symbol": "USDJPY",
+                "provider_symbol": "USD_JPY",
                 "agent_name": "unauthorized",
             },
         )
@@ -111,8 +111,8 @@ def test_shared_oanda_feed_and_paper_ledger() -> None:
             json={
                 "provider": "oanda",
                 "environment": "practice",
-                "canonical_symbol": "XAUUSD",
-                "provider_symbol": "XAU_USD",
+                "canonical_symbol": "USDJPY",
+                "provider_symbol": "USD_JPY",
                 "agent_name": "test-oanda-collector",
             },
         )
@@ -125,15 +125,36 @@ def test_shared_oanda_feed_and_paper_ledger() -> None:
         paper = client.post(
             "/api/v1/bots",
             headers=headers,
-            json={"name": "Paper bot", "mode": "PAPER"},
+            json={
+                "name": "Paper bot",
+                "mode": "PAPER",
+                "market_feed_id": feed_id,
+            },
         ).json()
         shadow = client.post(
             "/api/v1/bots",
             headers=headers,
-            json={"name": "Shadow bot", "mode": "SHADOW"},
+            json={
+                "name": "Shadow bot",
+                "mode": "SHADOW",
+                "market_feed_id": feed_id,
+            },
         ).json()
         assert paper["market_feed_id"] == feed_id
         assert shadow["market_feed_id"] == feed_id
+        versions = client.get(
+            f"/api/v1/bots/{paper['id']}/config-versions",
+            headers=headers,
+        ).json()
+        assert versions[0]["config"]["market"]["symbol"] == "USDJPY"
+        mismatched_config = versions[0]["config"]
+        mismatched_config["market"]["symbol"] = "EURUSD"
+        mismatch = client.post(
+            f"/api/v1/bots/{paper['id']}/config-versions",
+            headers=headers,
+            json={"config": mismatched_config},
+        )
+        assert mismatch.status_code == 409
         activate_first_config(client, paper["id"], headers)
         activate_first_config(client, shadow["id"], headers)
 
@@ -142,8 +163,8 @@ def test_shared_oanda_feed_and_paper_ledger() -> None:
             headers=agent_headers,
             json={
                 "agent_id": agent_id,
-                "canonical_symbol": "XAUUSD",
-                "provider_symbol": "XAU_USD",
+                "canonical_symbol": "USDJPY",
+                "provider_symbol": "USD_JPY",
                 "display_precision": 3,
                 "pip_location": -2,
                 "minimum_trade_size": "1",

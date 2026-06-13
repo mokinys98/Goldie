@@ -58,7 +58,11 @@ export function ConfigEditor({
         </div>
         <fieldset>
           <legend>Market and strategy</legend>
-          <label>Symbol<input {...form.register("market.symbol")} /></label>
+          <label>
+            Symbol
+            <input {...form.register("market.symbol")} readOnly />
+            <small>Controlled by the bot&apos;s assigned market feed.</small>
+          </label>
           <label>Timeframe<input {...form.register("market.timeframe")} disabled /></label>
           <label>Lookback candles<input type="number" {...form.register("strategy.lookback_candles")} /></label>
           <label>Momentum points<input type="number" step="0.01" {...form.register("strategy.min_momentum_points")} /></label>
