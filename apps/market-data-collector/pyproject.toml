@@ -3,18 +3,17 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "goldie-mt5-agent"
+name = "goldie-market-data-collector"
 version = "0.1.0"
 requires-python = ">=3.12"
 dependencies = [
+  "pydantic>=2.10,<3",
   "pydantic-settings>=2.7,<3",
-  "requests>=2.32,<3"
+  "requests>=2.32,<3",
 ]
 
 [project.optional-dependencies]
-mt5 = ["MetaTrader5>=5.0.4874"]
 dev = ["pytest>=8.3,<9"]
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/goldie_agent"]
-
+packages = ["src/goldie_collector"]

@@ -16,6 +16,7 @@ class Settings(BaseSettings):
     agent_service_token: str = "local-agent-token"
     cors_origins: str = "http://localhost:3000"
     agent_offline_after_seconds: int = 20
+    quote_retention_days: int = 30
 
     @property
     def cors_origin_list(self) -> list[str]:

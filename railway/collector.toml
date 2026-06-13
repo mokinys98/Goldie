@@ -1,0 +1,6 @@
+[build]
+builder = "DOCKERFILE"
+dockerfilePath = "apps/market-data-collector/Dockerfile"
+
+[deploy]
+restartPolicyType = "ALWAYS"

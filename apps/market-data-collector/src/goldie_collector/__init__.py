@@ -1,0 +1,1 @@
+"""Hosted market-data collector."""

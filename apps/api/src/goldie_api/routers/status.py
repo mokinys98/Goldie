@@ -9,15 +9,16 @@ from sqlalchemy.orm import Session
 
 from ..db import get_db
 from ..models import (
-    AccountSnapshot,
     Agent,
     Bot,
     Candle,
     ConfigVersion,
+    InstrumentSpecification,
+    MarketFeed,
     MarketTick,
+    PaperAccount,
     Run,
     Signal,
-    SymbolSpecification,
     User,
 )
 from ..schemas import BotRead, BotStatus, SignalRead
@@ -42,28 +43,40 @@ def get_bot_status(
     bot = db.get(Bot, bot_id)
     if bot is None:
         raise HTTPException(status_code=404, detail="Bot not found")
-    agent = db.scalar(select(Agent).where(Agent.bot_id == bot_id).order_by(desc(Agent.created_at)))
-    account = db.scalar(
-        select(AccountSnapshot)
-        .where(AccountSnapshot.bot_id == bot_id)
-        .order_by(desc(AccountSnapshot.observed_at))
-    )
-    spec = db.scalar(
-        select(SymbolSpecification)
-        .where(SymbolSpecification.bot_id == bot_id)
-        .order_by(desc(SymbolSpecification.updated_at))
-    )
-    tick = db.scalar(
-        select(MarketTick).where(MarketTick.bot_id == bot_id).order_by(desc(MarketTick.observed_at))
-    )
-    candles = list(
-        db.scalars(
-            select(Candle)
-            .where(Candle.bot_id == bot_id)
-            .order_by(desc(Candle.opened_at))
-            .limit(100)
+    feed = db.get(MarketFeed, bot.market_feed_id) if bot.market_feed_id else None
+    agent = (
+        db.scalar(
+            select(Agent)
+            .where(Agent.market_feed_id == bot.market_feed_id)
+            .order_by(desc(Agent.created_at))
         )
+        if bot.market_feed_id
+        else None
     )
+    paper_account = db.scalar(select(PaperAccount).where(PaperAccount.bot_id == bot_id))
+    if bot.market_feed_id:
+        spec = db.scalar(
+            select(InstrumentSpecification)
+            .where(InstrumentSpecification.market_feed_id == bot.market_feed_id)
+            .order_by(desc(InstrumentSpecification.updated_at))
+        )
+        tick = db.scalar(
+            select(MarketTick)
+            .where(MarketTick.market_feed_id == bot.market_feed_id)
+            .order_by(desc(MarketTick.observed_at))
+        )
+        candles = list(
+            db.scalars(
+                select(Candle)
+                .where(Candle.market_feed_id == bot.market_feed_id)
+                .order_by(desc(Candle.opened_at))
+                .limit(100)
+            )
+        )
+    else:
+        spec = None
+        tick = None
+        candles = []
     signal = db.scalar(
         select(Signal).where(Signal.bot_id == bot_id).order_by(desc(Signal.observed_at))
     )
@@ -75,12 +88,13 @@ def get_bot_status(
 
     now = datetime.now(UTC)
     effective = "OFFLINE"
-    if agent and agent.last_heartbeat_at:
-        heartbeat = agent.last_heartbeat_at
+    heartbeat_source = feed if feed else agent
+    if heartbeat_source and heartbeat_source.last_heartbeat_at:
+        heartbeat = heartbeat_source.last_heartbeat_at
         if heartbeat.tzinfo is None:
             heartbeat = heartbeat.replace(tzinfo=UTC)
         if (now - heartbeat).total_seconds() <= get_settings().agent_offline_after_seconds:
-            effective = agent.status
+            effective = heartbeat_source.status
 
     data_state = "MISSING"
     if tick:
@@ -98,38 +112,36 @@ def get_bot_status(
             data_state = "FRESH"
         else:
             data_state = "STALE"
+    if effective == "MARKET_CLOSED":
+        data_state = "MARKET_CLOSED"
 
     return BotStatus(
         bot=BotRead.model_validate(bot),
         agent=agent,
         agent_effective_status=effective,
-        latest_account=row_dict(
-            account,
+        paper_account=row_dict(
+            paper_account,
             [
-                "observed_at",
-                "broker",
-                "server",
-                "login",
                 "currency",
+                "initial_balance",
                 "balance",
                 "equity",
-                "margin_free",
-                "leverage",
-                "is_demo",
+                "available_cash",
+                "updated_at",
             ],
         ),
         symbol_specification=row_dict(
             spec,
             [
-                "symbol",
-                "digits",
+                "canonical_symbol",
+                "provider_symbol",
+                "display_precision",
+                "pip_location",
                 "point",
-                "tick_size",
-                "tick_value",
-                "contract_size",
-                "volume_min",
-                "volume_max",
-                "volume_step",
+                "minimum_trade_size",
+                "trade_units_precision",
+                "margin_rate",
+                "source",
             ],
         ),
         latest_tick=row_dict(tick, ["symbol", "observed_at", "bid", "ask"]),

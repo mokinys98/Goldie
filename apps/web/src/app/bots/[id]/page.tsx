@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, openBotStream } from "@/lib/api";
-import type { Bot, BotStatus, ConfigVersion, Run, Signal } from "@/lib/types";
+import type { Bot, BotStatus, ConfigVersion, MarketFeed, Run, Signal } from "@/lib/types";
 import { ConfigEditor } from "@/components/config-editor";
 import { MarketChart } from "@/components/market-chart";
 import { StatusPill } from "@/components/status-pill";
@@ -36,6 +36,10 @@ export default function BotDetailPage() {
     queryKey: ["runs", id],
     queryFn: () => api<Run[]>(`/api/v1/bots/${id}/runs`),
   });
+  const feeds = useQuery({
+    queryKey: ["market-feeds"],
+    queryFn: () => api<MarketFeed[]>("/api/v1/market-feeds"),
+  });
 
   useEffect(
     () =>
@@ -51,6 +55,17 @@ export default function BotDetailPage() {
     client.invalidateQueries({ queryKey: ["bot", id] });
     client.invalidateQueries({ queryKey: ["bot-status", id] });
     client.invalidateQueries({ queryKey: ["runs", id] });
+  };
+
+  const assignFeed = async (marketFeedId: string) => {
+    await api<Bot>(`/api/v1/bots/${id}/market-feed`, {
+      method: "PUT",
+      body: JSON.stringify({ market_feed_id: marketFeedId }),
+    });
+    await Promise.all([
+      client.invalidateQueries({ queryKey: ["bot", id] }),
+      client.invalidateQueries({ queryKey: ["bot-status", id] }),
+    ]);
   };
 
   if (bot.isLoading) return <div className="panel">Loading bot...</div>;
@@ -94,12 +109,27 @@ export default function BotDetailPage() {
           <Metric label="Latest signal" value={live?.latest_signal?.signal ?? "—"} />
           <Metric label="Run" value={live?.active_run_id?.slice(0, 8) ?? "Not active"} />
           <div className="panel grid-span-2">
+            <h2>Market feed</h2>
+            <select
+              value={bot.data.market_feed_id ?? ""}
+              onChange={(event) => void assignFeed(event.target.value)}
+              disabled={!feeds.data?.length}
+            >
+              <option value="">No feed assigned</option>
+              {(feeds.data ?? []).map((feed) => (
+                <option key={feed.id} value={feed.id}>
+                  {feed.provider.toUpperCase()} {feed.provider_symbol} ({feed.status})
+                </option>
+              ))}
+            </select>
+          </div>
+          <div className="panel grid-span-2">
             <h2>Completed M1 close</h2>
             <MarketChart candles={live?.recent_candles ?? []} />
           </div>
           <div className="panel">
-            <h2>Account</h2>
-            <KeyValues values={live?.latest_account ?? null} />
+            <h2>Paper account</h2>
+            <KeyValues values={live?.paper_account ?? null} />
           </div>
           <div className="panel">
             <h2>Symbol specification</h2>
@@ -200,4 +230,3 @@ function DataTable({
     </div>
   );
 }
-

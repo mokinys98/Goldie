@@ -9,7 +9,7 @@ from sqlalchemy import select, text
 
 from .db import SessionLocal, engine
 from .models import User
-from .routers import agents, auth, bots, market, status
+from .routers import auth, bots, feeds, status
 from .security import hash_password
 from .settings import get_settings
 from .websocket import manager
@@ -48,8 +48,7 @@ app.add_middleware(
 
 app.include_router(auth.router)
 app.include_router(bots.router)
-app.include_router(agents.router)
-app.include_router(market.router)
+app.include_router(feeds.router)
 app.include_router(status.router)
 
 

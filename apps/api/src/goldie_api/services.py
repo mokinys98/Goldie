@@ -11,15 +11,19 @@ from .models import (
     Bot,
     Candle,
     ConfigVersion,
+    InstrumentSpecification,
     MarketTick,
     Run,
     Signal,
-    SymbolSpecification,
 )
 
 
 def utc_now() -> datetime:
     return datetime.now(UTC)
+
+
+def as_utc(value: datetime) -> datetime:
+    return value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
 
 
 def add_audit(
@@ -62,13 +66,17 @@ def evaluate_latest_signal(db: Session, bot: Bot) -> Signal | None:
         .where(Run.bot_id == bot.id, Run.status == "ACTIVE")
         .order_by(desc(Run.created_at))
     )
+    if bot.market_feed_id is None:
+        return None
     tick = db.scalar(
-        select(MarketTick).where(MarketTick.bot_id == bot.id).order_by(desc(MarketTick.observed_at))
+        select(MarketTick)
+        .where(MarketTick.market_feed_id == bot.market_feed_id)
+        .order_by(desc(MarketTick.observed_at))
     )
     spec = db.scalar(
-        select(SymbolSpecification)
-        .where(SymbolSpecification.bot_id == bot.id)
-        .order_by(desc(SymbolSpecification.updated_at))
+        select(InstrumentSpecification)
+        .where(InstrumentSpecification.market_feed_id == bot.market_feed_id)
+        .order_by(desc(InstrumentSpecification.updated_at))
     )
     if active_run is None or tick is None or spec is None:
         return None
@@ -78,7 +86,7 @@ def evaluate_latest_signal(db: Session, bot: Bot) -> Signal | None:
         db.scalars(
             select(Candle)
             .where(
-                Candle.bot_id == bot.id,
+                Candle.market_feed_id == bot.market_feed_id,
                 Candle.symbol == tick.symbol,
                 Candle.timeframe == config.market.timeframe,
                 Candle.is_complete.is_(True),
@@ -90,12 +98,13 @@ def evaluate_latest_signal(db: Session, bot: Bot) -> Signal | None:
     if not rows:
         return None
 
-    latest_candle = max(rows, key=lambda row: row.opened_at)
+    latest_candle = max(rows, key=lambda row: as_utc(row.opened_at))
+    latest_candle_at = as_utc(latest_candle.opened_at)
     duplicate = db.scalar(
         select(Signal).where(
             Signal.bot_id == bot.id,
             Signal.run_id == active_run.id,
-            Signal.observed_at == latest_candle.opened_at,
+            Signal.observed_at == latest_candle_at,
         )
     )
     if duplicate is not None:
@@ -103,13 +112,13 @@ def evaluate_latest_signal(db: Session, bot: Bot) -> Signal | None:
 
     decision = BasicMomentumStrategy().evaluate(
         MarketContext(
-            observed_at=tick.observed_at,
+            observed_at=as_utc(tick.observed_at),
             bid=tick.bid,
             ask=tick.ask,
             point=spec.point,
             candles=[
                 CandleInput(
-                    opened_at=row.opened_at,
+                    opened_at=as_utc(row.opened_at),
                     open=row.open,
                     high=row.high,
                     low=row.low,
@@ -125,7 +134,7 @@ def evaluate_latest_signal(db: Session, bot: Bot) -> Signal | None:
         bot_id=bot.id,
         run_id=active_run.id,
         config_version_id=config_row.id,
-        observed_at=latest_candle.opened_at,
+        observed_at=latest_candle_at,
         signal=decision.signal.value,
         reason_code=decision.reason_code,
         entry_price=decision.entry_price,

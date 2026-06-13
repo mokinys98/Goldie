@@ -34,6 +34,7 @@ class BotRead(OrmModel):
     mode: str
     state: str
     active_config_version_id: uuid.UUID | None
+    market_feed_id: uuid.UUID | None
     created_at: datetime
     updated_at: datetime
 
@@ -53,16 +54,9 @@ class ConfigRead(OrmModel):
     activated_at: datetime | None
 
 
-class AgentRegister(BaseModel):
-    bot_id: uuid.UUID
-    name: str = Field(min_length=1, max_length=120)
-    adapter: str = Field(pattern="^(fake|mt5)$")
-    details: dict = Field(default_factory=dict)
-
-
 class AgentRead(OrmModel):
     id: uuid.UUID
-    bot_id: uuid.UUID
+    market_feed_id: uuid.UUID
     name: str
     adapter: str
     status: str
@@ -71,61 +65,9 @@ class AgentRead(OrmModel):
 
 
 class HeartbeatRequest(BaseModel):
-    status: str = Field(pattern="^(ONLINE|DEGRADED|ERROR)$")
+    status: str = Field(pattern="^(ONLINE|DEGRADED|ERROR|MARKET_CLOSED)$")
     details: dict = Field(default_factory=dict)
     observed_at: datetime
-
-
-class AccountSnapshotIn(BaseModel):
-    agent_id: uuid.UUID
-    bot_id: uuid.UUID
-    observed_at: datetime
-    broker: str
-    server: str
-    login: str
-    currency: str
-    balance: Decimal
-    equity: Decimal
-    margin_free: Decimal
-    leverage: int
-    is_demo: bool
-
-
-class SymbolSpecificationIn(BaseModel):
-    agent_id: uuid.UUID
-    bot_id: uuid.UUID
-    symbol: str
-    digits: int
-    point: Decimal
-    tick_size: Decimal
-    tick_value: Decimal
-    contract_size: Decimal
-    volume_min: Decimal
-    volume_max: Decimal
-    volume_step: Decimal
-
-
-class MarketTickIn(BaseModel):
-    agent_id: uuid.UUID
-    bot_id: uuid.UUID
-    symbol: str
-    observed_at: datetime
-    bid: Decimal
-    ask: Decimal
-
-
-class CandleIn(BaseModel):
-    agent_id: uuid.UUID
-    bot_id: uuid.UUID
-    symbol: str
-    timeframe: str = Field(pattern="^M1$")
-    opened_at: datetime
-    open: Decimal
-    high: Decimal
-    low: Decimal
-    close: Decimal
-    tick_volume: int = 0
-    is_complete: bool
 
 
 class SignalRead(OrmModel):
@@ -148,10 +90,82 @@ class BotStatus(BaseModel):
     bot: BotRead
     agent: AgentRead | None
     agent_effective_status: str
-    latest_account: dict | None
+    paper_account: dict | None
     symbol_specification: dict | None
     latest_tick: dict | None
     recent_candles: list[dict]
     latest_signal: SignalRead | None
     active_run_id: uuid.UUID | None
     data_state: str
+
+
+class MarketFeedRegister(BaseModel):
+    provider: str = Field(pattern="^oanda$")
+    environment: str = Field(default="practice", pattern="^(practice|live)$")
+    canonical_symbol: str = Field(default="XAUUSD", pattern="^XAUUSD$")
+    provider_symbol: str = Field(default="XAU_USD", pattern="^XAU_USD$")
+    agent_name: str = Field(default="railway-oanda-collector", min_length=1, max_length=120)
+    details: dict = Field(default_factory=dict)
+
+
+class MarketFeedRead(OrmModel):
+    id: uuid.UUID
+    provider: str
+    environment: str
+    canonical_symbol: str
+    provider_symbol: str
+    status: str
+    last_heartbeat_at: datetime | None
+    details: dict
+
+
+class MarketFeedRegistration(BaseModel):
+    feed: MarketFeedRead
+    agent: AgentRead
+    latest_candle_at: datetime | None
+
+
+class FeedHeartbeatRequest(HeartbeatRequest):
+    agent_id: uuid.UUID
+
+
+class InstrumentSpecificationIn(BaseModel):
+    agent_id: uuid.UUID
+    canonical_symbol: str = Field(pattern="^XAUUSD$")
+    provider_symbol: str = Field(pattern="^XAU_USD$")
+    display_precision: int = Field(ge=0, le=10)
+    pip_location: int = Field(ge=-10, le=10)
+    minimum_trade_size: Decimal | None = Field(default=None, gt=0)
+    trade_units_precision: int | None = Field(default=None, ge=0, le=10)
+    margin_rate: Decimal | None = Field(default=None, gt=0)
+    provider_metadata: dict = Field(default_factory=dict)
+
+
+class FeedQuote(BaseModel):
+    observed_at: datetime
+    bid: Decimal
+    ask: Decimal
+
+
+class FeedQuoteBatch(BaseModel):
+    agent_id: uuid.UUID
+    quotes: list[FeedQuote] = Field(min_length=1, max_length=1000)
+
+
+class FeedCandle(BaseModel):
+    opened_at: datetime
+    open: Decimal
+    high: Decimal
+    low: Decimal
+    close: Decimal
+    volume: int = Field(default=0, ge=0)
+    complete: bool = True
+
+
+class FeedCandleBatch(BaseModel):
+    agent_id: uuid.UUID
+    candles: list[FeedCandle] = Field(min_length=1, max_length=5000)
+
+
+class MarketFeedAssignment(BaseModel):
+    market_feed_id: uuid.UUID

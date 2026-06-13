@@ -6,7 +6,7 @@
 - Node.js 22
 - Python 3.12 or 3.13 for development
 - `pnpm` through Corepack and `uv`
-- MetaTrader 5 demo terminal for the real read-only adapter
+- OANDA Practice account and API token
 
 ## Platform startup
 
@@ -20,14 +20,17 @@ docker compose -f infrastructure/docker/compose.yml --env-file .env up --build
 
 Ports: UI `3000`, API `8000`, PostgreSQL `5432`, Redis `6379`.
 
-## MT5 setup
+## OANDA collector setup
 
-Install the broker-provided MT5 terminal, create a demo account, add XAU/USD
-to Market Watch, and record the terminal path, login, server, and actual
-broker symbol. Credentials remain in local environment variables.
+Set `GOLDIE_OANDA_API_TOKEN`, `GOLDIE_OANDA_ACCOUNT_ID`,
+`GOLDIE_API_URL`, and `GOLDIE_AGENT_TOKEN`, then run:
 
-The Windows agent connects outbound to `http://localhost:8000`; no inbound
-Windows port is needed.
+```powershell
+uv run --package goldie-market-data-collector python -m goldie_collector
+```
+
+The collector connects outbound to OANDA and Goldie API. It never submits
+orders.
 
 ## Diagnostics
 

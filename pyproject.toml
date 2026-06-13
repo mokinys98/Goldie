@@ -11,7 +11,7 @@ package = false
 members = [
   "packages/trading-domain",
   "apps/api",
-  "apps/mt5-agent",
+  "apps/market-data-collector",
   "apps/worker",
 ]
 

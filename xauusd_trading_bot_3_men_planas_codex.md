@@ -39,7 +39,7 @@ XAU/USD
 Galimas prekybos būdas:
 
 ```text
-CFD per MT5 brokerį
+Provider-neutral paper prekyba pagal OANDA XAU/USD kainas
 ```
 
 Rekomenduojama pradėti nuo:

@@ -1,0 +1,8 @@
+[build]
+builder = "DOCKERFILE"
+dockerfilePath = "apps/api/Dockerfile"
+
+[deploy]
+startCommand = "python -m goldie_api.maintenance"
+restartPolicyType = "NEVER"
+cronSchedule = "15 2 * * *"

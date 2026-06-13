@@ -936,7 +936,7 @@ Frontend neturi:
 - saugoti brokerio slaptažodžių naršyklėje;
 - skaičiuoti galutinio leidžiamo loto;
 - apeiti risk manager;
-- tiesiogiai komunikuoti su MT5;
+- tiesiogiai komunikuoti su rinkos duomenų ar vykdymo tiekėju;
 - pats nuspręsti, kad pavedimas įvykdytas;
 - redaguoti istorinių run duomenų;
 - lokaliai įjungti live režimo.
@@ -1045,6 +1045,6 @@ palyginti realius rezultatus.
 
 ## 24. Technologinis įgyvendinimas
 
-Detalus frontend, backend, prekybos branduolio, duomenų bazės, MT5 agento,
+Detalus frontend, backend, prekybos branduolio, duomenų bazės, OANDA collector,
 hostingo ir CI/CD technologijų pasirinkimas aprašytas dokumente
 `xauusd_trading_bot_technologiju_architektura.md`.

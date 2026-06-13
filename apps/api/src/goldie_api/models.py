@@ -48,6 +48,9 @@ class Bot(Base, TimestampMixin):
     mode: Mapped[str] = mapped_column(String(20), default="SHADOW")
     state: Mapped[str] = mapped_column(String(20), default="STOPPED")
     active_config_version_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, nullable=True)
+    market_feed_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("market_feeds.id"), index=True, nullable=True
+    )
 
     configs: Mapped[list["ConfigVersion"]] = relationship(
         back_populates="bot", cascade="all, delete-orphan"
@@ -88,7 +91,9 @@ class Agent(Base, TimestampMixin):
     __tablename__ = "agents"
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
-    bot_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("bots.id"), index=True)
+    market_feed_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("market_feeds.id"), index=True
+    )
     name: Mapped[str] = mapped_column(String(120))
     adapter: Mapped[str] = mapped_column(String(20))
     status: Mapped[str] = mapped_column(String(20), default="REGISTERED")
@@ -96,49 +101,79 @@ class Agent(Base, TimestampMixin):
     details: Mapped[dict] = mapped_column(JSON, default=dict)
 
 
-class AccountSnapshot(Base):
-    __tablename__ = "account_snapshots"
+class MarketFeed(Base, TimestampMixin):
+    __tablename__ = "market_feeds"
+    __table_args__ = (
+        UniqueConstraint(
+            "provider",
+            "environment",
+            "provider_symbol",
+            name="uq_market_feed_provider_symbol",
+        ),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
-    bot_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("bots.id"), index=True)
-    agent_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("agents.id"))
-    observed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
-    broker: Mapped[str] = mapped_column(String(120))
-    server: Mapped[str] = mapped_column(String(120))
-    login: Mapped[str] = mapped_column(String(64))
-    currency: Mapped[str] = mapped_column(String(12))
+    provider: Mapped[str] = mapped_column(String(32), index=True)
+    environment: Mapped[str] = mapped_column(String(32))
+    canonical_symbol: Mapped[str] = mapped_column(String(32), index=True)
+    provider_symbol: Mapped[str] = mapped_column(String(64))
+    status: Mapped[str] = mapped_column(String(32), default="REGISTERED")
+    last_heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    details: Mapped[dict] = mapped_column(JSON, default=dict)
+
+
+class PaperAccount(Base, TimestampMixin):
+    __tablename__ = "paper_accounts"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    bot_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("bots.id"), unique=True, index=True
+    )
+    currency: Mapped[str] = mapped_column(String(12), default="USD")
+    initial_balance: Mapped[Decimal] = mapped_column(Numeric(20, 8))
     balance: Mapped[Decimal] = mapped_column(Numeric(20, 8))
     equity: Mapped[Decimal] = mapped_column(Numeric(20, 8))
-    margin_free: Mapped[Decimal] = mapped_column(Numeric(20, 8))
-    leverage: Mapped[int] = mapped_column(Integer)
-    is_demo: Mapped[bool] = mapped_column(Boolean)
+    available_cash: Mapped[Decimal] = mapped_column(Numeric(20, 8))
 
 
-class SymbolSpecification(Base, TimestampMixin):
-    __tablename__ = "symbol_specifications"
+class InstrumentSpecification(Base, TimestampMixin):
+    __tablename__ = "instrument_specifications"
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
-    bot_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("bots.id"), index=True)
-    agent_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("agents.id"))
-    symbol: Mapped[str] = mapped_column(String(32))
-    digits: Mapped[int] = mapped_column(Integer)
+    market_feed_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("market_feeds.id"), index=True
+    )
+    agent_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("agents.id"), nullable=True
+    )
+    canonical_symbol: Mapped[str] = mapped_column(String(32))
+    provider_symbol: Mapped[str] = mapped_column(String(64))
+    display_precision: Mapped[int] = mapped_column(Integer)
+    pip_location: Mapped[int] = mapped_column(Integer)
     point: Mapped[Decimal] = mapped_column(Numeric(20, 10))
-    tick_size: Mapped[Decimal] = mapped_column(Numeric(20, 10))
-    tick_value: Mapped[Decimal] = mapped_column(Numeric(20, 10))
-    contract_size: Mapped[Decimal] = mapped_column(Numeric(20, 8))
-    volume_min: Mapped[Decimal] = mapped_column(Numeric(20, 8))
-    volume_max: Mapped[Decimal] = mapped_column(Numeric(20, 8))
-    volume_step: Mapped[Decimal] = mapped_column(Numeric(20, 8))
+    minimum_trade_size: Mapped[Decimal | None] = mapped_column(Numeric(20, 8))
+    trade_units_precision: Mapped[int | None] = mapped_column(Integer)
+    margin_rate: Mapped[Decimal | None] = mapped_column(Numeric(20, 10))
+    source: Mapped[str] = mapped_column(String(32))
+    provider_metadata: Mapped[dict] = mapped_column(JSON, default=dict)
 
 
 class MarketTick(Base):
     __tablename__ = "market_ticks"
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
-    bot_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("bots.id"), index=True)
-    agent_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("agents.id"))
+    market_feed_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("market_feeds.id"), index=True
+    )
+    agent_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("agents.id"), nullable=True
+    )
     symbol: Mapped[str] = mapped_column(String(32))
     observed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    received_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), index=True
+    )
+    source: Mapped[str] = mapped_column(String(32), default="oanda")
     bid: Mapped[Decimal] = mapped_column(Numeric(20, 8))
     ask: Mapped[Decimal] = mapped_column(Numeric(20, 8))
 
@@ -146,15 +181,29 @@ class MarketTick(Base):
 class Candle(Base):
     __tablename__ = "candles"
     __table_args__ = (
-        UniqueConstraint("bot_id", "symbol", "timeframe", "opened_at", name="uq_candle"),
+        UniqueConstraint(
+            "market_feed_id",
+            "symbol",
+            "timeframe",
+            "opened_at",
+            name="uq_feed_candle",
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
-    bot_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("bots.id"), index=True)
-    agent_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("agents.id"))
+    market_feed_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("market_feeds.id"), index=True
+    )
+    agent_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("agents.id"), nullable=True
+    )
     symbol: Mapped[str] = mapped_column(String(32))
     timeframe: Mapped[str] = mapped_column(String(8))
     opened_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    received_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), index=True
+    )
+    source: Mapped[str] = mapped_column(String(32), default="oanda")
     open: Mapped[Decimal] = mapped_column(Numeric(20, 8))
     high: Mapped[Decimal] = mapped_column(Numeric(20, 8))
     low: Mapped[Decimal] = mapped_column(Numeric(20, 8))

@@ -1,5 +1,6 @@
 import uuid
 from datetime import UTC, datetime
+from decimal import Decimal
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.encoders import jsonable_encoder
@@ -9,8 +10,15 @@ from sqlalchemy import desc, select
 from sqlalchemy.orm import Session
 
 from ..db import get_db
-from ..models import Bot, ConfigVersion, Run, Signal, User
-from ..schemas import BotCreate, BotRead, ConfigCreate, ConfigRead, SignalRead
+from ..models import Bot, ConfigVersion, MarketFeed, PaperAccount, Run, Signal, User
+from ..schemas import (
+    BotCreate,
+    BotRead,
+    ConfigCreate,
+    ConfigRead,
+    MarketFeedAssignment,
+    SignalRead,
+)
 from ..security import get_current_user
 from ..services import add_audit, next_config_version
 
@@ -38,17 +46,43 @@ def create_bot(
     existing = db.scalar(select(Bot).where(Bot.name == payload.name))
     if existing:
         raise HTTPException(status_code=409, detail="Bot name already exists")
-    bot = Bot(name=payload.name, description=payload.description, mode=payload.mode)
+    initial_config = payload.initial_config or BotConfiguration.model_validate(
+        DEFAULT_BOT_CONFIGURATION
+    )
+    default_feed = db.scalar(
+        select(MarketFeed)
+        .where(
+            MarketFeed.canonical_symbol == initial_config.market.symbol,
+            MarketFeed.provider == "oanda",
+        )
+        .order_by(desc(MarketFeed.created_at))
+    )
+    bot = Bot(
+        name=payload.name,
+        description=payload.description,
+        mode=payload.mode,
+        market_feed_id=default_feed.id if default_feed else None,
+    )
     db.add(bot)
     db.flush()
+    if payload.mode == "PAPER":
+        opening_balance = Decimal("10000")
+        db.add(
+            PaperAccount(
+                bot_id=bot.id,
+                currency="USD",
+                initial_balance=opening_balance,
+                balance=opening_balance,
+                equity=opening_balance,
+                available_cash=opening_balance,
+            )
+        )
     config = ConfigVersion(
         bot_id=bot.id,
         version=1,
         status="DRAFT",
         config=jsonable_encoder(
-            payload.initial_config.model_dump(mode="json")
-            if payload.initial_config
-            else DEFAULT_BOT_CONFIGURATION
+            initial_config.model_dump(mode="json")
         ),
         created_by=user.id,
     )
@@ -60,6 +94,48 @@ def create_bot(
         action="BOT_CREATED",
         target_type="BOT",
         target_id=str(bot.id),
+    )
+    db.commit()
+    db.refresh(bot)
+    return bot
+
+
+@router.put("/bots/{bot_id}/market-feed", response_model=BotRead)
+def assign_market_feed(
+    bot_id: uuid.UUID,
+    payload: MarketFeedAssignment,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> Bot:
+    bot = get_bot_or_404(db, bot_id)
+    feed = db.get(MarketFeed, payload.market_feed_id)
+    if feed is None:
+        raise HTTPException(status_code=404, detail="Market feed not found")
+    config_row = (
+        db.get(ConfigVersion, bot.active_config_version_id)
+        if bot.active_config_version_id
+        else db.scalar(
+            select(ConfigVersion)
+            .where(ConfigVersion.bot_id == bot.id)
+            .order_by(desc(ConfigVersion.version))
+        )
+    )
+    if config_row:
+        config = BotConfiguration.model_validate(config_row.config)
+        if config.market.symbol != feed.canonical_symbol:
+            raise HTTPException(
+                status_code=409,
+                detail="Market feed symbol does not match bot configuration",
+            )
+    bot.market_feed_id = feed.id
+    add_audit(
+        db,
+        actor_type="USER",
+        actor_id=str(user.id),
+        action="MARKET_FEED_ASSIGNED",
+        target_type="BOT",
+        target_id=str(bot.id),
+        details={"market_feed_id": str(feed.id)},
     )
     db.commit()
     db.refresh(bot)

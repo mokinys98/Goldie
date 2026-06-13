@@ -5,6 +5,7 @@ export type Bot = {
   mode: "SHADOW" | "PAPER";
   state: string;
   active_config_version_id: string | null;
+  market_feed_id: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -57,7 +58,7 @@ export type BotStatus = {
     last_heartbeat_at: string | null;
   } | null;
   agent_effective_status: string;
-  latest_account: Record<string, string | number | boolean> | null;
+  paper_account: Record<string, string | number | boolean> | null;
   symbol_specification: Record<string, string | number> | null;
   latest_tick: {
     symbol: string;
@@ -75,7 +76,17 @@ export type BotStatus = {
   }>;
   latest_signal: Signal | null;
   active_run_id: string | null;
-  data_state: "FRESH" | "STALE" | "MISSING";
+  data_state: "FRESH" | "STALE" | "MISSING" | "MARKET_CLOSED";
+};
+
+export type MarketFeed = {
+  id: string;
+  provider: string;
+  environment: string;
+  canonical_symbol: string;
+  provider_symbol: string;
+  status: string;
+  last_heartbeat_at: string | null;
 };
 
 export type Run = {
@@ -86,4 +97,3 @@ export type Run = {
   created_at: string;
   ended_at: string | null;
 };
-
