@@ -164,3 +164,117 @@ export type Run = {
   created_at: string;
   ended_at: string | null;
 };
+
+export type CollectorConfiguration = {
+  id: string;
+  version: number;
+  quote_interval_seconds: string | number;
+  candle_poll_seconds: string | number;
+  heartbeat_seconds: string | number;
+  backfill_days: number;
+  backfill_batch_size: number;
+  configuration_retry_seconds: string | number;
+  updated_at: string;
+};
+
+export type CollectorInstrumentSettings = {
+  id?: string;
+  provider_symbol: string;
+  canonical_symbol: string;
+  enabled: boolean;
+  overrides: Record<string, string | number>;
+  market_feed_id: string | null;
+};
+
+export type CollectorCommand = {
+  id: string;
+  collector_instance_id: string | null;
+  market_feed_id: string | null;
+  command: "PAUSE" | "RESUME" | "RECONNECT" | "BACKFILL";
+  status: "PENDING" | "RUNNING" | "SUCCEEDED" | "FAILED";
+  payload: Record<string, unknown>;
+  progress: Record<string, string | number>;
+  result: Record<string, unknown>;
+  error: string | null;
+  started_at: string | null;
+  completed_at: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type CollectorFeedSummary = {
+  id: string;
+  provider: string;
+  environment: string;
+  canonical_symbol: string;
+  provider_symbol: string;
+  status: string;
+  last_heartbeat_at: string | null;
+  latest_tick: {
+    observed_at: string;
+    bid: string | number;
+    ask: string | number;
+    spread: string | number;
+  } | null;
+  latest_candle_at: string | null;
+  data_lag_seconds: number | null;
+  bot_count: number;
+};
+
+export type CollectorOverview = {
+  instance: {
+    id: string;
+    name: string;
+    status: string;
+    reported_status: string;
+    last_heartbeat_at: string | null;
+    applied_config_version: number | null;
+    details: Record<string, unknown>;
+  } | null;
+  counts: {
+    online: number;
+    paused: number;
+    error: number;
+    market_closed: number;
+    ticks_24h: number;
+    candles_24h: number;
+  };
+  feeds: CollectorFeedSummary[];
+  recent_commands: CollectorCommand[];
+};
+
+export type CollectorSettingsResponse = {
+  configuration: CollectorConfiguration;
+  instruments: CollectorInstrumentSettings[];
+};
+
+export type CollectorFeedDetail = {
+  feed: CollectorFeedSummary;
+  agent: Record<string, unknown> | null;
+  instrument_settings: CollectorInstrumentSettings;
+  gap_count: number;
+  commands: CollectorCommand[];
+};
+
+export type PageResult<T> = {
+  items: T[];
+  next_cursor: string | null;
+};
+
+export type CollectorCandle = {
+  opened_at: string;
+  open: string | number;
+  high: string | number;
+  low: string | number;
+  close: string | number;
+  volume: number;
+  complete: boolean;
+};
+
+export type CollectorTick = {
+  observed_at: string;
+  received_at: string;
+  bid: string | number;
+  ask: string | number;
+  spread: string | number;
+};

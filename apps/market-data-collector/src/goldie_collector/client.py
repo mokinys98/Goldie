@@ -38,6 +38,16 @@ class GoldieApiClient:
             ) from exc
         return response.json()
 
+    def patch(self, path: str, payload: dict[str, Any]) -> dict:
+        response = requests.patch(
+            f"{self.base_url}{path}",
+            json=payload,
+            headers=self.headers,
+            timeout=self.timeout,
+        )
+        response.raise_for_status()
+        return response.json()
+
     def register(self, settings: CollectorSettings) -> datetime | None:
         result = self.post(
             "/api/v1/market-feeds/register",
@@ -57,6 +67,62 @@ class GoldieApiClient:
             return None
         parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
         return parsed.replace(tzinfo=UTC) if parsed.tzinfo is None else parsed.astimezone(UTC)
+
+    def register_instance(self, settings: CollectorSettings) -> dict:
+        return self.post(
+            "/api/v1/collector/instances/register",
+            {
+                "name": settings.agent_name,
+                "defaults": {
+                    "quote_interval_seconds": settings.quote_interval_seconds,
+                    "candle_poll_seconds": settings.candle_poll_seconds,
+                    "heartbeat_seconds": settings.heartbeat_seconds,
+                    "backfill_days": settings.backfill_days,
+                    "backfill_batch_size": settings.backfill_batch_size,
+                    "configuration_retry_seconds": settings.configuration_retry_seconds,
+                },
+                "instruments": settings.instrument_symbols,
+            },
+        )
+
+    def poll_control(self, instance_id: str) -> dict:
+        return self.post(f"/api/v1/collector/instances/{instance_id}/poll", {})
+
+    def instance_heartbeat(
+        self,
+        instance_id: str,
+        status: str,
+        applied_config_version: int | None,
+        details: dict[str, Any],
+    ) -> None:
+        self.post(
+            f"/api/v1/collector/instances/{instance_id}/heartbeat",
+            {
+                "status": status,
+                "applied_config_version": applied_config_version,
+                "details": details,
+                "observed_at": datetime.now(UTC).isoformat(),
+            },
+        )
+
+    def update_command(
+        self,
+        command_id: str,
+        status: str,
+        *,
+        progress: dict[str, Any] | None = None,
+        result: dict[str, Any] | None = None,
+        error: str | None = None,
+    ) -> None:
+        self.patch(
+            f"/api/v1/collector/commands/{command_id}",
+            {
+                "status": status,
+                "progress": progress or {},
+                "result": result or {},
+                "error": error,
+            },
+        )
 
     def _identity(self) -> tuple[str, str]:
         if self.feed_id is None or self.agent_id is None:

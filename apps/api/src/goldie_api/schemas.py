@@ -203,3 +203,57 @@ class FeedCandleBatch(BaseModel):
 
 class MarketFeedAssignment(BaseModel):
     market_feed_id: uuid.UUID
+
+
+class CollectorSettingsValues(BaseModel):
+    quote_interval_seconds: Decimal = Field(default=5, ge=1, le=60)
+    candle_poll_seconds: Decimal = Field(default=15, ge=5, le=300)
+    heartbeat_seconds: Decimal = Field(default=10, ge=5, le=300)
+    backfill_days: int = Field(default=30, ge=1, le=365)
+    backfill_batch_size: int = Field(default=250, ge=50, le=1000)
+    configuration_retry_seconds: Decimal = Field(default=900, ge=60, le=86400)
+
+
+class CollectorSettingsRead(CollectorSettingsValues):
+    id: uuid.UUID
+    version: int
+    updated_at: datetime
+
+
+class CollectorSettingsUpdate(CollectorSettingsValues):
+    expected_version: int = Field(ge=1)
+
+
+class CollectorInstrumentSettingsUpdate(BaseModel):
+    enabled: bool
+    overrides: dict = Field(default_factory=dict)
+
+
+class CollectorInstrumentCreate(BaseModel):
+    provider_symbol: str = Field(pattern="^[A-Z0-9]+_[A-Z0-9]+$")
+
+
+class CollectorInstanceRegister(BaseModel):
+    name: str = Field(min_length=1, max_length=120)
+    defaults: CollectorSettingsValues
+    instruments: list[str] = Field(min_length=1, max_length=20)
+
+
+class CollectorInstanceHeartbeat(BaseModel):
+    status: str = Field(pattern="^(ONLINE|PAUSED|DEGRADED|ERROR)$")
+    applied_config_version: int | None = None
+    details: dict = Field(default_factory=dict)
+    observed_at: datetime
+
+
+class CollectorCommandCreate(BaseModel):
+    command: str = Field(pattern="^(PAUSE|RESUME|RECONNECT|BACKFILL)$")
+    market_feed_id: uuid.UUID | None = None
+    payload: dict = Field(default_factory=dict)
+
+
+class CollectorCommandUpdate(BaseModel):
+    status: str = Field(pattern="^(RUNNING|SUCCEEDED|FAILED)$")
+    progress: dict = Field(default_factory=dict)
+    result: dict = Field(default_factory=dict)
+    error: str | None = Field(default=None, max_length=4000)

@@ -1,4 +1,4 @@
-const API_URL = (process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000").replace(
+export const API_URL = (process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000").replace(
   /\/+$/,
   "",
 );
@@ -79,5 +79,41 @@ export function openBotStream(
     if (payload.bot_instance_id === botId) onEvent();
   };
   return () => socket.close();
+}
+
+export function openCollectorStream(onEvent: () => void): () => void {
+  const token = getToken();
+  const base = (process.env.NEXT_PUBLIC_WS_URL ?? "ws://localhost:8000").replace(
+    /\/+$/,
+    "",
+  );
+  if (!token) return () => undefined;
+  const socket = new WebSocket(
+    `${base}/api/v1/stream?token=${encodeURIComponent(token)}`,
+  );
+  socket.onmessage = (event) => {
+    const payload = JSON.parse(event.data) as { event_type?: string };
+    if (payload.event_type?.startsWith("collector.")) onEvent();
+  };
+  return () => socket.close();
+}
+
+export async function downloadAuthenticated(path: string, filename: string): Promise<void> {
+  const token = getToken();
+  if (!token) {
+    redirectToLogin();
+    return;
+  }
+  const response = await fetch(`${API_URL}${path}`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!response.ok) throw new ApiError(`Export failed (${response.status})`, response.status);
+  const blob = await response.blob();
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = filename;
+  anchor.click();
+  URL.revokeObjectURL(url);
 }
 

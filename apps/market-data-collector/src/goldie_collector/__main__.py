@@ -16,156 +16,377 @@ logger = logging.getLogger("goldie-market-data-collector")
 backfill_lock = threading.Lock()
 
 
-def run_instrument(settings: CollectorSettings) -> None:
-    client = GoldieApiClient(settings)
-    provider = OandaProvider(settings)
-    latest_candle_at = client.register(settings)
-    instrument = provider.validate_instrument()
-    client.instrument(instrument)
+def parse_time(value: str) -> datetime:
+    parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    return parsed.replace(tzinfo=UTC) if parsed.tzinfo is None else parsed.astimezone(UTC)
 
+
+def run_backfill(
+    settings: CollectorSettings,
+    client: GoldieApiClient,
+    provider: OandaProvider,
+    start: datetime,
+    end: datetime,
+    *,
+    command_id: str | None = None,
+) -> datetime:
     with backfill_lock:
+        candles = provider.candles(start, end)
+        total = len(candles)
+        accepted = 0
+        duplicates = 0
+        size = settings.backfill_batch_size
+        for index in range(0, total, size):
+            result = client.candles(candles[index : index + size])
+            accepted += int(result.get("count", 0))
+            duplicates += int(result.get("duplicates", 0))
+            if command_id:
+                client.update_command(
+                    command_id,
+                    "RUNNING",
+                    progress={
+                        "processed": min(index + size, total),
+                        "total": total,
+                        "accepted": accepted,
+                        "duplicates": duplicates,
+                    },
+                )
+        if command_id:
+            client.update_command(
+                command_id,
+                "SUCCEEDED",
+                progress={
+                    "processed": total,
+                    "total": total,
+                    "accepted": accepted,
+                    "duplicates": duplicates,
+                },
+                result={"accepted": accepted, "duplicates": duplicates},
+            )
+        return candles[-1].opened_at + timedelta(minutes=1) if candles else start
+
+
+class InstrumentWorker:
+    def __init__(
+        self,
+        settings: CollectorSettings,
+        on_registered,
+    ) -> None:
+        self.settings = settings
+        self.on_registered = on_registered
+        self.stop_event = threading.Event()
+        self.thread = threading.Thread(
+            target=self._run_forever,
+            name=f"collector-{settings.provider_symbol.lower()}",
+            daemon=True,
+        )
+        self.feed_id: str | None = None
+        self.status = "REGISTERED"
+        self.last_error: str | None = None
+        self.latest_quote_at: str | None = None
+
+    def start(self) -> None:
+        self.thread.start()
+
+    def stop(self) -> None:
+        self.stop_event.set()
+        self.thread.join(timeout=10)
+
+    def _wait(self, seconds: float) -> bool:
+        return self.stop_event.wait(seconds)
+
+    def _run_forever(self) -> None:
+        attempt = 0
+        while not self.stop_event.is_set():
+            try:
+                self._run()
+                attempt = 0
+            except OandaConfigurationError as exc:
+                self.status = "ERROR"
+                self.last_error = str(exc)
+                logger.error("%s configuration error: %s", self.settings.provider_symbol, exc)
+                if self._wait(self.settings.configuration_retry_seconds):
+                    return
+            except Exception as exc:
+                attempt += 1
+                self.status = "DEGRADED"
+                self.last_error = f"{type(exc).__name__}: {exc}"
+                delay = min(60, 2 ** min(attempt, 5)) + random.uniform(0, 15)
+                logger.error(
+                    "Collector %s failed; retrying in %.1f seconds: %s",
+                    self.settings.provider_symbol,
+                    delay,
+                    self.last_error,
+                    exc_info=attempt == 1,
+                )
+                if self._wait(delay):
+                    return
+
+    def _run(self) -> None:
+        client = GoldieApiClient(self.settings)
+        provider = OandaProvider(self.settings)
+        latest_candle_at = client.register(self.settings)
+        self.feed_id = str(client.feed_id)
+        self.on_registered(self.settings.provider_symbol, self.feed_id)
+        instrument = provider.validate_instrument()
+        client.instrument(instrument)
         now = datetime.now(UTC)
-        backfill_start = max(
+        start = max(
             latest_candle_at + timedelta(minutes=1)
             if latest_candle_at
-            else now - timedelta(days=settings.backfill_days),
-            now - timedelta(days=settings.backfill_days),
+            else now - timedelta(days=self.settings.backfill_days),
+            now - timedelta(days=self.settings.backfill_days),
         )
-        logger.info(
-            "Starting serialized backfill for %s from %s",
-            settings.provider_symbol,
-            backfill_start.isoformat(),
-        )
-        backfill = provider.candles(backfill_start, now)
-        size = settings.backfill_batch_size
-        for index in range(0, len(backfill), size):
-            result = client.candles(backfill[index : index + size])
-            logger.info(
-                "Backfill %s progress=%s/%s accepted=%s duplicates=%s",
-                settings.provider_symbol,
-                min(index + size, len(backfill)),
-                len(backfill),
-                result.get("count", 0),
-                result.get("duplicates", 0),
-            )
-
-    provider.start()
-    last_quote_sent = 0.0
-    last_quote_observed_at: datetime | None = None
-    last_candle_poll = 0.0
-    last_heartbeat = 0.0
-    candle_cursor = (
-        backfill[-1].opened_at + timedelta(minutes=1)
-        if backfill
-        else backfill_start
-    )
-    try:
-        while True:
-            monotonic = time.monotonic()
-            if provider.stream_error is not None:
-                raise provider.stream_error
-
-            if monotonic - last_quote_sent >= settings.quote_interval_seconds:
-                quote = provider.latest_quote()
-                if quote is not None and (
-                    last_quote_observed_at is None
-                    or quote.observed_at > last_quote_observed_at
-                ):
-                    client.quotes([quote])
-                    last_quote_observed_at = quote.observed_at
-                    last_quote_sent = monotonic
-
-            if monotonic - last_candle_poll >= settings.candle_poll_seconds:
-                current = datetime.now(UTC)
-                candles = provider.candles(candle_cursor, current)
-                if candles:
-                    client.candles(candles)
-                    candle_cursor = candles[-1].opened_at + timedelta(minutes=1)
-                last_candle_poll = monotonic
-
-            if monotonic - last_heartbeat >= settings.heartbeat_seconds:
-                closed = provider.market_is_closed()
-                client.heartbeat(
-                    "MARKET_CLOSED" if closed else "ONLINE",
-                    {
-                        "read_only": True,
-                        "provider": "oanda",
-                        "latest_quote_at": (
-                            provider.latest_quote().observed_at.isoformat()
-                            if provider.latest_quote()
-                            else None
-                        ),
-                    },
-                )
-                last_heartbeat = monotonic
-            time.sleep(0.25)
-    finally:
-        provider.close()
-
-
-def instrument_worker(settings: CollectorSettings) -> None:
-    attempt = 0
-    while True:
+        candle_cursor = run_backfill(self.settings, client, provider, start, now)
+        provider.start()
+        self.status = "ONLINE"
+        self.last_error = None
+        last_quote_sent = 0.0
+        last_quote_observed_at: datetime | None = None
+        last_candle_poll = 0.0
+        last_heartbeat = 0.0
         try:
-            run_instrument(settings)
-            attempt = 0
-        except OandaConfigurationError as exc:
-            delay = settings.configuration_retry_seconds
-            logger.error(
-                "Collector configuration error; retrying in %.0f seconds: %s",
-                delay,
-                exc,
+            while not self.stop_event.is_set():
+                monotonic = time.monotonic()
+                if provider.stream_error is not None:
+                    raise provider.stream_error
+                if monotonic - last_quote_sent >= self.settings.quote_interval_seconds:
+                    quote = provider.latest_quote()
+                    if quote is not None and (
+                        last_quote_observed_at is None
+                        or quote.observed_at > last_quote_observed_at
+                    ):
+                        client.quotes([quote])
+                        last_quote_observed_at = quote.observed_at
+                        self.latest_quote_at = quote.observed_at.isoformat()
+                        last_quote_sent = monotonic
+                if monotonic - last_candle_poll >= self.settings.candle_poll_seconds:
+                    current = datetime.now(UTC)
+                    candles = provider.candles(candle_cursor, current)
+                    if candles:
+                        client.candles(candles)
+                        candle_cursor = candles[-1].opened_at + timedelta(minutes=1)
+                    last_candle_poll = monotonic
+                if monotonic - last_heartbeat >= self.settings.heartbeat_seconds:
+                    closed = provider.market_is_closed()
+                    self.status = "MARKET_CLOSED" if closed else "ONLINE"
+                    client.heartbeat(
+                        self.status,
+                        {
+                            "read_only": True,
+                            "provider": "oanda",
+                            "latest_quote_at": self.latest_quote_at,
+                            "error": self.last_error,
+                        },
+                    )
+                    last_heartbeat = monotonic
+                self.stop_event.wait(0.25)
+        finally:
+            provider.close()
+
+
+class CollectorSupervisor:
+    def __init__(self, settings: CollectorSettings) -> None:
+        self.base_settings = settings
+        self.control_client = GoldieApiClient(settings)
+        registration = self.control_client.register_instance(settings)
+        self.instance_id = registration["instance"]["id"]
+        self.workers: dict[str, InstrumentWorker] = {}
+        self.feed_symbols: dict[str, str] = {}
+        self.paused: set[str] = set()
+        self.globally_paused = False
+        self.applied_version: int | None = None
+        self.last_error: str | None = None
+        self.backfill_thread: threading.Thread | None = None
+
+    def on_registered(self, symbol: str, feed_id: str) -> None:
+        self.feed_symbols[feed_id] = symbol
+
+    def effective_settings(self, symbol: str, configuration: dict, overrides: dict) -> CollectorSettings:
+        values = {
+            key: configuration[key]
+            for key in (
+                "quote_interval_seconds",
+                "candle_poll_seconds",
+                "heartbeat_seconds",
+                "backfill_days",
+                "backfill_batch_size",
+                "configuration_retry_seconds",
             )
-            try:
-                client = GoldieApiClient(settings)
-                client.register(settings)
-                client.heartbeat(
-                    "ERROR",
-                    {
-                        "error": type(exc).__name__,
-                        "message": str(exc),
-                        "retry_seconds": round(delay, 1),
-                    },
+        }
+        values.update(overrides)
+        return self.base_settings.for_instrument(symbol).model_copy(update=values)
+
+    def reconcile(self, control: dict) -> None:
+        configuration = control["configuration"]
+        version = int(configuration["version"])
+        desired: dict[str, CollectorSettings] = {}
+        for instrument in control["instruments"]:
+            symbol = instrument["provider_symbol"]
+            feed_id = instrument.get("market_feed_id")
+            if feed_id:
+                self.feed_symbols[feed_id] = symbol
+            if instrument["enabled"] and symbol not in self.paused and not self.globally_paused:
+                desired[symbol] = self.effective_settings(
+                    symbol,
+                    configuration,
+                    instrument.get("overrides") or {},
                 )
-            except Exception:
-                logger.warning("Could not report collector configuration failure")
-            time.sleep(delay)
-        except Exception as exc:
-            attempt += 1
-            delay = min(60, 2 ** min(attempt, 5)) + random.uniform(0, 15)
-            logger.error(
-                "Collector %s failed; retrying in %.1f seconds: %s: %s",
-                settings.provider_symbol,
-                delay,
-                type(exc).__name__,
-                exc,
-                exc_info=attempt == 1,
+        for symbol, worker in list(self.workers.items()):
+            replacement = desired.get(symbol)
+            if replacement is None or worker.settings != replacement:
+                worker.stop()
+                del self.workers[symbol]
+        for symbol, settings in desired.items():
+            if symbol not in self.workers:
+                worker = InstrumentWorker(settings, self.on_registered)
+                self.workers[symbol] = worker
+                worker.start()
+                logger.info("Started collector worker for %s", symbol)
+        self.applied_version = version
+
+    def target_symbols(self, command: dict) -> list[str]:
+        feed_id = command.get("market_feed_id")
+        if feed_id:
+            symbol = self.feed_symbols.get(feed_id)
+            return [symbol] if symbol else []
+        return list(self.workers) or self.base_settings.instrument_symbols
+
+    def execute_backfill(self, command: dict, symbol: str) -> None:
+        command_id = command["id"]
+        try:
+            worker = self.workers.get(symbol)
+            settings = worker.settings if worker else self.base_settings.for_instrument(symbol)
+            client = GoldieApiClient(settings)
+            client.register(settings)
+            provider = OandaProvider(settings)
+            provider.validate_instrument()
+            run_backfill(
+                settings,
+                client,
+                provider,
+                parse_time(command["payload"]["start"]),
+                parse_time(command["payload"]["end"]),
+                command_id=command_id,
             )
-            time.sleep(delay)
+        except Exception as exc:
+            logger.exception("Manual backfill failed")
+            self.control_client.update_command(
+                command_id,
+                "FAILED",
+                error=f"{type(exc).__name__}: {exc}",
+            )
+
+    def handle_command(self, command: dict) -> None:
+        command_id = command["id"]
+        symbols = self.target_symbols(command)
+        if not symbols:
+            self.control_client.update_command(
+                command_id,
+                "FAILED",
+                error="Target feed is not registered by this collector",
+            )
+            return
+        action = command["command"]
+        if action == "PAUSE":
+            if command.get("market_feed_id"):
+                self.paused.update(symbols)
+            else:
+                self.globally_paused = True
+            for symbol in symbols:
+                worker = self.workers.pop(symbol, None)
+                if worker:
+                    worker.stop()
+            self.control_client.update_command(
+                command_id,
+                "SUCCEEDED",
+                result={"symbols": symbols},
+            )
+        elif action == "RESUME":
+            if command.get("market_feed_id"):
+                self.paused.difference_update(symbols)
+            else:
+                self.globally_paused = False
+                self.paused.clear()
+            self.control_client.update_command(
+                command_id,
+                "SUCCEEDED",
+                result={"symbols": symbols},
+            )
+        elif action == "RECONNECT":
+            for symbol in symbols:
+                worker = self.workers.pop(symbol, None)
+                if worker:
+                    worker.stop()
+            self.control_client.update_command(
+                command_id,
+                "SUCCEEDED",
+                result={"symbols": symbols},
+            )
+        elif action == "BACKFILL":
+            if self.backfill_thread and self.backfill_thread.is_alive():
+                self.control_client.update_command(
+                    command_id,
+                    "FAILED",
+                    error="Another backfill is active",
+                )
+                return
+            self.backfill_thread = threading.Thread(
+                target=self.execute_backfill,
+                args=(command, symbols[0]),
+                name="collector-manual-backfill",
+                daemon=True,
+            )
+            self.backfill_thread.start()
+
+    def heartbeat(self) -> None:
+        statuses = {symbol: worker.status for symbol, worker in self.workers.items()}
+        errors = {
+            symbol: worker.last_error
+            for symbol, worker in self.workers.items()
+            if worker.last_error
+        }
+        if self.globally_paused:
+            status = "PAUSED"
+        elif errors:
+            status = "DEGRADED"
+        else:
+            status = "ONLINE"
+        self.control_client.instance_heartbeat(
+            self.instance_id,
+            status,
+            self.applied_version,
+            {
+                "worker_count": len(self.workers),
+                "workers": statuses,
+                "paused_symbols": sorted(self.paused),
+                "errors": errors,
+                "read_only": True,
+            },
+        )
+
+    def run(self) -> None:
+        while True:
+            try:
+                control = self.control_client.poll_control(self.instance_id)
+                for instrument in control["instruments"]:
+                    if instrument.get("market_feed_id"):
+                        self.feed_symbols[instrument["market_feed_id"]] = instrument[
+                            "provider_symbol"
+                        ]
+                for command in control["commands"]:
+                    self.handle_command(command)
+                self.reconcile(control)
+                self.heartbeat()
+                self.last_error = None
+            except Exception as exc:
+                self.last_error = f"{type(exc).__name__}: {exc}"
+                logger.exception("Collector control loop failed")
+            time.sleep(5)
 
 
 def main() -> None:
-    settings = CollectorSettings()
-    threads: list[threading.Thread] = []
-    for provider_symbol in settings.instrument_symbols:
-        instrument_settings = settings.for_instrument(provider_symbol)
-        thread = threading.Thread(
-            target=instrument_worker,
-            args=(instrument_settings,),
-            name=f"collector-{provider_symbol.lower()}",
-            daemon=True,
-        )
-        thread.start()
-        threads.append(thread)
-        logger.info("Started collector worker for %s", provider_symbol)
-        time.sleep(1)
-
-    try:
-        while all(thread.is_alive() for thread in threads):
-            time.sleep(5)
-    except KeyboardInterrupt:
-        return
-    raise RuntimeError("One or more collector workers stopped unexpectedly")
+    CollectorSupervisor(CollectorSettings()).run()
 
 
 if __name__ == "__main__":

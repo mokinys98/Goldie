@@ -124,6 +124,62 @@ class MarketFeed(Base, TimestampMixin):
     details: Mapped[dict] = mapped_column(JSON, default=dict)
 
 
+class CollectorConfiguration(Base, TimestampMixin):
+    __tablename__ = "collector_configurations"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    version: Mapped[int] = mapped_column(Integer, default=1)
+    quote_interval_seconds: Mapped[Decimal] = mapped_column(Numeric(10, 2))
+    candle_poll_seconds: Mapped[Decimal] = mapped_column(Numeric(10, 2))
+    heartbeat_seconds: Mapped[Decimal] = mapped_column(Numeric(10, 2))
+    backfill_days: Mapped[int] = mapped_column(Integer)
+    backfill_batch_size: Mapped[int] = mapped_column(Integer)
+    configuration_retry_seconds: Mapped[Decimal] = mapped_column(Numeric(10, 2))
+
+
+class CollectorInstrumentConfiguration(Base, TimestampMixin):
+    __tablename__ = "collector_instrument_configurations"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    provider_symbol: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    overrides: Mapped[dict] = mapped_column(JSON, default=dict)
+
+
+class CollectorInstance(Base, TimestampMixin):
+    __tablename__ = "collector_instances"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    name: Mapped[str] = mapped_column(String(120), unique=True, index=True)
+    status: Mapped[str] = mapped_column(String(32), default="REGISTERED")
+    last_heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    applied_config_version: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    details: Mapped[dict] = mapped_column(JSON, default=dict)
+
+
+class CollectorCommand(Base, TimestampMixin):
+    __tablename__ = "collector_commands"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    collector_instance_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("collector_instances.id"), index=True, nullable=True
+    )
+    market_feed_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("market_feeds.id"), index=True, nullable=True
+    )
+    command: Mapped[str] = mapped_column(String(32), index=True)
+    status: Mapped[str] = mapped_column(String(20), default="PENDING", index=True)
+    payload: Mapped[dict] = mapped_column(JSON, default=dict)
+    progress: Mapped[dict] = mapped_column(JSON, default=dict)
+    result: Mapped[dict] = mapped_column(JSON, default=dict)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    requested_by: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id"), nullable=True
+    )
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
 class PaperAccount(Base, TimestampMixin):
     __tablename__ = "paper_accounts"
 

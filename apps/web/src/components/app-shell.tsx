@@ -21,6 +21,12 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           <Link className={pathname.startsWith("/bots") ? "active" : ""} href="/bots">
             Bots
           </Link>
+          <Link
+            className={pathname.startsWith("/collector") ? "active" : ""}
+            href="/collector"
+          >
+            Collector
+          </Link>
         </nav>
         <div className="sidebar-bottom">
           <span className="readonly-badge">READ ONLY</span>
@@ -40,4 +46,3 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     </div>
   );
 }
-

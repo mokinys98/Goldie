@@ -351,3 +351,228 @@ def test_shadow_trade_and_performance_endpoints() -> None:
         assert performance.json()["closed_trades"] == 1
         assert performance.json()["win_rate"] == "100"
         assert performance.json()["net_pnl"] == "8.00000000"
+
+
+def test_collector_control_plane_lifecycle() -> None:
+    Base.metadata.drop_all(engine)
+    Base.metadata.create_all(engine)
+    agent_headers = {"X-Agent-Token": "test-agent-token"}
+    with TestClient(app) as client:
+        registered = client.post(
+            "/api/v1/collector/instances/register",
+            headers=agent_headers,
+            json={
+                "name": "test-collector",
+                "defaults": {
+                    "quote_interval_seconds": 5,
+                    "candle_poll_seconds": 15,
+                    "heartbeat_seconds": 10,
+                    "backfill_days": 30,
+                    "backfill_batch_size": 250,
+                    "configuration_retry_seconds": 900,
+                },
+                "instruments": ["EUR_USD", "USD_JPY"],
+            },
+        )
+        assert registered.status_code == 201
+        instance_id = registered.json()["instance"]["id"]
+        assert registered.json()["configuration"]["version"] == 1
+
+        headers = login(client)
+        settings = client.get("/api/v1/collector/settings", headers=headers)
+        assert settings.status_code == 200
+        assert len(settings.json()["instruments"]) == 2
+
+        update_payload = {
+            **settings.json()["configuration"],
+            "expected_version": 1,
+            "quote_interval_seconds": 7,
+        }
+        update_payload.pop("id")
+        update_payload.pop("version")
+        update_payload.pop("updated_at")
+        updated = client.put(
+            "/api/v1/collector/settings",
+            headers=headers,
+            json=update_payload,
+        )
+        assert updated.status_code == 200
+        assert updated.json()["version"] == 2
+        conflict = client.put(
+            "/api/v1/collector/settings",
+            headers=headers,
+            json=update_payload,
+        )
+        assert conflict.status_code == 409
+
+        command = client.post(
+            "/api/v1/collector/commands",
+            headers=headers,
+            json={"command": "PAUSE", "payload": {}},
+        )
+        assert command.status_code == 201
+        command_id = command.json()["id"]
+        polled = client.post(
+            f"/api/v1/collector/instances/{instance_id}/poll",
+            headers=agent_headers,
+            json={},
+        )
+        assert polled.status_code == 200
+        assert polled.json()["commands"][0]["id"] == command_id
+        assert polled.json()["commands"][0]["status"] == "RUNNING"
+        assert polled.json()["configuration"]["version"] == 2
+
+        completed = client.patch(
+            f"/api/v1/collector/commands/{command_id}",
+            headers=agent_headers,
+            json={
+                "status": "SUCCEEDED",
+                "progress": {},
+                "result": {"symbols": ["EUR_USD", "USD_JPY"]},
+            },
+        )
+        assert completed.status_code == 200
+        duplicate = client.patch(
+            f"/api/v1/collector/commands/{command_id}",
+            headers=agent_headers,
+            json={"status": "FAILED", "error": "late duplicate"},
+        )
+        assert duplicate.json()["status"] == "SUCCEEDED"
+
+        heartbeat = client.post(
+            f"/api/v1/collector/instances/{instance_id}/heartbeat",
+            headers=agent_headers,
+            json={
+                "status": "ONLINE",
+                "applied_config_version": 2,
+                "details": {"worker_count": 2, "read_only": True},
+                "observed_at": datetime.now(UTC).isoformat(),
+            },
+        )
+        assert heartbeat.status_code == 200
+        overview = client.get("/api/v1/collector/overview", headers=headers)
+        assert overview.status_code == 200
+        assert overview.json()["instance"]["status"] == "ONLINE"
+        assert overview.json()["instance"]["applied_config_version"] == 2
+
+
+def test_collector_feed_data_commands_and_export() -> None:
+    Base.metadata.drop_all(engine)
+    Base.metadata.create_all(engine)
+    agent_headers = {"X-Agent-Token": "test-agent-token"}
+    with TestClient(app) as client:
+        registration = client.post(
+            "/api/v1/market-feeds/register",
+            headers=agent_headers,
+            json={
+                "provider": "oanda",
+                "environment": "practice",
+                "canonical_symbol": "EURUSD",
+                "provider_symbol": "EUR_USD",
+                "agent_name": "test-feed-agent",
+            },
+        ).json()
+        feed_id = registration["feed"]["id"]
+        agent_id = registration["agent"]["id"]
+        now = datetime.now(UTC).replace(second=0, microsecond=0)
+        client.post(
+            f"/api/v1/market-feeds/{feed_id}/quotes/batch",
+            headers=agent_headers,
+            json={
+                "agent_id": agent_id,
+                "quotes": [
+                    {
+                        "observed_at": now.isoformat(),
+                        "bid": "1.08000",
+                        "ask": "1.08020",
+                    }
+                ],
+            },
+        )
+        client.post(
+            f"/api/v1/market-feeds/{feed_id}/candles/batch",
+            headers=agent_headers,
+            json={
+                "agent_id": agent_id,
+                "candles": [
+                    {
+                        "opened_at": (now - timedelta(minutes=index)).isoformat(),
+                        "open": "1.08000",
+                        "high": "1.08100",
+                        "low": "1.07900",
+                        "close": "1.08050",
+                        "volume": 10 + index,
+                        "complete": True,
+                    }
+                    for index in range(3)
+                ],
+            },
+        )
+        headers = login(client)
+        detail = client.get(f"/api/v1/collector/feeds/{feed_id}", headers=headers)
+        assert detail.status_code == 200
+        assert detail.json()["feed"]["latest_tick"]["spread"] == 0.0002
+
+        candles = client.get(
+            f"/api/v1/collector/feeds/{feed_id}/candles?limit=2",
+            headers=headers,
+        )
+        assert candles.status_code == 200
+        assert len(candles.json()["items"]) == 2
+        assert candles.json()["next_cursor"] is not None
+        ticks = client.get(
+            f"/api/v1/collector/feeds/{feed_id}/ticks",
+            headers=headers,
+        )
+        assert len(ticks.json()["items"]) == 1
+
+        export = client.get(
+            f"/api/v1/collector/feeds/{feed_id}/export/candles",
+            headers=headers,
+            params={
+                "start": (now - timedelta(days=1)).isoformat(),
+                "end": (now + timedelta(minutes=1)).isoformat(),
+            },
+        )
+        assert export.status_code == 200
+        assert export.text.startswith("opened_at,open,high,low,close,volume")
+
+        too_long = client.post(
+            "/api/v1/collector/commands",
+            headers=headers,
+            json={
+                "command": "BACKFILL",
+                "market_feed_id": feed_id,
+                "payload": {
+                    "start": (now - timedelta(days=366)).isoformat(),
+                    "end": now.isoformat(),
+                },
+            },
+        )
+        assert too_long.status_code == 422
+        valid = client.post(
+            "/api/v1/collector/commands",
+            headers=headers,
+            json={
+                "command": "BACKFILL",
+                "market_feed_id": feed_id,
+                "payload": {
+                    "start": (now - timedelta(days=30)).isoformat(),
+                    "end": now.isoformat(),
+                },
+            },
+        )
+        assert valid.status_code == 201
+        second = client.post(
+            "/api/v1/collector/commands",
+            headers=headers,
+            json={
+                "command": "BACKFILL",
+                "market_feed_id": feed_id,
+                "payload": {
+                    "start": (now - timedelta(days=1)).isoformat(),
+                    "end": now.isoformat(),
+                },
+            },
+        )
+        assert second.status_code == 409
