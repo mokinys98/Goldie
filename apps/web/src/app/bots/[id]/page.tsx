@@ -165,7 +165,13 @@ export default function BotDetailPage() {
           </div>
           <div className="panel grid-span-2">
             <h2>Completed M1 close</h2>
-            <MarketChart candles={live?.recent_candles ?? []} />
+            <MarketChart
+              candles={live?.recent_candles ?? []}
+              precision={symbolPrecision(live?.symbol_specification)}
+              bid={live?.latest_tick?.bid}
+              ask={live?.latest_tick?.ask}
+              symbol={live?.latest_tick?.symbol}
+            />
           </div>
           <div className="panel">
             <h2>Paper account</h2>
@@ -196,7 +202,13 @@ export default function BotDetailPage() {
               </div>
               <StatusPill value={live?.data_state ?? "MISSING"} />
             </div>
-            <MarketChart candles={live?.recent_candles ?? []} />
+            <MarketChart
+              candles={live?.recent_candles ?? []}
+              precision={symbolPrecision(live?.symbol_specification)}
+              bid={live?.latest_tick?.bid}
+              ask={live?.latest_tick?.ask}
+              symbol={live?.latest_tick?.symbol}
+            />
           </div>
           <div className="panel">
             <h2>Latest tick</h2>
@@ -344,4 +356,11 @@ function formatDecimal(
   if (value === null || value === undefined) return "--";
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed.toFixed(digits) : "--";
+}
+
+function symbolPrecision(
+  specification: Record<string, string | number> | null | undefined,
+): number {
+  const value = Number(specification?.display_precision);
+  return Number.isInteger(value) && value >= 0 && value <= 10 ? value : 4;
 }

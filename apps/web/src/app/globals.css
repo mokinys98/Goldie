@@ -102,7 +102,19 @@ legend { color: var(--gold); padding: 0 8px; font-size: 12px; font-weight: 800; 
 .key-values div:last-child { border-bottom: 0; }
 .key-values dt { color: var(--muted); text-transform: capitalize; font-size: 12px; }
 .key-values dd { margin: 0; text-align: right; font-size: 12px; overflow-wrap: anywhere; }
-.chart { height: 360px; position: relative; background: #111318; border: 1px solid var(--line); border-radius: 7px; overflow: hidden; }
+.chart-shell { background: #111318; border: 1px solid var(--line); border-radius: 7px; overflow: hidden; }
+.chart-shell:fullscreen { width: 100vw; height: 100vh; border: 0; border-radius: 0; display: flex; flex-direction: column; }
+.chart-shell:fullscreen .chart { flex: 1; height: auto; }
+.chart-toolbar { min-height: 44px; padding: 7px 9px 7px 13px; border-bottom: 1px solid var(--line); display: flex; align-items: center; justify-content: space-between; gap: 12px; background: #0d1117; }
+.chart-identity, .chart-actions, .chart-ohlc { display: flex; align-items: center; gap: 9px; }
+.chart-identity strong { font-size: 13px; }
+.chart-identity > span, .chart-ohlc { color: var(--muted); font-size: 11px; }
+.chart-ohlc span:nth-child(2), .chart-ohlc span:nth-child(4) { color: var(--green); }
+.chart-ohlc span:nth-child(3) { color: var(--red); }
+.chart-actions { margin-left: auto; flex-wrap: wrap; justify-content: flex-end; }
+.chart-actions button { border: 1px solid transparent; border-radius: 5px; padding: 5px 8px; background: transparent; color: var(--muted); font-size: 11px; font-weight: 750; }
+.chart-actions button:hover, .chart-actions button.active { border-color: var(--line); background: var(--panel-2); color: var(--text); }
+.chart { height: 400px; position: relative; background: #111318; }
 .chart-empty { height: 220px; display: grid; place-items: center; color: var(--muted); border: 1px dashed var(--line); border-radius: 7px; }
 .performance-stack { display: grid; gap: 18px; }
 .breakdown-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
@@ -133,6 +145,12 @@ legend { color: var(--gold); padding: 0 8px; font-size: 12px; font-weight: 800; 
   .split-layout { grid-template-columns: 1fr; }
   .breakdown-grid { grid-template-columns: 1fr; }
   .compact-form { grid-template-columns: 1fr; }
+}
+
+@media (max-width: 720px) {
+  .chart-toolbar { align-items: flex-start; flex-direction: column; }
+  .chart-actions { margin-left: 0; justify-content: flex-start; }
+  .chart-ohlc { display: none; }
 }
 
 @media (max-width: 650px) {
