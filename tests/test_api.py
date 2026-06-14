@@ -552,6 +552,34 @@ def test_collector_control_plane_lifecycle() -> None:
         assert polled.json()["commands"][0]["status"] == "RUNNING"
         assert polled.json()["configuration"]["version"] == 2
 
+        restarted = client.post(
+            "/api/v1/collector/instances/register",
+            headers=agent_headers,
+            json={
+                "name": "test-collector",
+                "defaults": {
+                    "quote_interval_seconds": 5,
+                    "candle_poll_seconds": 15,
+                    "heartbeat_seconds": 10,
+                    "backfill_days": 30,
+                    "backfill_batch_size": 250,
+                    "configuration_retry_seconds": 900,
+                },
+                "instruments": ["EUR_USD", "USD_JPY"],
+            },
+        )
+        assert restarted.status_code == 201
+        assert restarted.json()["instance"]["id"] == instance_id
+
+        resumed = client.post(
+            f"/api/v1/collector/instances/{instance_id}/poll",
+            headers=agent_headers,
+            json={},
+        )
+        assert resumed.status_code == 200
+        assert resumed.json()["commands"][0]["id"] == command_id
+        assert resumed.json()["commands"][0]["status"] == "RUNNING"
+
         completed = client.patch(
             f"/api/v1/collector/commands/{command_id}",
             headers=agent_headers,

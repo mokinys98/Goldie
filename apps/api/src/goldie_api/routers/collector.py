@@ -788,6 +788,17 @@ def register_instance(
     if instance is None:
         instance = CollectorInstance(name=payload.name)
         db.add(instance)
+    else:
+        interrupted_commands = db.scalars(
+            select(CollectorCommand).where(
+                CollectorCommand.collector_instance_id == instance.id,
+                CollectorCommand.status == "RUNNING",
+            )
+        )
+        for command in interrupted_commands:
+            command.collector_instance_id = None
+            command.status = "PENDING"
+            command.started_at = None
     configuration = db.scalar(select(CollectorConfiguration))
     if configuration is None:
         configuration = CollectorConfiguration(version=1, **payload.defaults.model_dump())
