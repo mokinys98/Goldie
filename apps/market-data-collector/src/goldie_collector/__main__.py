@@ -13,6 +13,7 @@ logging.basicConfig(
     format="%(asctime)s %(levelname)s %(name)s %(message)s",
 )
 logger = logging.getLogger("goldie-market-data-collector")
+backfill_lock = threading.Lock()
 
 
 def run_instrument(settings: CollectorSettings) -> None:
@@ -22,21 +23,31 @@ def run_instrument(settings: CollectorSettings) -> None:
     instrument = provider.validate_instrument()
     client.instrument(instrument)
 
-    now = datetime.now(UTC)
-    backfill_start = max(
-        latest_candle_at + timedelta(minutes=1)
-        if latest_candle_at
-        else now - timedelta(days=settings.backfill_days),
-        now - timedelta(days=settings.backfill_days),
-    )
-    backfill = provider.candles(backfill_start, now)
-    for index in range(0, len(backfill), 1000):
-        result = client.candles(backfill[index : index + 1000])
-        logger.info(
-            "Backfill batch accepted=%s duplicates=%s",
-            result.get("count", 0),
-            result.get("duplicates", 0),
+    with backfill_lock:
+        now = datetime.now(UTC)
+        backfill_start = max(
+            latest_candle_at + timedelta(minutes=1)
+            if latest_candle_at
+            else now - timedelta(days=settings.backfill_days),
+            now - timedelta(days=settings.backfill_days),
         )
+        logger.info(
+            "Starting serialized backfill for %s from %s",
+            settings.provider_symbol,
+            backfill_start.isoformat(),
+        )
+        backfill = provider.candles(backfill_start, now)
+        size = settings.backfill_batch_size
+        for index in range(0, len(backfill), size):
+            result = client.candles(backfill[index : index + size])
+            logger.info(
+                "Backfill %s progress=%s/%s accepted=%s duplicates=%s",
+                settings.provider_symbol,
+                min(index + size, len(backfill)),
+                len(backfill),
+                result.get("count", 0),
+                result.get("duplicates", 0),
+            )
 
     provider.start()
     last_quote_sent = 0.0
@@ -121,17 +132,15 @@ def instrument_worker(settings: CollectorSettings) -> None:
             time.sleep(delay)
         except Exception as exc:
             attempt += 1
-            delay = min(60, 2 ** min(attempt, 5)) + random.uniform(0, 1)
-            logger.exception("Collector failed; retrying in %.1f seconds", delay)
-            try:
-                client = GoldieApiClient(settings)
-                client.register(settings)
-                client.heartbeat(
-                    "DEGRADED",
-                    {"error": type(exc).__name__, "retry_seconds": round(delay, 1)},
-                )
-            except Exception:
-                logger.warning("Could not report collector failure")
+            delay = min(60, 2 ** min(attempt, 5)) + random.uniform(0, 15)
+            logger.error(
+                "Collector %s failed; retrying in %.1f seconds: %s: %s",
+                settings.provider_symbol,
+                delay,
+                type(exc).__name__,
+                exc,
+                exc_info=attempt == 1,
+            )
             time.sleep(delay)
 
 

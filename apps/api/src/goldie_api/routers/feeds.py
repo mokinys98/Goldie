@@ -4,7 +4,8 @@ from decimal import Decimal
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import desc, select
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.dialects.postgresql import insert as postgresql_insert
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import Session
 
 from ..db import get_db
@@ -269,37 +270,55 @@ async def ingest_candles(
 ) -> dict:
     feed = get_feed_or_404(db, feed_id)
     validate_feed_agent(db, feed_id, payload.agent_id)
-    accepted = 0
-    duplicates = 0
-    for candle in payload.candles:
-        if not candle.complete:
-            continue
+    complete_candles = [candle for candle in payload.candles if candle.complete]
+    values_by_opened_at: dict[datetime, dict] = {}
+    received_at = datetime.now(UTC)
+    for candle in complete_candles:
+        opened_at = candle.opened_at.astimezone(UTC)
         if candle.high < max(candle.open, candle.close) or candle.low > min(
             candle.open, candle.close
         ):
             raise HTTPException(status_code=422, detail="Invalid candle OHLC values")
-        row = Candle(
-            market_feed_id=feed.id,
-            agent_id=payload.agent_id,
-            symbol=feed.canonical_symbol,
-            timeframe="M1",
-            opened_at=candle.opened_at.astimezone(UTC),
-            received_at=datetime.now(UTC),
-            source=feed.provider,
-            open=candle.open,
-            high=candle.high,
-            low=candle.low,
-            close=candle.close,
-            tick_volume=candle.volume,
-            is_complete=True,
+        values_by_opened_at.setdefault(
+            opened_at,
+            {
+                "id": uuid.uuid4(),
+                "market_feed_id": feed.id,
+                "agent_id": payload.agent_id,
+                "symbol": feed.canonical_symbol,
+                "timeframe": "M1",
+                "opened_at": opened_at,
+                "received_at": received_at,
+                "source": feed.provider,
+                "open": candle.open,
+                "high": candle.high,
+                "low": candle.low,
+                "close": candle.close,
+                "tick_volume": candle.volume,
+                "is_complete": True,
+            },
         )
-        try:
-            with db.begin_nested():
-                db.add(row)
-                db.flush()
-            accepted += 1
-        except IntegrityError:
-            duplicates += 1
+    values = list(values_by_opened_at.values())
+    accepted = 0
+    if values:
+        conflict_columns = [
+            Candle.market_feed_id,
+            Candle.symbol,
+            Candle.timeframe,
+            Candle.opened_at,
+        ]
+        dialect = db.get_bind().dialect.name
+        if dialect == "postgresql":
+            statement = postgresql_insert(Candle).values(values)
+        elif dialect == "sqlite":
+            statement = sqlite_insert(Candle).values(values)
+        else:
+            raise RuntimeError(f"Unsupported database dialect: {dialect}")
+        statement = statement.on_conflict_do_nothing(
+            index_elements=conflict_columns
+        ).returning(Candle.id)
+        accepted = len(list(db.scalars(statement)))
+    duplicates = len(complete_candles) - accepted
 
     signal_ids: list[str] = []
     if accepted:

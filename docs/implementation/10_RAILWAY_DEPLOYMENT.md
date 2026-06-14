@@ -29,9 +29,9 @@ diegimo, kintamųjų ir priėmimo patikrų planas aprašytas
 Collector naudoja OANDA tik rinkos duomenims. Jis neturi orderių ar sąskaitos
 balanso importavimo sąsajų.
 
-Pirmam paleidimui collector `GOLDIE_API_URL` nustatykite į viešą Goldie API
-Railway domeną, pavyzdžiui `https://goldie-api-production.up.railway.app`.
-Web domenas čia netinka ir grąžins HTTP 404.
+Collector `GOLDIE_API_URL` nustatykite per Railway private networking:
+`http://${{api.RAILWAY_PRIVATE_DOMAIN}}:${{api.PORT}}`, jei API serviso
+pavadinimas yra `api`. Web domenas čia netinka ir grąžins HTTP 404.
 
 ## Priėmimas
 

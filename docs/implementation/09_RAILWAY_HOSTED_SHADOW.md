@@ -35,16 +35,18 @@ NEXT_PUBLIC_API_URL=https://<api-domain>
 NEXT_PUBLIC_WS_URL=wss://<api-domain>
 ```
 
-Collector:
+Collector (assuming the API service is named `api`):
 
 ```text
-GOLDIE_API_URL=https://<goldie-api-public-domain>
+GOLDIE_API_URL=http://${{api.RAILWAY_PRIVATE_DOMAIN}}:${{api.PORT}}
 GOLDIE_AGENT_TOKEN=<same value as AGENT_SERVICE_TOKEN>
 GOLDIE_PROVIDER_ENVIRONMENT=practice
 GOLDIE_INSTRUMENTS=EUR_USD,GBP_USD,USD_JPY,USD_CHF,USD_CAD,AUD_USD,NZD_USD,EUR_GBP,EUR_JPY,GBP_JPY
 GOLDIE_QUOTE_INTERVAL_SECONDS=5
 GOLDIE_CANDLE_POLL_SECONDS=15
 GOLDIE_BACKFILL_DAYS=30
+GOLDIE_BACKFILL_BATCH_SIZE=250
+GOLDIE_REQUEST_TIMEOUT_SECONDS=60
 GOLDIE_CONFIGURATION_RETRY_SECONDS=900
 GOLDIE_OANDA_API_TOKEN=<OANDA practice token>
 GOLDIE_OANDA_ACCOUNT_ID=<OANDA practice account ID>
@@ -52,8 +54,10 @@ GOLDIE_OANDA_REST_URL=https://api-fxpractice.oanda.com
 GOLDIE_OANDA_STREAM_URL=https://stream-fxpractice.oanda.com
 ```
 
-`GOLDIE_API_URL` must point to the API service domain, never the Web domain.
-For the first deployment, use the API public Railway domain. A wrong Web URL
+`GOLDIE_API_URL` must point to the API service, never the Web service. In the
+same Railway project and environment, use API private networking as shown
+above. If the service has another name, select its `RAILWAY_PRIVATE_DOMAIN`
+and `PORT` reference variables from Railway autocomplete. A wrong Web URL
 returns HTTP 404 for `/api/v1/market-feeds/register`.
 
 If OANDA returns HTTP 403, verify that:
@@ -72,6 +76,8 @@ Send the OANDA `RequestID` from the collector log to `api@oanda.com`.
 starts an isolated worker and creates one shared Goldie feed for each symbol.
 One failing symbol does not stop the remaining feeds. Keep the list to markets
 that will actually have bots; one collector supports at most 20 instruments.
+Initial history is serialized between instruments and uploaded in smaller
+batches so one API replica is not overloaded during a 30-day backfill.
 
 If a configured instrument is unavailable for the account, its feed heartbeat
 is set to `ERROR`, the log reports the first 50 available instruments, and that
