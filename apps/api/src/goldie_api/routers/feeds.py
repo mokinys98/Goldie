@@ -1,22 +1,21 @@
+import asyncio
 import uuid
 from datetime import UTC, datetime
 from decimal import Decimal
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import desc, select
-from sqlalchemy.dialects.postgresql import insert as postgresql_insert
-from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import Session
 
 from ..db import get_db
 from ..dependencies import require_agent_token
+from ..ingestion import process_candle_batch, process_quote_batch
 from ..models import (
     Agent,
     Bot,
     Candle,
     InstrumentSpecification,
     MarketFeed,
-    MarketTick,
     User,
 )
 from ..schemas import (
@@ -29,9 +28,7 @@ from ..schemas import (
     MarketFeedRegistration,
 )
 from ..security import get_current_user
-from ..services import evaluate_latest_signal
-from ..shadow import create_signal_outcome, evaluate_open_outcome
-from ..websocket import manager
+from ..realtime import invalidate_collector_overview, publish_event, publish_event_sync
 
 router = APIRouter(prefix="/api/v1/market-feeds", tags=["market-feeds"])
 
@@ -50,7 +47,7 @@ def validate_feed_agent(db: Session, feed_id: uuid.UUID, agent_id: uuid.UUID) ->
     return agent
 
 
-async def broadcast_to_feed_bots(
+def broadcast_to_feed_bots(
     db: Session,
     feed_id: uuid.UUID,
     payload: dict,
@@ -59,10 +56,10 @@ async def broadcast_to_feed_bots(
         db.scalars(select(Bot.id).where(Bot.market_feed_id == feed_id))
     )
     if not bot_ids:
-        await manager.broadcast(payload)
+        publish_event_sync(payload)
         return
     for bot_id in bot_ids:
-        await manager.broadcast({**payload, "bot_instance_id": str(bot_id)})
+        publish_event_sync({**payload, "bot_instance_id": str(bot_id)})
 
 
 @router.get("", response_model=list[MarketFeedRead])
@@ -124,6 +121,7 @@ def register_market_feed(
         db.add(agent)
     db.commit()
     db.refresh(feed)
+    invalidate_collector_overview()
     db.refresh(agent)
     latest_candle = db.scalar(
         select(Candle.opened_at)
@@ -138,7 +136,7 @@ def register_market_feed(
 
 
 @router.post("/{feed_id}/heartbeat", response_model=MarketFeedRead)
-async def heartbeat(
+def heartbeat(
     feed_id: uuid.UUID,
     payload: FeedHeartbeatRequest,
     db: Session = Depends(get_db),
@@ -155,7 +153,8 @@ async def heartbeat(
     agent.last_heartbeat_at = observed_at
     db.commit()
     db.refresh(feed)
-    await broadcast_to_feed_bots(
+    invalidate_collector_overview()
+    broadcast_to_feed_bots(
         db,
         feed.id,
         {
@@ -169,7 +168,7 @@ async def heartbeat(
 
 
 @router.post("/{feed_id}/instrument-specification", status_code=202)
-async def ingest_instrument_specification(
+def ingest_instrument_specification(
     feed_id: uuid.UUID,
     payload: InstrumentSpecificationIn,
     db: Session = Depends(get_db),
@@ -202,7 +201,7 @@ async def ingest_instrument_specification(
         row.point = point
         row.source = feed.provider
     db.commit()
-    await broadcast_to_feed_bots(
+    broadcast_to_feed_bots(
         db,
         feed.id,
         {
@@ -219,141 +218,21 @@ async def ingest_instrument_specification(
 async def ingest_quotes(
     feed_id: uuid.UUID,
     payload: FeedQuoteBatch,
-    db: Session = Depends(get_db),
     _: None = Depends(require_agent_token),
 ) -> dict:
-    feed = get_feed_or_404(db, feed_id)
-    validate_feed_agent(db, feed_id, payload.agent_id)
-    bots = list(db.scalars(select(Bot).where(Bot.market_feed_id == feed.id)))
-    for quote in payload.quotes:
-        if quote.ask < quote.bid:
-            raise HTTPException(status_code=422, detail="Ask cannot be lower than bid")
-        tick = MarketTick(
-            market_feed_id=feed.id,
-            agent_id=payload.agent_id,
-            symbol=feed.canonical_symbol,
-            observed_at=quote.observed_at.astimezone(UTC),
-            received_at=datetime.now(UTC),
-            source=feed.provider,
-            bid=quote.bid,
-            ask=quote.ask,
-        )
-        db.add(tick)
-        db.flush()
-        for bot in bots:
-            evaluate_open_outcome(db, bot, tick)
-    db.commit()
-    await broadcast_to_feed_bots(
-        db,
-        feed.id,
-        {
-            "event_type": "market.quote",
-            "occurred_at": datetime.now(UTC).isoformat(),
-            "market_feed_id": str(feed.id),
-            "data": {
-                "symbol": feed.canonical_symbol,
-                "observed_at": payload.quotes[-1].observed_at.isoformat(),
-                "bid": str(payload.quotes[-1].bid),
-                "ask": str(payload.quotes[-1].ask),
-            },
-        }
-    )
-    return {"accepted": True, "count": len(payload.quotes)}
+    result, event = await asyncio.to_thread(process_quote_batch, feed_id, payload)
+    if event:
+        await publish_event(event)
+    return result
 
 
 @router.post("/{feed_id}/candles/batch", status_code=202)
 async def ingest_candles(
     feed_id: uuid.UUID,
     payload: FeedCandleBatch,
-    db: Session = Depends(get_db),
     _: None = Depends(require_agent_token),
 ) -> dict:
-    feed = get_feed_or_404(db, feed_id)
-    validate_feed_agent(db, feed_id, payload.agent_id)
-    complete_candles = [candle for candle in payload.candles if candle.complete]
-    values_by_opened_at: dict[datetime, dict] = {}
-    received_at = datetime.now(UTC)
-    for candle in complete_candles:
-        opened_at = candle.opened_at.astimezone(UTC)
-        if candle.high < max(candle.open, candle.close) or candle.low > min(
-            candle.open, candle.close
-        ):
-            raise HTTPException(status_code=422, detail="Invalid candle OHLC values")
-        values_by_opened_at.setdefault(
-            opened_at,
-            {
-                "id": uuid.uuid4(),
-                "market_feed_id": feed.id,
-                "agent_id": payload.agent_id,
-                "symbol": feed.canonical_symbol,
-                "timeframe": "M1",
-                "opened_at": opened_at,
-                "received_at": received_at,
-                "source": feed.provider,
-                "open": candle.open,
-                "high": candle.high,
-                "low": candle.low,
-                "close": candle.close,
-                "tick_volume": candle.volume,
-                "is_complete": True,
-            },
-        )
-    values = list(values_by_opened_at.values())
-    accepted = 0
-    if values:
-        conflict_columns = [
-            Candle.market_feed_id,
-            Candle.symbol,
-            Candle.timeframe,
-            Candle.opened_at,
-        ]
-        dialect = db.get_bind().dialect.name
-        if dialect == "postgresql":
-            statement = postgresql_insert(Candle).values(values)
-        elif dialect == "sqlite":
-            statement = sqlite_insert(Candle).values(values)
-        else:
-            raise RuntimeError(f"Unsupported database dialect: {dialect}")
-        statement = statement.on_conflict_do_nothing(
-            index_elements=conflict_columns
-        ).returning(Candle.id)
-        accepted = len(list(db.scalars(statement)))
-    duplicates = len(complete_candles) - accepted
-
-    signal_ids: list[str] = []
-    if accepted:
-        bots = db.scalars(
-            select(Bot).where(
-                Bot.market_feed_id == feed.id,
-                Bot.active_config_version_id.is_not(None),
-            )
-        )
-        for bot in bots:
-            signal, created = evaluate_latest_signal(db, bot)
-            if signal is not None:
-                signal_ids.append(str(signal.id))
-            if created and signal is not None:
-                tick = db.scalar(
-                    select(MarketTick)
-                    .where(MarketTick.market_feed_id == feed.id)
-                    .order_by(desc(MarketTick.observed_at))
-                )
-                if tick is not None:
-                    create_signal_outcome(db, signal, tick)
-    db.commit()
-    await broadcast_to_feed_bots(
-        db,
-        feed.id,
-        {
-            "event_type": "market.candle",
-            "occurred_at": datetime.now(UTC).isoformat(),
-            "market_feed_id": str(feed.id),
-            "signal_ids": signal_ids,
-        }
-    )
-    return {
-        "accepted": True,
-        "count": accepted,
-        "duplicates": duplicates,
-        "signal_ids": signal_ids,
-    }
+    result, event = await asyncio.to_thread(process_candle_batch, feed_id, payload)
+    if event:
+        await publish_event(event)
+    return result

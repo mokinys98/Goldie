@@ -284,6 +284,25 @@ class Candle(Base):
     is_complete: Mapped[bool] = mapped_column(Boolean, default=True)
 
 
+class IngestionEvent(Base):
+    __tablename__ = "ingestion_events"
+
+    event_id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True)
+    event_type: Mapped[str] = mapped_column(String(32), index=True)
+    market_feed_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("market_feeds.id"), index=True
+    )
+    agent_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("agents.id"), index=True)
+    collector_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("collector_instances.id"), nullable=True
+    )
+    sent_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    processed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    result: Mapped[dict] = mapped_column(JSON, default=dict)
+
+
 class Signal(Base):
     __tablename__ = "signals"
 

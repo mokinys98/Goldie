@@ -1,7 +1,7 @@
 import React from "react";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import CollectorPage from "./page";
 import { api } from "@/lib/api";
 
@@ -76,6 +76,7 @@ function renderPage() {
 }
 
 describe("CollectorPage", () => {
+  afterEach(() => cleanup());
   beforeEach(() => {
     vi.mocked(api).mockImplementation(async (path, options) => {
       if (options?.method === "POST") {
@@ -100,9 +101,19 @@ describe("CollectorPage", () => {
     expect(screen.getAllByText("ONLINE").length).toBeGreaterThan(0);
   });
 
+  it("renders the shell while overview is loading", () => {
+    vi.mocked(api).mockImplementation(() => new Promise(() => undefined));
+    renderPage();
+    expect(screen.getByRole("heading", { name: "Collector" })).toBeInTheDocument();
+    expect(screen.getByLabelText("Loading instruments")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Pause all" })).toBeDisabled();
+  });
+
   it("creates a confirmed global pause command", async () => {
     renderPage();
-    fireEvent.click(await screen.findByRole("button", { name: "Pause all" }));
+    const pause = await screen.findByRole("button", { name: "Pause all" });
+    await waitFor(() => expect(pause).toBeEnabled());
+    fireEvent.click(pause);
     await waitFor(() => {
       expect(api).toHaveBeenCalledWith(
         "/api/v1/collector/commands",

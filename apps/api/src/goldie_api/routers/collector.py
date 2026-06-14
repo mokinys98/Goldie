@@ -1,5 +1,6 @@
 import csv
 import io
+import json
 import uuid
 from datetime import UTC, datetime, timedelta
 
@@ -35,9 +36,14 @@ from ..schemas import (
     CollectorSettingsValues,
 )
 from ..security import get_current_user
+from ..realtime import (
+    OVERVIEW_CACHE_KEY,
+    invalidate_collector_overview,
+    publish_event_sync,
+    redis_client,
+)
 from ..services import add_audit, as_utc
 from ..settings import get_settings
-from ..websocket import manager
 
 router = APIRouter(prefix="/api/v1/collector", tags=["collector"])
 ALLOWED_OVERRIDE_KEYS = {
@@ -181,15 +187,119 @@ def feed_summary(db: Session, feed: MarketFeed, now: datetime) -> dict:
     )
 
 
+def feed_summary_from_rows(
+    feed: MarketFeed,
+    tick: MarketTick | None,
+    candle: Candle | None,
+    bots: int,
+    now: datetime,
+) -> dict:
+    lag = None
+    spread = None
+    if tick:
+        lag = max(0, int((now - as_utc(tick.observed_at)).total_seconds()))
+        spread = tick.ask - tick.bid
+    return jsonable_encoder(
+        {
+            "id": feed.id,
+            "provider": feed.provider,
+            "environment": feed.environment,
+            "canonical_symbol": feed.canonical_symbol,
+            "provider_symbol": feed.provider_symbol,
+            "status": feed.status,
+            "last_heartbeat_at": feed.last_heartbeat_at,
+            "latest_tick": (
+                {
+                    "observed_at": tick.observed_at,
+                    "bid": tick.bid,
+                    "ask": tick.ask,
+                    "spread": spread,
+                }
+                if tick
+                else None
+            ),
+            "latest_candle_at": candle.opened_at if candle else None,
+            "data_lag_seconds": lag,
+            "bot_count": bots,
+        }
+    )
+
+
 @router.get("/overview")
 def overview(
     db: Session = Depends(get_db),
     _: User = Depends(get_current_user),
 ) -> dict:
+    try:
+        cached = redis_client().get(OVERVIEW_CACHE_KEY)
+        if cached:
+            return json.loads(cached)
+    except Exception:
+        pass
     now = datetime.now(UTC)
     since = now - timedelta(hours=24)
     feeds = list(db.scalars(select(MarketFeed).order_by(MarketFeed.provider_symbol)))
-    summaries = [feed_summary(db, feed, now) for feed in feeds]
+    feed_ids = [feed.id for feed in feeds]
+    ticks: dict[uuid.UUID, MarketTick] = {}
+    candles: dict[uuid.UUID, Candle] = {}
+    bot_counts: dict[uuid.UUID, int] = {}
+    if feed_ids:
+        tick_times = (
+            select(
+                MarketTick.market_feed_id.label("feed_id"),
+                func.max(MarketTick.observed_at).label("observed_at"),
+            )
+            .where(MarketTick.market_feed_id.in_(feed_ids))
+            .group_by(MarketTick.market_feed_id)
+            .subquery()
+        )
+        ticks = {
+            row.market_feed_id: row
+            for row in db.scalars(
+                select(MarketTick).join(
+                    tick_times,
+                    (MarketTick.market_feed_id == tick_times.c.feed_id)
+                    & (MarketTick.observed_at == tick_times.c.observed_at),
+                )
+            )
+        }
+        candle_times = (
+            select(
+                Candle.market_feed_id.label("feed_id"),
+                func.max(Candle.opened_at).label("opened_at"),
+            )
+            .where(Candle.market_feed_id.in_(feed_ids))
+            .group_by(Candle.market_feed_id)
+            .subquery()
+        )
+        candles = {
+            row.market_feed_id: row
+            for row in db.scalars(
+                select(Candle).join(
+                    candle_times,
+                    (Candle.market_feed_id == candle_times.c.feed_id)
+                    & (Candle.opened_at == candle_times.c.opened_at),
+                )
+            )
+        }
+        bot_counts = {
+            feed_id: count
+            for feed_id, count in db.execute(
+                select(Bot.market_feed_id, func.count(Bot.id))
+                .where(Bot.market_feed_id.in_(feed_ids))
+                .group_by(Bot.market_feed_id)
+            )
+        }
+    summaries = [
+        feed_summary_from_rows(
+            feed,
+            ticks.get(feed.id),
+            candles.get(feed.id),
+            bot_counts.get(feed.id, 0),
+            now,
+        )
+        for feed in feeds
+    ]
     commands = list(
         db.scalars(select(CollectorCommand).order_by(desc(CollectorCommand.created_at)).limit(10))
     )
@@ -208,7 +318,7 @@ def overview(
         )
         or 0,
     }
-    return {
+    result = {
         "instance": (
             jsonable_encoder(
                 {
@@ -228,6 +338,11 @@ def overview(
         "feeds": summaries,
         "recent_commands": [serialize_command(command) for command in commands],
     }
+    try:
+        redis_client().set(OVERVIEW_CACHE_KEY, json.dumps(result), ex=3)
+    except Exception:
+        pass
+    return result
 
 
 @router.get("/settings")
@@ -255,7 +370,7 @@ def read_settings(
 
 
 @router.put("/settings")
-async def update_settings(
+def update_settings(
     payload: CollectorSettingsUpdate,
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
@@ -280,7 +395,8 @@ async def update_settings(
     )
     db.commit()
     db.refresh(row)
-    await manager.broadcast(
+    invalidate_collector_overview()
+    publish_event_sync(
         {
             "event_type": "collector.configuration",
             "occurred_at": datetime.now(UTC).isoformat(),
@@ -291,7 +407,7 @@ async def update_settings(
 
 
 @router.put("/feeds/{feed_id}/settings")
-async def update_instrument_settings(
+def update_instrument_settings(
     feed_id: uuid.UUID,
     payload: CollectorInstrumentSettingsUpdate,
     db: Session = Depends(get_db),
@@ -327,7 +443,8 @@ async def update_instrument_settings(
     )
     db.commit()
     db.refresh(row)
-    await manager.broadcast(
+    invalidate_collector_overview()
+    publish_event_sync(
         {
             "event_type": "collector.configuration",
             "occurred_at": datetime.now(UTC).isoformat(),
@@ -338,7 +455,7 @@ async def update_instrument_settings(
 
 
 @router.post("/instruments", status_code=201)
-async def create_instrument(
+def create_instrument(
     payload: CollectorInstrumentCreate,
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
@@ -368,7 +485,8 @@ async def create_instrument(
     )
     db.commit()
     db.refresh(row)
-    await manager.broadcast(
+    invalidate_collector_overview()
+    publish_event_sync(
         {
             "event_type": "collector.configuration",
             "occurred_at": datetime.now(UTC).isoformat(),
@@ -599,7 +717,7 @@ def list_commands(
 
 
 @router.post("/commands", status_code=201)
-async def create_command(
+def create_command(
     payload: CollectorCommandCreate,
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
@@ -610,10 +728,15 @@ async def create_command(
         raise HTTPException(status_code=422, detail="This command requires a market feed")
     if payload.command == "BACKFILL":
         try:
-            start = as_utc(datetime.fromisoformat(str(payload.payload["start"]).replace("Z", "+00:00")))
+            start = as_utc(
+                datetime.fromisoformat(str(payload.payload["start"]).replace("Z", "+00:00"))
+            )
             end = as_utc(datetime.fromisoformat(str(payload.payload["end"]).replace("Z", "+00:00")))
         except (KeyError, ValueError) as exc:
-            raise HTTPException(status_code=422, detail="Backfill requires valid start and end") from exc
+            raise HTTPException(
+                status_code=422,
+                detail="Backfill requires valid start and end",
+            ) from exc
         if end <= start or end - start > timedelta(days=365):
             raise HTTPException(status_code=422, detail="Backfill range must be 0-365 days")
         active = db.scalar(
@@ -643,7 +766,8 @@ async def create_command(
     )
     db.commit()
     db.refresh(row)
-    await manager.broadcast(
+    invalidate_collector_overview()
+    publish_event_sync(
         {
             "event_type": "collector.command",
             "occurred_at": datetime.now(UTC).isoformat(),
@@ -684,6 +808,7 @@ def register_instance(
     db.commit()
     db.refresh(instance)
     db.refresh(configuration)
+    invalidate_collector_overview()
     return {
         "instance": jsonable_encoder(instance),
         "configuration": serialize_configuration(configuration),
@@ -691,7 +816,7 @@ def register_instance(
 
 
 @router.post("/instances/{instance_id}/heartbeat")
-async def instance_heartbeat(
+def instance_heartbeat(
     instance_id: uuid.UUID,
     payload: CollectorInstanceHeartbeat,
     db: Session = Depends(get_db),
@@ -705,7 +830,8 @@ async def instance_heartbeat(
     instance.applied_config_version = payload.applied_config_version
     instance.details = payload.details
     db.commit()
-    await manager.broadcast(
+    invalidate_collector_overview()
+    publish_event_sync(
         {
             "event_type": "collector.heartbeat",
             "occurred_at": datetime.now(UTC).isoformat(),
@@ -748,6 +874,7 @@ def poll_control(
         command.status = "RUNNING"
         command.started_at = now
     db.commit()
+    invalidate_collector_overview()
     return {
         "configuration": serialize_configuration(configuration),
         "instruments": [
@@ -758,7 +885,7 @@ def poll_control(
 
 
 @router.patch("/commands/{command_id}")
-async def update_command(
+def update_command(
     command_id: uuid.UUID,
     payload: CollectorCommandUpdate,
     db: Session = Depends(get_db),
@@ -786,7 +913,8 @@ async def update_command(
                 feed.status = feed_status
     db.commit()
     db.refresh(command)
-    await manager.broadcast(
+    invalidate_collector_overview()
+    publish_event_sync(
         {
             "event_type": "collector.command",
             "occurred_at": datetime.now(UTC).isoformat(),

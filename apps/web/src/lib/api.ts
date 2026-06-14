@@ -75,8 +75,14 @@ export function openBotStream(
     `${base}/api/v1/stream?token=${encodeURIComponent(token)}`,
   );
   socket.onmessage = (event) => {
-    const payload = JSON.parse(event.data) as { bot_instance_id?: string };
-    if (payload.bot_instance_id === botId) onEvent();
+    const payload = JSON.parse(event.data) as {
+      bot_instance_id?: string;
+      bot_instance_ids?: string[];
+    };
+    if (
+      payload.bot_instance_id === botId
+      || payload.bot_instance_ids?.includes(botId)
+    ) onEvent();
   };
   return () => socket.close();
 }
@@ -85,6 +91,7 @@ export type CollectorStreamEvent = {
   event_type?: string;
   market_feed_id?: string;
   collector_instance_id?: string;
+  bot_instance_ids?: string[];
   status?: string;
   occurred_at?: string;
   data?: {

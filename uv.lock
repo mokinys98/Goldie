@@ -9,6 +9,7 @@ resolution-markers = [
 [manifest]
 members = [
     "goldie-api",
+    "goldie-ingestion-worker",
     "goldie-market-data-collector",
     "goldie-trading-domain",
     "goldie-worker",
@@ -404,12 +405,24 @@ requires-dist = [
 provides-extras = ["dev"]
 
 [[package]]
+name = "goldie-ingestion-worker"
+version = "0.1.0"
+source = { editable = "apps/ingestion-worker" }
+dependencies = [
+    { name = "redis" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "redis", specifier = ">=5.2,<7" }]
+
+[[package]]
 name = "goldie-market-data-collector"
 version = "0.1.0"
 source = { editable = "apps/market-data-collector" }
 dependencies = [
     { name = "pydantic" },
     { name = "pydantic-settings" },
+    { name = "redis" },
     { name = "requests" },
 ]
 
@@ -423,6 +436,7 @@ requires-dist = [
     { name = "pydantic", specifier = ">=2.10,<3" },
     { name = "pydantic-settings", specifier = ">=2.7,<3" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.3,<9" },
+    { name = "redis", specifier = ">=5.2,<7" },
     { name = "requests", specifier = ">=2.32,<3" },
 ]
 provides-extras = ["dev"]

@@ -12,6 +12,7 @@ members = [
   "packages/trading-domain",
   "apps/api",
   "apps/market-data-collector",
+  "apps/ingestion-worker",
   "apps/worker",
 ]
 

@@ -1,4 +1,4 @@
-from pydantic import Field, field_validator
+from pydantic import AliasChoices, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 DEFAULT_INSTRUMENTS = (
@@ -8,10 +8,23 @@ DEFAULT_INSTRUMENTS = (
 
 
 class CollectorSettings(BaseSettings):
-    model_config = SettingsConfigDict(env_prefix="GOLDIE_", extra="ignore")
+    model_config = SettingsConfigDict(
+        env_prefix="GOLDIE_",
+        extra="ignore",
+        populate_by_name=True,
+    )
 
     api_url: str
     agent_token: str
+    redis_url: str = Field(
+        default="redis://localhost:6379/0",
+        validation_alias=AliasChoices("INGESTION_REDIS_URL", "REDIS_URL", "GOLDIE_REDIS_URL"),
+    )
+    ingestion_transport: str = Field(
+        default="http",
+        pattern="^(http|redis)$",
+        validation_alias=AliasChoices("INGESTION_TRANSPORT", "GOLDIE_INGESTION_TRANSPORT"),
+    )
     agent_name: str = "railway-oanda-collector"
     provider: str = Field(default="oanda", pattern="^oanda$")
     provider_environment: str = Field(default="practice", pattern="^(practice|live)$")
@@ -24,6 +37,9 @@ class CollectorSettings(BaseSettings):
     backfill_days: int = Field(default=30, ge=1, le=365)
     backfill_batch_size: int = Field(default=250, ge=50, le=1000)
     request_timeout_seconds: float = Field(default=60.0, ge=5, le=120)
+    quote_batch_seconds: float = Field(default=1.0, ge=0.1, le=10)
+    quote_batch_size: int = Field(default=250, ge=1, le=1000)
+    candle_batch_size: int = Field(default=500, ge=1, le=5000)
     configuration_retry_seconds: float = Field(default=900.0, ge=60, le=86400)
 
     oanda_api_token: str

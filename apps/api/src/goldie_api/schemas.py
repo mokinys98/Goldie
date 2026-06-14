@@ -182,6 +182,9 @@ class FeedQuote(BaseModel):
 
 
 class FeedQuoteBatch(BaseModel):
+    event_id: uuid.UUID | None = None
+    collector_id: uuid.UUID | None = None
+    sent_at: datetime | None = None
     agent_id: uuid.UUID
     quotes: list[FeedQuote] = Field(min_length=1, max_length=1000)
 
@@ -197,6 +200,9 @@ class FeedCandle(BaseModel):
 
 
 class FeedCandleBatch(BaseModel):
+    event_id: uuid.UUID | None = None
+    collector_id: uuid.UUID | None = None
+    sent_at: datetime | None = None
     agent_id: uuid.UUID
     candles: list[FeedCandle] = Field(min_length=1, max_length=5000)
 

@@ -1,8 +1,13 @@
+import json
+import logging
+import time
 import uuid
 from datetime import UTC, datetime
 from typing import Any
 
 import requests
+from redis import Redis
+from redis.exceptions import RedisError
 
 from .models import Candle, Instrument, Quote
 from .settings import CollectorSettings
@@ -13,8 +18,23 @@ class GoldieApiClient:
         self.base_url = settings.api_url.rstrip("/")
         self.headers = {"X-Agent-Token": settings.agent_token}
         self.timeout = settings.request_timeout_seconds
+        self.settings = settings
+        self.ingestion_transport = getattr(settings, "ingestion_transport", "http")
+        self.quote_batch_seconds = getattr(settings, "quote_batch_seconds", 1.0)
+        self.quote_batch_size = getattr(settings, "quote_batch_size", 250)
+        self.candle_batch_size = getattr(settings, "candle_batch_size", 500)
         self.feed_id: uuid.UUID | None = None
         self.agent_id: uuid.UUID | None = None
+        self.collector_id: uuid.UUID | None = None
+        self.redis = Redis.from_url(
+            getattr(settings, "redis_url", "redis://localhost:6379/0"),
+            decode_responses=True,
+        )
+        self.quote_buffer: list[Quote] = []
+        self.quote_buffer_started_at: float | None = None
+
+    def set_collector_id(self, collector_id: str | uuid.UUID | None) -> None:
+        self.collector_id = uuid.UUID(str(collector_id)) if collector_id else None
 
     def post(self, path: str, payload: dict[str, Any]) -> dict:
         response = requests.post(
@@ -69,7 +89,7 @@ class GoldieApiClient:
         return parsed.replace(tzinfo=UTC) if parsed.tzinfo is None else parsed.astimezone(UTC)
 
     def register_instance(self, settings: CollectorSettings) -> dict:
-        return self.post(
+        result = self.post(
             "/api/v1/collector/instances/register",
             {
                 "name": settings.agent_name,
@@ -84,6 +104,8 @@ class GoldieApiClient:
                 "instruments": settings.instrument_symbols,
             },
         )
+        self.set_collector_id(result["instance"]["id"])
+        return result
 
     def poll_control(self, instance_id: str) -> dict:
         return self.post(f"/api/v1/collector/instances/{instance_id}/poll", {})
@@ -154,23 +176,78 @@ class GoldieApiClient:
     def quotes(self, quotes: list[Quote]) -> None:
         if not quotes:
             return
-        feed_id, agent_id = self._identity()
-        self.post(
-            f"/api/v1/market-feeds/{feed_id}/quotes/batch",
-            {
-                "agent_id": agent_id,
-                "quotes": [quote.model_dump(mode="json") for quote in quotes],
-            },
-        )
+        if self.ingestion_transport == "http":
+            self._send_batch("quote_batch", quotes)
+            return
+        if not self.quote_buffer:
+            self.quote_buffer_started_at = time.monotonic()
+        self.quote_buffer.extend(quotes)
+        if len(self.quote_buffer) >= self.quote_batch_size:
+            self.flush_quotes()
+
+    def flush_due(self) -> None:
+        if (
+            self.quote_buffer
+            and self.quote_buffer_started_at is not None
+            and time.monotonic() - self.quote_buffer_started_at
+            >= self.quote_batch_seconds
+        ):
+            self.flush_quotes()
+
+    def flush_quotes(self) -> None:
+        if not self.quote_buffer:
+            return
+        batch = self.quote_buffer[: self.quote_batch_size]
+        del self.quote_buffer[: len(batch)]
+        self.quote_buffer_started_at = time.monotonic() if self.quote_buffer else None
+        self._send_batch("quote_batch", batch)
 
     def candles(self, candles: list[Candle]) -> dict:
         if not candles:
             return {"accepted": True, "count": 0, "duplicates": 0}
+        accepted = 0
+        for index in range(0, len(candles), self.candle_batch_size):
+            batch = candles[index : index + self.candle_batch_size]
+            result = self._send_batch("candle_batch", batch)
+            accepted += int(result.get("count", len(batch)))
+        return {
+            "accepted": True,
+            "count": accepted,
+            "duplicates": max(0, len(candles) - accepted),
+        }
+
+    def _send_batch(self, event_type: str, items: list[Quote] | list[Candle]) -> dict:
         feed_id, agent_id = self._identity()
-        return self.post(
-            f"/api/v1/market-feeds/{feed_id}/candles/batch",
-            {
-                "agent_id": agent_id,
-                "candles": [candle.model_dump(mode="json") for candle in candles],
-            },
-        )
+        event_id = uuid.uuid4()
+        sent_at = datetime.now(UTC).isoformat()
+        item_key = "quotes" if event_type == "quote_batch" else "candles"
+        payload = {
+            "event_id": str(event_id),
+            "collector_id": str(self.collector_id) if self.collector_id else None,
+            "sent_at": sent_at,
+            "agent_id": agent_id,
+            item_key: [item.model_dump(mode="json") for item in items],
+        }
+        if self.ingestion_transport == "redis":
+            try:
+                self.redis.xadd(
+                    "goldie:ingestion:v1",
+                    {
+                        "schema_version": "1",
+                        "event_id": str(event_id),
+                        "event_type": event_type,
+                        "collector_id": str(self.collector_id or ""),
+                        "market_feed_id": feed_id,
+                        "agent_id": agent_id,
+                        "sent_at": sent_at,
+                        "payload": json.dumps(payload),
+                    },
+                )
+                return {"accepted": True, "count": len(items), "queued": True}
+            except (RedisError, OSError):
+                logging.getLogger(__name__).warning(
+                    "Redis ingestion unavailable; falling back to HTTP",
+                    exc_info=True,
+                )
+        path = "quotes" if event_type == "quote_batch" else "candles"
+        return self.post(f"/api/v1/market-feeds/{feed_id}/{path}/batch", payload)

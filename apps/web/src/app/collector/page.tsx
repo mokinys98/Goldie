@@ -114,11 +114,8 @@ export default function CollectorPage() {
     }
   };
 
-  if (overview.isLoading) return <div className="panel">Loading collector...</div>;
-  if (overview.error || !overview.data) {
-    return <div className="error-box">{overview.error?.message ?? "Collector unavailable"}</div>;
-  }
   const data = overview.data;
+  const isLoading = overview.isLoading || !data;
   return (
     <section>
       <header className="page-header">
@@ -128,11 +125,11 @@ export default function CollectorPage() {
           <p>OANDA read-only ingestion, health, configuration and data operations.</p>
         </div>
         <div className="button-row">
-          <StatusPill value={data.instance?.status ?? "OFFLINE"} />
-          <button className="button button-secondary" onClick={() => void command("PAUSE")}>
+          <StatusPill value={data?.instance?.status ?? (isLoading ? "LOADING" : "OFFLINE")} />
+          <button className="button button-secondary" disabled={isLoading} onClick={() => void command("PAUSE")}>
             Pause all
           </button>
-          <button className="button button-primary" onClick={() => void command("RESUME")}>
+          <button className="button button-primary" disabled={isLoading} onClick={() => void command("RESUME")}>
             Resume all
           </button>
         </div>
@@ -140,15 +137,24 @@ export default function CollectorPage() {
       <div className="theoretical-banner">
         READ ONLY MARKET DATA. No broker orders or Railway secrets are exposed.
       </div>
-      {(error || overview.error) && <div className="error-box collector-alert">{error}</div>}
+      {(error || overview.error) && (
+        <div className="error-box collector-alert">
+          {error || overview.error?.message || "Collector overview unavailable"}
+        </div>
+      )}
+      {settings.error && (
+        <div className="error-box collector-alert">
+          Settings unavailable: {settings.error.message}
+        </div>
+      )}
 
       <div className="dashboard-grid collector-metrics">
-        <Metric label="Worker" value={data.instance?.status ?? "OFFLINE"} />
-        <Metric label="Online feeds" value={data.counts.online} />
-        <Metric label="Paused feeds" value={data.counts.paused} />
-        <Metric label="Feed errors" value={data.counts.error} />
-        <Metric label="Candles / 24h" value={data.counts.candles_24h} />
-        <Metric label="Ticks / 24h" value={data.counts.ticks_24h} />
+        <Metric label="Worker" value={data?.instance?.status ?? "--"} loading={isLoading} />
+        <Metric label="Online feeds" value={data?.counts.online ?? "--"} loading={isLoading} />
+        <Metric label="Paused feeds" value={data?.counts.paused ?? "--"} loading={isLoading} />
+        <Metric label="Feed errors" value={data?.counts.error ?? "--"} loading={isLoading} />
+        <Metric label="Candles / 24h" value={data?.counts.candles_24h ?? "--"} loading={isLoading} />
+        <Metric label="Ticks / 24h" value={data?.counts.ticks_24h ?? "--"} loading={isLoading} />
       </div>
 
       <div className="panel collector-section">
@@ -169,7 +175,13 @@ export default function CollectorPage() {
             </button>
           </div>
         </div>
-        {!data.feeds.length ? (
+        {isLoading ? (
+          <div className="collector-skeleton-table" aria-label="Loading instruments">
+            {Array.from({ length: 4 }, (_, index) => (
+              <div className="skeleton-row" key={index} />
+            ))}
+          </div>
+        ) : !data?.feeds.length ? (
           <p className="muted">
             Waiting for enabled instruments to register their market feeds.
             {(settings.data?.instruments.length ?? 0) > 0
@@ -212,20 +224,41 @@ export default function CollectorPage() {
         )}
       </div>
 
-      <CommandTable commands={data.recent_commands} />
+      <CommandTable commands={data?.recent_commands ?? []} loading={isLoading} />
     </section>
   );
 }
 
-function Metric({ label, value }: { label: string; value: string | number }) {
-  return <div className="metric-card"><span>{label}</span><strong>{value}</strong></div>;
+function Metric({
+  label,
+  value,
+  loading = false,
+}: {
+  label: string;
+  value: string | number;
+  loading?: boolean;
+}) {
+  return (
+    <div className="metric-card">
+      <span>{label}</span>
+      <strong className={loading ? "skeleton-value" : ""}>{value}</strong>
+    </div>
+  );
 }
 
-function CommandTable({ commands }: { commands: CollectorCommand[] }) {
+function CommandTable({
+  commands,
+  loading,
+}: {
+  commands: CollectorCommand[];
+  loading: boolean;
+}) {
   return (
     <div className="panel collector-section">
       <h2>Recent commands</h2>
-      {!commands.length ? <p className="muted">No collector commands yet.</p> : (
+      {loading ? <div className="skeleton-row" /> : !commands.length ? (
+        <p className="muted">No collector commands yet.</p>
+      ) : (
         <div className="table-wrap borderless">
           <table>
             <thead><tr><th>Created</th><th>Command</th><th>Status</th><th>Progress</th><th>Error</th></tr></thead>

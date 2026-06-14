@@ -71,9 +71,11 @@ class InstrumentWorker:
         self,
         settings: CollectorSettings,
         on_registered,
+        collector_id: str | None = None,
     ) -> None:
         self.settings = settings
         self.on_registered = on_registered
+        self.collector_id = collector_id
         self.stop_event = threading.Event()
         self.thread = threading.Thread(
             target=self._run_forever,
@@ -124,6 +126,7 @@ class InstrumentWorker:
 
     def _run(self) -> None:
         client = GoldieApiClient(self.settings)
+        client.set_collector_id(self.collector_id)
         provider = OandaProvider(self.settings)
         latest_candle_at = client.register(self.settings)
         self.feed_id = str(client.feed_id)
@@ -160,6 +163,7 @@ class InstrumentWorker:
                         last_quote_observed_at = quote.observed_at
                         self.latest_quote_at = quote.observed_at.isoformat()
                         last_quote_sent = monotonic
+                client.flush_due()
                 if monotonic - last_candle_poll >= self.settings.candle_poll_seconds:
                     current = datetime.now(UTC)
                     candles = provider.candles(candle_cursor, current)
@@ -182,6 +186,7 @@ class InstrumentWorker:
                     last_heartbeat = monotonic
                 self.stop_event.wait(0.25)
         finally:
+            client.flush_quotes()
             provider.close()
 
 
@@ -242,7 +247,7 @@ class CollectorSupervisor:
                 del self.workers[symbol]
         for symbol, settings in desired.items():
             if symbol not in self.workers:
-                worker = InstrumentWorker(settings, self.on_registered)
+                worker = InstrumentWorker(settings, self.on_registered, self.instance_id)
                 self.workers[symbol] = worker
                 worker.start()
                 logger.info("Started collector worker for %s", symbol)
@@ -261,6 +266,7 @@ class CollectorSupervisor:
             worker = self.workers.get(symbol)
             settings = worker.settings if worker else self.base_settings.for_instrument(symbol)
             client = GoldieApiClient(settings)
+            client.set_collector_id(self.instance_id)
             client.register(settings)
             provider = OandaProvider(settings)
             provider.validate_instrument()

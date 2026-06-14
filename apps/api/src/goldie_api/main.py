@@ -1,4 +1,8 @@
+import asyncio
+import logging
+import time
 from contextlib import asynccontextmanager
+from contextlib import suppress
 from datetime import UTC, datetime
 
 import jwt
@@ -10,6 +14,7 @@ from sqlalchemy import select, text
 from .db import SessionLocal, engine
 from .models import User
 from .routers import analytics, auth, backtests, bots, collector, feeds, status, strategies
+from .realtime import relay_redis_events
 from .security import hash_password
 from .settings import get_settings
 from .websocket import manager
@@ -33,7 +38,15 @@ def seed_local_admin() -> None:
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     seed_local_admin()
-    yield
+    stop = asyncio.Event()
+    relay = asyncio.create_task(relay_redis_events(stop))
+    try:
+        yield
+    finally:
+        stop.set()
+        relay.cancel()
+        with suppress(asyncio.CancelledError):
+            await relay
 
 
 app = FastAPI(title="Goldie API", version="0.1.0", lifespan=lifespan)
@@ -46,6 +59,22 @@ app.add_middleware(
     allow_headers=["*"],
     max_age=600,
 )
+
+
+@app.middleware("http")
+async def request_timing(request: Request, call_next):
+    started = time.perf_counter()
+    response = await call_next(request)
+    duration_ms = (time.perf_counter() - started) * 1000
+    response.headers["Server-Timing"] = f"app;dur={duration_ms:.2f}"
+    logging.getLogger("goldie_api.requests").info(
+        "%s %s %s %.2fms",
+        request.method,
+        request.url.path,
+        response.status_code,
+        duration_ms,
+    )
+    return response
 
 app.include_router(auth.router)
 app.include_router(bots.router)

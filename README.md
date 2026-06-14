@@ -25,6 +25,15 @@ bot editor, Shadow/Paper evaluation, and Backtests. Shared SMA, EMA, RSI, ATR,
 Bollinger Bands, momentum, and percentage-change helpers are in
 `goldie_domain.indicators`.
 
+## Redis ingestion
+
+Deploy `railway/ingestion-worker.toml` as a separate Railway service with the
+same `DATABASE_URL` and `REDIS_URL` as the API. Keep the collector on
+`INGESTION_TRANSPORT=http` during deployment, then switch it to `redis` after
+the `goldie:ingestion-worker:heartbeat` key appears. `INGESTION_REDIS_URL`
+should use Railway private networking. HTTP remains the automatic fallback if
+Redis is unavailable.
+
 ## Quick start
 
 1. Copy `.env.example` to `.env` and change all secrets.

@@ -62,6 +62,19 @@ services:
       redis:
         condition: service_healthy
 
+  ingestion-worker:
+    build:
+      context: ../..
+      dockerfile: apps/ingestion-worker/Dockerfile
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://goldie:goldie_local_only@postgres:5432/goldie}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
   web:
     build:
       context: ../../apps/web
