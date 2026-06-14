@@ -1,4 +1,5 @@
 import { z } from "zod";
+import type { BotConfig } from "./types";
 
 export const botConfigSchema = z.object({
   market: z.object({
@@ -6,9 +7,11 @@ export const botConfigSchema = z.object({
     timeframe: z.literal("M1"),
   }),
   strategy: z.object({
-    name: z.literal("basic_momentum"),
-    lookback_candles: z.coerce.number().int().min(2).max(100),
-    min_momentum_points: z.coerce.number().positive().max(10000),
+    name: z.string().min(1),
+    parameters: z.record(
+      z.string(),
+      z.union([z.string(), z.number(), z.boolean()]),
+    ),
   }),
   filters: z.object({
     max_spread_points: z.coerce.number().positive().max(10000),
@@ -31,9 +34,11 @@ export const botConfigSchema = z.object({
 export const defaultBotConfig = {
   market: { symbol: "EURUSD", timeframe: "M1" as const },
   strategy: {
-    name: "basic_momentum" as const,
-    lookback_candles: 5,
-    min_momentum_points: 50,
+    name: "basic_momentum",
+    parameters: {
+      lookback_candles: 5,
+      min_momentum_points: 50,
+    },
   },
   filters: { max_spread_points: 30, stale_after_seconds: 15 },
   session: {
@@ -49,4 +54,35 @@ export const defaultBotConfig = {
     max_open_shadow_positions: 1,
   },
 };
+
+export function normalizeBotConfig(config: Partial<BotConfig> & Record<string, unknown>): BotConfig {
+  const strategy = (config.strategy ?? {}) as Record<string, unknown>;
+  const parameters = {
+    ...((strategy.parameters ?? {}) as Record<string, string | number | boolean>),
+  };
+  if ("lookback_candles" in strategy) {
+    parameters.lookback_candles = strategy.lookback_candles as number;
+  }
+  if ("min_momentum_points" in strategy) {
+    parameters.min_momentum_points = strategy.min_momentum_points as number;
+  }
+  return {
+    ...defaultBotConfig,
+    ...config,
+    market: { ...defaultBotConfig.market, ...(config.market ?? {}) },
+    strategy: {
+      name: String(strategy.name ?? defaultBotConfig.strategy.name),
+      parameters:
+        Object.keys(parameters).length > 0
+          ? parameters
+          : defaultBotConfig.strategy.parameters,
+    },
+    filters: { ...defaultBotConfig.filters, ...(config.filters ?? {}) },
+    session: { ...defaultBotConfig.session, ...(config.session ?? {}) },
+    theoretical_trade: {
+      ...defaultBotConfig.theoretical_trade,
+      ...(config.theoretical_trade ?? {}),
+    },
+  } as BotConfig;
+}
 

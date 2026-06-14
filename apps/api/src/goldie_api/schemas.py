@@ -257,3 +257,68 @@ class CollectorCommandUpdate(BaseModel):
     progress: dict = Field(default_factory=dict)
     result: dict = Field(default_factory=dict)
     error: str | None = Field(default=None, max_length=4000)
+
+
+class BacktestCreate(BaseModel):
+    bot_id: uuid.UUID
+    config_version_id: uuid.UUID
+    market_feed_id: uuid.UUID
+    date_from: datetime
+    date_to: datetime
+    initial_capital: Decimal = Field(default=Decimal("10000"), gt=0)
+    spread_points: Decimal = Field(default=Decimal("2"), ge=0)
+    slippage_points: Decimal = Field(default=Decimal("1"), ge=0)
+    commission_per_trade: Decimal = Field(default=Decimal("0"), ge=0)
+
+
+class BacktestRead(OrmModel):
+    id: uuid.UUID
+    bot_id: uuid.UUID
+    config_version_id: uuid.UUID
+    market_feed_id: uuid.UUID
+    run_id: uuid.UUID
+    status: str
+    date_from: datetime
+    date_to: datetime
+    initial_capital: Decimal
+    spread_points: Decimal
+    slippage_points: Decimal
+    commission_per_trade: Decimal
+    config_snapshot: dict
+    progress: dict
+    summary: dict
+    reason_counts: dict
+    error: str | None
+    started_at: datetime | None
+    completed_at: datetime | None
+    created_at: datetime
+    updated_at: datetime
+
+
+class BacktestTradeRead(OrmModel):
+    id: uuid.UUID
+    experiment_id: uuid.UUID
+    direction: str
+    signal_at: datetime
+    opened_at: datetime
+    closed_at: datetime
+    entry_price: Decimal
+    exit_price: Decimal
+    stop_loss: Decimal
+    take_profit: Decimal
+    volume: Decimal
+    risk_amount: Decimal
+    close_reason: str
+    gross_pnl: Decimal
+    commission: Decimal
+    net_pnl: Decimal
+    pnl_points: Decimal
+    r_multiple: Decimal
+    mfe_points: Decimal
+    mae_points: Decimal
+    duration_seconds: int
+
+
+class BacktestTradePage(BaseModel):
+    items: list[BacktestTradeRead]
+    total: int

@@ -13,9 +13,8 @@ export type Bot = {
 export type BotConfig = {
   market: { symbol: string; timeframe: "M1" };
   strategy: {
-    name: "basic_momentum";
-    lookback_candles: number;
-    min_momentum_points: number;
+    name: string;
+    parameters: Record<string, string | number | boolean>;
   };
   filters: { max_spread_points: number; stale_after_seconds: number };
   session: { timezone: string; start_time: string; end_time: string };
@@ -49,7 +48,26 @@ export type Signal = {
   take_profit: string | null;
   momentum_points: string | null;
   spread_points: string | null;
+  inputs: Record<string, string | number | boolean | null>;
   outcome: ShadowTrade | null;
+};
+
+export type StrategyParameterMetadata = {
+  title?: string;
+  description?: string;
+  type?: "integer" | "number" | "boolean" | "string";
+  minimum?: number;
+  maximum?: number;
+  exclusiveMinimum?: number;
+  default?: string | number | boolean;
+};
+
+export type StrategyMetadata = {
+  name: string;
+  description: string;
+  required_candles: number;
+  parameters: Record<string, StrategyParameterMetadata>;
+  defaults: Record<string, string | number | boolean>;
 };
 
 export type ShadowTrade = {
@@ -277,4 +295,72 @@ export type CollectorTick = {
   bid: string | number;
   ask: string | number;
   spread: string | number;
+};
+
+export type BacktestExperiment = {
+  id: string;
+  bot_id: string;
+  config_version_id: string;
+  market_feed_id: string;
+  run_id: string;
+  status: "PENDING" | "RUNNING" | "CANCEL_REQUESTED" | "CANCELLED" | "SUCCEEDED" | "FAILED";
+  date_from: string;
+  date_to: string;
+  initial_capital: string | number;
+  spread_points: string | number;
+  slippage_points: string | number;
+  commission_per_trade: string | number;
+  config_snapshot: BotConfig;
+  progress: { processed?: number; total?: number };
+  summary: {
+    total_trades?: number;
+    wins?: number;
+    losses?: number;
+    win_rate?: string | number | null;
+    average_win?: string | number | null;
+    average_loss?: string | number | null;
+    profit_factor?: string | number | null;
+    gross_pnl?: string | number;
+    commission?: string | number;
+    net_pnl?: string | number;
+    final_equity?: string | number;
+    max_drawdown?: string | number;
+    max_consecutive_losses?: number;
+    equity_curve?: Array<{ time: string; value: string | number }>;
+  };
+  reason_counts: Record<string, number>;
+  error: string | null;
+  started_at: string | null;
+  completed_at: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type BacktestTrade = {
+  id: string;
+  experiment_id: string;
+  direction: "BUY" | "SELL";
+  signal_at: string;
+  opened_at: string;
+  closed_at: string;
+  entry_price: string | number;
+  exit_price: string | number;
+  stop_loss: string | number;
+  take_profit: string | number;
+  volume: string | number;
+  risk_amount: string | number;
+  close_reason: string;
+  gross_pnl: string | number;
+  commission: string | number;
+  net_pnl: string | number;
+  pnl_points: string | number;
+  r_multiple: string | number;
+  mfe_points: string | number;
+  mae_points: string | number;
+  duration_seconds: number;
+};
+
+export type BacktestTradePage = {
+  items: BacktestTrade[];
+  total: number;
 };

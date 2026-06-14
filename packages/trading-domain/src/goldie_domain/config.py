@@ -2,6 +2,8 @@ from datetime import time
 from decimal import Decimal
 from zoneinfo import ZoneInfo
 
+from typing import Any
+
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
@@ -15,9 +17,34 @@ class MarketConfig(BaseModel):
 class StrategyConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    name: str = Field(default="basic_momentum", pattern="^basic_momentum$")
-    lookback_candles: int = Field(default=5, ge=2, le=100)
-    min_momentum_points: Decimal = Field(default=Decimal("50"), gt=0, le=10000)
+    name: str = "basic_momentum"
+    parameters: dict[str, Any] = Field(
+        default_factory=lambda: {
+            "lookback_candles": 5,
+            "min_momentum_points": "50",
+        }
+    )
+
+    @model_validator(mode="before")
+    @classmethod
+    def migrate_legacy_parameters(cls, value: Any) -> Any:
+        if not isinstance(value, dict):
+            return value
+        data = dict(value)
+        parameters = dict(data.get("parameters") or {})
+        for key in ("lookback_candles", "min_momentum_points"):
+            if key in data:
+                parameters[key] = data.pop(key)
+        data["parameters"] = parameters
+        return data
+
+    @model_validator(mode="after")
+    def validate_parameters(self) -> "StrategyConfig":
+        from .registry import validate_strategy_parameters
+
+        validated = validate_strategy_parameters(self.name, self.parameters)
+        self.parameters = validated.model_dump(mode="json")
+        return self
 
 
 class FilterConfig(BaseModel):

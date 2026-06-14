@@ -19,6 +19,7 @@ class CandleInput(BaseModel):
     high: Decimal
     low: Decimal
     close: Decimal
+    tick_volume: int = Field(default=0, ge=0)
     is_complete: bool = True
 
 
@@ -26,6 +27,7 @@ class MarketContext(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     observed_at: datetime
+    evaluated_at: datetime | None = None
     bid: Decimal
     ask: Decimal
     point: Decimal = Field(gt=0)

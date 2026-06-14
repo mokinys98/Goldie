@@ -91,6 +91,9 @@ class Run(Base, TimestampMixin):
 
 class Agent(Base, TimestampMixin):
     __tablename__ = "agents"
+    __table_args__ = (
+        Index("ix_agents_feed_updated_at", "market_feed_id", "updated_at"),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
     market_feed_id: Mapped[uuid.UUID] = mapped_column(
@@ -159,6 +162,13 @@ class CollectorInstance(Base, TimestampMixin):
 
 class CollectorCommand(Base, TimestampMixin):
     __tablename__ = "collector_commands"
+    __table_args__ = (
+        Index(
+            "ix_collector_commands_feed_created_at",
+            "market_feed_id",
+            "created_at",
+        ),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
     collector_instance_id: Mapped[uuid.UUID | None] = mapped_column(
@@ -218,6 +228,9 @@ class InstrumentSpecification(Base, TimestampMixin):
 
 class MarketTick(Base):
     __tablename__ = "market_ticks"
+    __table_args__ = (
+        Index("ix_market_ticks_feed_observed_at", "market_feed_id", "observed_at"),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
     market_feed_id: Mapped[uuid.UUID] = mapped_column(
@@ -239,6 +252,7 @@ class MarketTick(Base):
 class Candle(Base):
     __tablename__ = "candles"
     __table_args__ = (
+        Index("ix_candles_feed_opened_at", "market_feed_id", "opened_at"),
         UniqueConstraint(
             "market_feed_id",
             "symbol",
@@ -335,6 +349,77 @@ class SignalOutcome(Base, TimestampMixin):
     mae_points: Mapped[Decimal] = mapped_column(Numeric(20, 8), default=Decimal("0"))
     duration_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True)
     signal: Mapped[Signal] = relationship(back_populates="outcome")
+
+
+class BacktestExperiment(Base, TimestampMixin):
+    __tablename__ = "backtest_experiments"
+    __table_args__ = (
+        Index("ix_backtest_experiments_status_created_at", "status", "created_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    bot_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("bots.id"), index=True)
+    config_version_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("config_versions.id"), index=True
+    )
+    market_feed_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("market_feeds.id"), index=True
+    )
+    run_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("runs.id"), unique=True)
+    requested_by: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id"), nullable=True
+    )
+    status: Mapped[str] = mapped_column(String(24), default="PENDING", index=True)
+    date_from: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    date_to: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    initial_capital: Mapped[Decimal] = mapped_column(Numeric(20, 8))
+    spread_points: Mapped[Decimal] = mapped_column(Numeric(20, 8))
+    slippage_points: Mapped[Decimal] = mapped_column(Numeric(20, 8))
+    commission_per_trade: Mapped[Decimal] = mapped_column(Numeric(20, 8))
+    config_snapshot: Mapped[dict] = mapped_column(JSON)
+    progress: Mapped[dict] = mapped_column(JSON, default=dict)
+    summary: Mapped[dict] = mapped_column(JSON, default=dict)
+    reason_counts: Mapped[dict] = mapped_column(JSON, default=dict)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    trades: Mapped[list["BacktestTrade"]] = relationship(
+        back_populates="experiment", cascade="all, delete-orphan"
+    )
+
+
+class BacktestTrade(Base):
+    __tablename__ = "backtest_trades"
+    __table_args__ = (
+        Index("ix_backtest_trades_experiment_opened_at", "experiment_id", "opened_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    experiment_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("backtest_experiments.id"), index=True
+    )
+    direction: Mapped[str] = mapped_column(String(8))
+    signal_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    opened_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    closed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    entry_price: Mapped[Decimal] = mapped_column(Numeric(20, 8))
+    exit_price: Mapped[Decimal] = mapped_column(Numeric(20, 8))
+    stop_loss: Mapped[Decimal] = mapped_column(Numeric(20, 8))
+    take_profit: Mapped[Decimal] = mapped_column(Numeric(20, 8))
+    volume: Mapped[Decimal] = mapped_column(Numeric(20, 8))
+    risk_amount: Mapped[Decimal] = mapped_column(Numeric(20, 8))
+    close_reason: Mapped[str] = mapped_column(String(32))
+    gross_pnl: Mapped[Decimal] = mapped_column(Numeric(20, 8))
+    commission: Mapped[Decimal] = mapped_column(Numeric(20, 8))
+    net_pnl: Mapped[Decimal] = mapped_column(Numeric(20, 8))
+    pnl_points: Mapped[Decimal] = mapped_column(Numeric(20, 8))
+    r_multiple: Mapped[Decimal] = mapped_column(Numeric(20, 8))
+    mfe_points: Mapped[Decimal] = mapped_column(Numeric(20, 8))
+    mae_points: Mapped[Decimal] = mapped_column(Numeric(20, 8))
+    duration_seconds: Mapped[int] = mapped_column(Integer)
+
+    experiment: Mapped[BacktestExperiment] = relationship(back_populates="trades")
 
 
 class AuditEvent(Base):

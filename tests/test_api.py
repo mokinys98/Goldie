@@ -13,10 +13,12 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from goldie_api.db import Base, SessionLocal, engine
+from goldie_api.backtests import execute_backtest
 from goldie_api.maintenance import prune_market_quotes
 from goldie_api.main import app
 from goldie_api.models import (
     Candle,
+    BacktestExperiment,
     ConfigVersion,
     MarketTick,
     Run,
@@ -82,6 +84,19 @@ def test_agent_token_is_required() -> None:
             },
         )
         assert response.status_code == 401
+
+
+def test_strategy_catalog_endpoint() -> None:
+    Base.metadata.drop_all(engine)
+    Base.metadata.create_all(engine)
+    with TestClient(app) as client:
+        headers = login(client)
+        response = client.get("/api/v1/strategies", headers=headers)
+        assert response.status_code == 200
+        catalog = {item["name"]: item for item in response.json()}
+        assert set(catalog) == {"basic_momentum", "ema_rsi"}
+        assert catalog["ema_rsi"]["required_candles"] == 21
+        assert "fast_ema_period" in catalog["ema_rsi"]["parameters"]
 
 
 def activate_first_config(client: TestClient, bot_id: str, headers: dict[str, str]) -> None:
@@ -268,8 +283,123 @@ def test_no_order_execution_api_exists() -> None:
     assert not any(
         token in path
         for path in paths
+        if not path.startswith("/api/v1/backtests")
         for token in ("/orders", "/trades", "/positions", "/execution")
     )
+
+
+def test_backtest_api_execution_and_exports() -> None:
+    Base.metadata.drop_all(engine)
+    Base.metadata.create_all(engine)
+    agent_headers = {"X-Agent-Token": "test-agent-token"}
+    with TestClient(app) as client:
+        registration = client.post(
+            "/api/v1/market-feeds/register",
+            headers=agent_headers,
+            json={
+                "provider": "oanda",
+                "environment": "practice",
+                "canonical_symbol": "XAUUSD",
+                "provider_symbol": "XAU_USD",
+                "agent_name": "backtest-agent",
+            },
+        ).json()
+        feed_id = registration["feed"]["id"]
+        agent_id = registration["agent"]["id"]
+        headers = login(client)
+        bot = client.post(
+            "/api/v1/bots",
+            headers=headers,
+            json={
+                "name": "Backtest bot",
+                "mode": "SHADOW",
+                "market_feed_id": feed_id,
+            },
+        ).json()
+        activate_first_config(client, bot["id"], headers)
+        config = client.get(
+            f"/api/v1/bots/{bot['id']}/config-versions",
+            headers=headers,
+        ).json()[0]
+        specification = client.post(
+            f"/api/v1/market-feeds/{feed_id}/instrument-specification",
+            headers=agent_headers,
+            json={
+                "agent_id": agent_id,
+                "canonical_symbol": "XAUUSD",
+                "provider_symbol": "XAU_USD",
+                "display_precision": 2,
+                "pip_location": -2,
+                "minimum_trade_size": "1",
+                "trade_units_precision": 0,
+                "margin_rate": "0.05",
+            },
+        )
+        assert specification.status_code == 202
+        start = datetime(2026, 1, 5, 10, 0, tzinfo=UTC)
+        candles = [
+            {
+                "opened_at": (start + timedelta(minutes=index)).isoformat(),
+                "open": str(2300 + index),
+                "high": str(2301.5 + index),
+                "low": str(2299.5 + index),
+                "close": str(2301 + index),
+                "volume": 100,
+                "complete": True,
+            }
+            for index in range(12)
+        ]
+        stored = client.post(
+            f"/api/v1/market-feeds/{feed_id}/candles/batch",
+            headers=agent_headers,
+            json={"agent_id": agent_id, "candles": candles},
+        )
+        assert stored.status_code == 202
+        created = client.post(
+            "/api/v1/backtests",
+            headers=headers,
+            json={
+                "bot_id": bot["id"],
+                "config_version_id": config["id"],
+                "market_feed_id": feed_id,
+                "date_from": start.isoformat(),
+                "date_to": (start + timedelta(minutes=12)).isoformat(),
+                "initial_capital": "10000",
+                "spread_points": "2",
+                "slippage_points": "1",
+                "commission_per_trade": "1",
+            },
+        )
+        assert created.status_code == 201
+        experiment_id = uuid.UUID(created.json()["id"])
+        with SessionLocal() as db:
+            experiment = db.get(BacktestExperiment, experiment_id)
+            experiment.status = "RUNNING"
+            db.commit()
+            execute_backtest(db, experiment_id)
+
+        detail = client.get(f"/api/v1/backtests/{experiment_id}", headers=headers)
+        trades = client.get(
+            f"/api/v1/backtests/{experiment_id}/trades",
+            headers=headers,
+        )
+        csv_export = client.get(
+            f"/api/v1/backtests/{experiment_id}/export?format=csv",
+            headers=headers,
+        )
+        json_export = client.get(
+            f"/api/v1/backtests/{experiment_id}/export?format=json",
+            headers=headers,
+        )
+        assert detail.status_code == 200
+        assert detail.json()["status"] == "SUCCEEDED"
+        assert detail.json()["progress"]["processed"] == 12
+        assert trades.status_code == 200
+        assert trades.json()["total"] >= 1
+        assert csv_export.status_code == 200
+        assert csv_export.text.startswith("id,experiment_id,direction")
+        assert json_export.status_code == 200
+        assert json_export.json()["experiment"]["id"] == str(experiment_id)
 def test_shadow_trade_and_performance_endpoints() -> None:
     Base.metadata.drop_all(engine)
     Base.metadata.create_all(engine)

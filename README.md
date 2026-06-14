@@ -3,8 +3,27 @@
 Read-only multi-market trading research platform. The hosted shadow/paper
 platform provides a Next.js control UI, FastAPI API, PostgreSQL persistence, a
 deterministic signal engine, and a 24/7 OANDA market-data collector.
+Historical M1 backtests run asynchronously through a PostgreSQL-backed worker
+and use the same strategy domain as hosted shadow evaluation.
 
 No order placement API or execution code exists in this phase.
+
+## Custom strategies
+
+Strategies live in
+`packages/trading-domain/src/goldie_domain/strategies/`. Each module defines:
+
+- a Pydantic parameter model with defaults and validation bounds;
+- a unique `name`, description, and `required_candles` calculation;
+- `evaluate(context, config)`, returning a `SignalDecision`;
+- diagnostic indicator values in `SignalDecision.inputs`.
+
+Register the strategy once in
+`packages/trading-domain/src/goldie_domain/registry.py`. It then appears in
+`GET /api/v1/strategies` and is available without a database migration in the
+bot editor, Shadow/Paper evaluation, and Backtests. Shared SMA, EMA, RSI, ATR,
+Bollinger Bands, momentum, and percentage-change helpers are in
+`goldie_domain.indicators`.
 
 ## Quick start
 
@@ -17,7 +36,8 @@ No order placement API or execution code exists in this phase.
 
 3. Open `http://localhost:3000`.
 4. Create a bot and activate its configuration.
-5. Start the OANDA collector after configuring its credentials:
+5. Open `Backtests` to queue a historical experiment from stored M1 candles.
+6. Start the OANDA collector after configuring its credentials:
 
    ```powershell
    uv sync --all-packages

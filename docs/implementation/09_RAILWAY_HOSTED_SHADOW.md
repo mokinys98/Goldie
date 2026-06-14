@@ -2,7 +2,7 @@
 
 ## Architecture
 
-Create one Railway project with five services:
+Create one Railway project with six services:
 
 1. PostgreSQL.
 2. `api` using `railway/api.toml`.
@@ -10,9 +10,12 @@ Create one Railway project with five services:
    set to `/apps/web`.
 4. `market-data-collector` using `railway/collector.toml`.
 5. `maintenance` using `railway/maintenance.toml`.
+6. `worker` using `railway/worker.toml`.
 
 Keep the API and collector at one replica. WebSocket fan-out is currently held
 in API process memory, and multiple collectors would duplicate ingestion.
+Keep the backtest worker at one replica until worker ownership and leases are
+introduced.
 
 ## Variables
 
@@ -26,6 +29,13 @@ LOCAL_ADMIN_PASSWORD=<strong password>
 AGENT_SERVICE_TOKEN=<long random shared service token>
 CORS_ORIGINS=https://<web-domain>
 QUOTE_RETENTION_DAYS=30
+```
+
+Worker:
+
+```text
+DATABASE_URL=<same private PostgreSQL URL as API>
+REDIS_URL=<Railway Redis URL>
 ```
 
 Web:

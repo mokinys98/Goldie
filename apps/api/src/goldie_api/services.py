@@ -2,7 +2,7 @@ import uuid
 from datetime import UTC, datetime
 
 from fastapi.encoders import jsonable_encoder
-from goldie_domain import BasicMomentumStrategy, BotConfiguration, CandleInput, MarketContext
+from goldie_domain import BotConfiguration, CandleInput, MarketContext, get_strategy
 from sqlalchemy import desc, func, select
 from sqlalchemy.orm import Session
 
@@ -82,6 +82,10 @@ def evaluate_latest_signal(db: Session, bot: Bot) -> tuple[Signal | None, bool]:
         return None, False
 
     config = BotConfiguration.model_validate(config_row.config)
+    strategy = get_strategy(config.strategy.name)
+    required_candles = strategy.required_candles(
+        strategy.parameters_model.model_validate(config.strategy.parameters)
+    )
     rows = list(
         db.scalars(
             select(Candle)
@@ -92,7 +96,7 @@ def evaluate_latest_signal(db: Session, bot: Bot) -> tuple[Signal | None, bool]:
                 Candle.is_complete.is_(True),
             )
             .order_by(desc(Candle.opened_at))
-            .limit(config.strategy.lookback_candles + 1)
+            .limit(required_candles)
         )
     )
     if not rows:
@@ -110,7 +114,7 @@ def evaluate_latest_signal(db: Session, bot: Bot) -> tuple[Signal | None, bool]:
     if duplicate is not None:
         return duplicate, False
 
-    decision = BasicMomentumStrategy().evaluate(
+    decision = strategy.evaluate(
         MarketContext(
             observed_at=as_utc(tick.observed_at),
             bid=tick.bid,
@@ -123,6 +127,7 @@ def evaluate_latest_signal(db: Session, bot: Bot) -> tuple[Signal | None, bool]:
                     high=row.high,
                     low=row.low,
                     close=row.close,
+                    tick_volume=row.tick_volume,
                     is_complete=row.is_complete,
                 )
                 for row in rows

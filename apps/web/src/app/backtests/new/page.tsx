@@ -1,0 +1,136 @@
+"use client";
+
+import { FormEvent, useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
+import { useQuery } from "@tanstack/react-query";
+import { api } from "@/lib/api";
+import type {
+  BacktestExperiment,
+  Bot,
+  ConfigVersion,
+  MarketFeed,
+} from "@/lib/types";
+
+function inputDate(daysAgo: number): string {
+  const value = new Date(Date.now() - daysAgo * 86400000);
+  value.setSeconds(0, 0);
+  return value.toISOString().slice(0, 16);
+}
+
+export default function NewBacktestPage() {
+  const router = useRouter();
+  const [botId, setBotId] = useState("");
+  const [configId, setConfigId] = useState("");
+  const [dateFrom, setDateFrom] = useState(inputDate(30));
+  const [dateTo, setDateTo] = useState(inputDate(0));
+  const [initialCapital, setInitialCapital] = useState("10000");
+  const [spread, setSpread] = useState("2");
+  const [slippage, setSlippage] = useState("1");
+  const [commission, setCommission] = useState("0");
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+  const bots = useQuery({
+    queryKey: ["bots"],
+    queryFn: () => api<Bot[]>("/api/v1/bots"),
+  });
+  const feeds = useQuery({
+    queryKey: ["market-feeds"],
+    queryFn: () => api<MarketFeed[]>("/api/v1/market-feeds"),
+  });
+  const configs = useQuery({
+    queryKey: ["bot-configs", botId],
+    queryFn: () => api<ConfigVersion[]>(`/api/v1/bots/${botId}/config-versions`),
+    enabled: Boolean(botId),
+  });
+  const selectedBot = bots.data?.find((bot) => bot.id === botId);
+  const selectedFeed = feeds.data?.find((feed) => feed.id === selectedBot?.market_feed_id);
+  const eligibleConfigs = (configs.data ?? []).filter((item) =>
+    ["ACTIVE", "VALIDATED", "SUPERSEDED"].includes(item.status),
+  );
+
+  useEffect(() => {
+    if (!botId && bots.data?.length) setBotId(bots.data[0].id);
+  }, [botId, bots.data]);
+  useEffect(() => {
+    setConfigId(eligibleConfigs[0]?.id ?? "");
+  }, [botId, configs.data]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  async function submit(event: FormEvent) {
+    event.preventDefault();
+    if (!selectedBot?.market_feed_id) {
+      setError("Selected bot has no market feed.");
+      return;
+    }
+    setBusy(true);
+    setError("");
+    try {
+      const experiment = await api<BacktestExperiment>("/api/v1/backtests", {
+        method: "POST",
+        body: JSON.stringify({
+          bot_id: botId,
+          config_version_id: configId,
+          market_feed_id: selectedBot.market_feed_id,
+          date_from: new Date(dateFrom).toISOString(),
+          date_to: new Date(dateTo).toISOString(),
+          initial_capital: initialCapital,
+          spread_points: spread,
+          slippage_points: slippage,
+          commission_per_trade: commission,
+        }),
+      });
+      router.push(`/backtests/${experiment.id}`);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Could not create backtest");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <section className="narrow-page">
+      <header className="page-header">
+        <div>
+          <span className="eyebrow">NEW EXPERIMENT</span>
+          <h1>Run backtest</h1>
+          <p>All dates are submitted as UTC. The selected configuration is snapshotted.</p>
+        </div>
+      </header>
+      <form className="panel form-grid" onSubmit={submit}>
+        <label>
+          Bot
+          <select required value={botId} onChange={(event) => setBotId(event.target.value)}>
+            <option value="">Select bot</option>
+            {(bots.data ?? []).map((bot) => (
+              <option key={bot.id} value={bot.id}>{bot.name}</option>
+            ))}
+          </select>
+        </label>
+        <label>
+          Configuration version
+          <select required value={configId} onChange={(event) => setConfigId(event.target.value)}>
+            <option value="">Select validated configuration</option>
+            {eligibleConfigs.map((item) => (
+              <option key={item.id} value={item.id}>Version {item.version} - {item.status}</option>
+            ))}
+          </select>
+        </label>
+        <label>Market feed<input disabled value={selectedFeed?.provider_symbol ?? "No feed"} /></label>
+        <div className="compact-form form-grid">
+          <label>From<input required type="datetime-local" value={dateFrom} onChange={(event) => setDateFrom(event.target.value)} /></label>
+          <label>To<input required type="datetime-local" value={dateTo} onChange={(event) => setDateTo(event.target.value)} /></label>
+          <label>Initial capital<input required type="number" min="1" step="0.01" value={initialCapital} onChange={(event) => setInitialCapital(event.target.value)} /></label>
+          <label>Spread points<input required type="number" min="0" step="0.01" value={spread} onChange={(event) => setSpread(event.target.value)} /></label>
+          <label>Slippage points<input required type="number" min="0" step="0.01" value={slippage} onChange={(event) => setSlippage(event.target.value)} /></label>
+          <label>Commission / trade<input required type="number" min="0" step="0.01" value={commission} onChange={(event) => setCommission(event.target.value)} /></label>
+        </div>
+        {error && <div className="error-box">{error}</div>}
+        <div className="button-row">
+          <button type="button" className="button button-secondary" onClick={() => router.back()}>Cancel</button>
+          <button className="button button-primary" disabled={busy || !configId}>
+            {busy ? "Queueing..." : "Run backtest"}
+          </button>
+        </div>
+      </form>
+    </section>
+  );
+}

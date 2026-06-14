@@ -10,4 +10,3 @@ dependencies = ["redis>=5.2,<7"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/goldie_worker"]
-

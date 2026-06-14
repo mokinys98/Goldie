@@ -9,7 +9,7 @@ from sqlalchemy import select, text
 
 from .db import SessionLocal, engine
 from .models import User
-from .routers import analytics, auth, bots, collector, feeds, status
+from .routers import analytics, auth, backtests, bots, collector, feeds, status, strategies
 from .security import hash_password
 from .settings import get_settings
 from .websocket import manager
@@ -44,6 +44,7 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    max_age=600,
 )
 
 app.include_router(auth.router)
@@ -52,6 +53,8 @@ app.include_router(feeds.router)
 app.include_router(collector.router)
 app.include_router(status.router)
 app.include_router(analytics.router)
+app.include_router(backtests.router)
+app.include_router(strategies.router)
 
 
 @app.exception_handler(Exception)

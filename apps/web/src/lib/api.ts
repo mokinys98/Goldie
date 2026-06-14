@@ -81,7 +81,22 @@ export function openBotStream(
   return () => socket.close();
 }
 
-export function openCollectorStream(onEvent: () => void): () => void {
+export type CollectorStreamEvent = {
+  event_type?: string;
+  market_feed_id?: string;
+  collector_instance_id?: string;
+  status?: string;
+  occurred_at?: string;
+  data?: {
+    observed_at?: string;
+    bid?: string;
+    ask?: string;
+  };
+};
+
+export function openCollectorStream(
+  onEvent: (event: CollectorStreamEvent) => void,
+): () => void {
   const token = getToken();
   const base = (process.env.NEXT_PUBLIC_WS_URL ?? "ws://localhost:8000").replace(
     /\/+$/,
@@ -92,8 +107,14 @@ export function openCollectorStream(onEvent: () => void): () => void {
     `${base}/api/v1/stream?token=${encodeURIComponent(token)}`,
   );
   socket.onmessage = (event) => {
-    const payload = JSON.parse(event.data) as { event_type?: string };
-    if (payload.event_type?.startsWith("collector.")) onEvent();
+    const payload = JSON.parse(event.data) as CollectorStreamEvent;
+    if (
+      payload.event_type?.startsWith("collector.")
+      || payload.event_type?.startsWith("market.")
+      || payload.event_type === "instrument.specification"
+    ) {
+      onEvent(payload);
+    }
   };
   return () => socket.close();
 }

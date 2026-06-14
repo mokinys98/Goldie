@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { botConfigSchema, defaultBotConfig } from "./config";
+import { botConfigSchema, defaultBotConfig, normalizeBotConfig } from "./config";
 
 describe("botConfigSchema", () => {
   it("accepts the shared default configuration", () => {
@@ -35,6 +35,20 @@ describe("botConfigSchema", () => {
       },
     };
     expect(botConfigSchema.safeParse(invalid).success).toBe(false);
+  });
+
+  it("normalizes legacy momentum parameters", () => {
+    const normalized = normalizeBotConfig({
+      strategy: {
+        name: "basic_momentum",
+        lookback_candles: 8,
+        min_momentum_points: 12,
+      },
+    } as never);
+    expect(normalized.strategy.parameters).toEqual({
+      lookback_candles: 8,
+      min_momentum_points: 12,
+    });
   });
 });
 

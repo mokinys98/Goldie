@@ -282,6 +282,7 @@ export default function BotDetailPage() {
             "Entry",
             "SL",
             "TP",
+            "Indicators",
             "Outcome",
           ]}
           rows={(signals.data ?? []).map((signal) => [
@@ -293,6 +294,7 @@ export default function BotDetailPage() {
             signal.entry_price ?? "--",
             signal.stop_loss ?? "--",
             signal.take_profit ?? "--",
+            formatInputs(signal.inputs),
             signal.outcome?.result ??
               signal.outcome?.skip_reason ??
               signal.outcome?.status ??
@@ -408,4 +410,10 @@ function symbolPrecision(
 ): number {
   const value = Number(specification?.display_precision);
   return Number.isInteger(value) && value >= 0 && value <= 10 ? value : 4;
+}
+
+function formatInputs(inputs: Record<string, unknown>): string {
+  return Object.entries(inputs)
+    .map(([key, value]) => `${key}=${String(value)}`)
+    .join(", ");
 }

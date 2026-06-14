@@ -1,10 +1,21 @@
 "use client";
 
 import { zodResolver } from "@hookform/resolvers/zod";
+import { useQuery } from "@tanstack/react-query";
+import { useState } from "react";
 import { useForm } from "react-hook-form";
 import { api } from "@/lib/api";
-import { botConfigSchema, defaultBotConfig } from "@/lib/config";
-import type { BotConfig, ConfigVersion } from "@/lib/types";
+import {
+  botConfigSchema,
+  defaultBotConfig,
+  normalizeBotConfig,
+} from "@/lib/config";
+import type {
+  BotConfig,
+  ConfigVersion,
+  StrategyMetadata,
+  StrategyParameterMetadata,
+} from "@/lib/types";
 import { StatusPill } from "./status-pill";
 
 export function ConfigEditor({
@@ -17,19 +28,17 @@ export function ConfigEditor({
   onChanged: () => void;
 }) {
   const latest = versions[0];
+  const strategies = useQuery({
+    queryKey: ["strategies"],
+    queryFn: () => api<StrategyMetadata[]>("/api/v1/strategies"),
+  });
+  const initialConfig = latest ? normalizeBotConfig(latest.config) : defaultBotConfig;
+  const [strategyName, setStrategyName] = useState(initialConfig.strategy.name);
   const form = useForm<BotConfig>({
     resolver: zodResolver(botConfigSchema),
-    values: latest
-      ? {
-          ...defaultBotConfig,
-          ...latest.config,
-          theoretical_trade: {
-            ...defaultBotConfig.theoretical_trade,
-            ...latest.config.theoretical_trade,
-          },
-        }
-      : defaultBotConfig,
+    defaultValues: initialConfig,
   });
+  const selected = strategies.data?.find((item) => item.name === strategyName);
 
   async function create(values: BotConfig) {
     await api(`/api/v1/bots/${botId}/config-versions`, {
@@ -42,6 +51,16 @@ export function ConfigEditor({
   async function transition(version: ConfigVersion, action: "validate" | "activate") {
     await api(`/api/v1/config-versions/${version.id}/${action}`, { method: "POST" });
     onChanged();
+  }
+
+  function selectStrategy(name: string) {
+    const metadata = strategies.data?.find((item) => item.name === name);
+    setStrategyName(name);
+    form.setValue("strategy.name", name, { shouldValidate: true });
+    form.setValue("strategy.parameters", metadata?.defaults ?? {}, {
+      shouldDirty: true,
+      shouldValidate: true,
+    });
   }
 
   if (!latest) return <div className="panel">No configuration found.</div>;
@@ -63,9 +82,41 @@ export function ConfigEditor({
             <input {...form.register("market.symbol")} readOnly />
             <small>Controlled by the bot&apos;s assigned market feed.</small>
           </label>
-          <label>Timeframe<input {...form.register("market.timeframe")} disabled /></label>
-          <label>Lookback candles<input type="number" {...form.register("strategy.lookback_candles")} /></label>
-          <label>Momentum points<input type="number" step="0.01" {...form.register("strategy.min_momentum_points")} /></label>
+          <label>Timeframe<input {...form.register("market.timeframe")} readOnly /></label>
+          <label>
+            Strategy
+            <select
+              name="strategy.name"
+              value={strategyName}
+              disabled={strategies.isLoading || !strategies.data?.length}
+              onChange={(event) => selectStrategy(event.target.value)}
+            >
+              {!strategies.data?.length && (
+                <option value="">Loading strategies...</option>
+              )}
+              {(strategies.data ?? []).map((strategy) => (
+                <option key={strategy.name} value={strategy.name}>
+                  {strategy.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            Required history
+            <input value={selected ? `${selected.required_candles} M1 candles` : "--"} disabled />
+          </label>
+          {selected && (
+            <p className="fieldset-description">{selected.description}</p>
+          )}
+          {selected &&
+            Object.entries(selected.parameters).map(([name, metadata]) => (
+              <StrategyParameter
+                key={name}
+                name={name}
+                metadata={metadata}
+                register={form.register}
+              />
+            ))}
         </fieldset>
         <fieldset>
           <legend>Filters</legend>
@@ -84,7 +135,7 @@ export function ConfigEditor({
           <label>Take profit points<input type="number" step="0.01" {...form.register("theoretical_trade.take_profit_points")} /></label>
           <label>Risk per trade %<input type="number" step="0.01" {...form.register("theoretical_trade.risk_per_trade_pct")} /></label>
           <label>Maximum duration minutes<input type="number" {...form.register("theoretical_trade.max_trade_duration_minutes")} /></label>
-            <label>Maximum open shadow positions<input type="number" min="1" max="1" {...form.register("theoretical_trade.max_open_shadow_positions")} /></label>
+          <label>Maximum open shadow positions<input type="number" min="1" max="1" {...form.register("theoretical_trade.max_open_shadow_positions")} /></label>
         </fieldset>
         {Object.keys(form.formState.errors).length > 0 && (
           <div className="error-box">Configuration contains invalid values.</div>
@@ -126,3 +177,36 @@ export function ConfigEditor({
   );
 }
 
+function StrategyParameter({
+  name,
+  metadata,
+  register,
+}: {
+  name: string;
+  metadata: StrategyParameterMetadata;
+  register: ReturnType<typeof useForm<BotConfig>>["register"];
+}) {
+  const label = metadata.title ?? name.replaceAll("_", " ");
+  if (metadata.type === "boolean") {
+    return (
+      <label className="checkbox-row">
+        <input type="checkbox" {...register(`strategy.parameters.${name}`)} />
+        {label}
+      </label>
+    );
+  }
+  return (
+    <label>
+      {label}
+      <input
+        type="number"
+        step={metadata.type === "integer" ? 1 : "any"}
+        min={metadata.minimum ?? metadata.exclusiveMinimum}
+        max={metadata.maximum}
+        {...register(`strategy.parameters.${name}`, {
+          valueAsNumber: true,
+        })}
+      />
+    </label>
+  );
+}

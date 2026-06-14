@@ -24,7 +24,7 @@ export default function CollectorFeedPage() {
   const detail = useQuery({
     queryKey: ["collector-feed", feedId],
     queryFn: () => api<CollectorFeedDetail>(`/api/v1/collector/feeds/${feedId}`),
-    refetchInterval: 5000,
+    refetchInterval: 60_000,
   });
   const settings = useQuery({
     queryKey: ["collector-settings"],
@@ -33,10 +33,45 @@ export default function CollectorFeedPage() {
 
   useEffect(
     () =>
-      openCollectorStream(() => {
-        client.invalidateQueries({ queryKey: ["collector-feed", feedId] });
-        client.invalidateQueries({ queryKey: ["collector-data", feedId] });
-        client.invalidateQueries({ queryKey: ["collector-settings"] });
+      openCollectorStream((event) => {
+        if (event.event_type === "market.quote" && event.market_feed_id === feedId) {
+          client.setQueryData<CollectorFeedDetail>(
+            ["collector-feed", feedId],
+            (current) => {
+              if (!current || !event.data?.observed_at || !event.data.bid || !event.data.ask) {
+                return current;
+              }
+              return {
+                ...current,
+                feed: {
+                  ...current.feed,
+                  data_lag_seconds: 0,
+                  latest_tick: {
+                    observed_at: event.data.observed_at,
+                    bid: event.data.bid,
+                    ask: event.data.ask,
+                    spread: current.feed.latest_tick?.spread ?? "0",
+                  },
+                },
+              };
+            },
+          );
+          return;
+        }
+        if (event.event_type === "collector.configuration") {
+          void client.invalidateQueries({ queryKey: ["collector-settings"] });
+        }
+        if (
+          event.market_feed_id === feedId
+          && ["market.candle", "collector.command", "instrument.specification"].includes(
+            event.event_type ?? "",
+          )
+        ) {
+          void client.invalidateQueries({ queryKey: ["collector-feed", feedId] });
+          if (event.event_type === "market.candle") {
+            void client.invalidateQueries({ queryKey: ["collector-data", feedId] });
+          }
+        }
       }),
     [client, feedId],
   );

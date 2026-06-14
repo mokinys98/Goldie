@@ -27,6 +27,12 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           >
             Collector
           </Link>
+          <Link
+            className={pathname.startsWith("/backtests") ? "active" : ""}
+            href="/backtests"
+          >
+            Backtests
+          </Link>
         </nav>
         <div className="sidebar-bottom">
           <span className="readonly-badge">READ ONLY</span>

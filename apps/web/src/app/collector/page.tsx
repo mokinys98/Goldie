@@ -18,7 +18,7 @@ export default function CollectorPage() {
   const overview = useQuery({
     queryKey: ["collector-overview"],
     queryFn: () => api<CollectorOverview>("/api/v1/collector/overview"),
-    refetchInterval: 5000,
+    refetchInterval: 60_000,
   });
   const settings = useQuery({
     queryKey: ["collector-settings"],
@@ -27,9 +27,59 @@ export default function CollectorPage() {
 
   useEffect(
     () =>
-      openCollectorStream(() => {
-        client.invalidateQueries({ queryKey: ["collector-overview"] });
-        client.invalidateQueries({ queryKey: ["collector-settings"] });
+      openCollectorStream((event) => {
+        if (event.event_type === "market.quote" && event.market_feed_id && event.data) {
+          client.setQueryData<CollectorOverview>(["collector-overview"], (current) => {
+            if (!current || !event.data?.observed_at || !event.data.bid || !event.data.ask) {
+              return current;
+            }
+            return {
+              ...current,
+              feeds: current.feeds.map((feed) =>
+                feed.id === event.market_feed_id
+                  ? {
+                      ...feed,
+                      data_lag_seconds: 0,
+                      latest_tick: {
+                        observed_at: event.data!.observed_at!,
+                        bid: event.data!.bid!,
+                        ask: event.data!.ask!,
+                        spread: feed.latest_tick?.spread ?? "0",
+                      },
+                    }
+                  : feed,
+              ),
+            };
+          });
+          return;
+        }
+        if (event.event_type === "collector.heartbeat") {
+          client.setQueryData<CollectorOverview>(["collector-overview"], (current) => {
+            if (!current?.instance || current.instance.id !== event.collector_instance_id) {
+              return current;
+            }
+            return {
+              ...current,
+              instance: {
+                ...current.instance,
+                status: event.status ?? current.instance.status,
+                reported_status: event.status ?? current.instance.reported_status,
+                last_heartbeat_at: event.occurred_at ?? current.instance.last_heartbeat_at,
+              },
+            };
+          });
+          return;
+        }
+        if (event.event_type === "collector.configuration") {
+          void client.invalidateQueries({ queryKey: ["collector-settings"] });
+        }
+        if (
+          ["market.candle", "collector.command", "collector.configuration"].includes(
+            event.event_type ?? "",
+          )
+        ) {
+          void client.invalidateQueries({ queryKey: ["collector-overview"] });
+        }
       }),
     [client],
   );
