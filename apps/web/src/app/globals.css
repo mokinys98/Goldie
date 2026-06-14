@@ -102,9 +102,7 @@ legend { color: var(--gold); padding: 0 8px; font-size: 12px; font-weight: 800; 
 .key-values div:last-child { border-bottom: 0; }
 .key-values dt { color: var(--muted); text-transform: capitalize; font-size: 12px; }
 .key-values dd { margin: 0; text-align: right; font-size: 12px; overflow-wrap: anywhere; }
-.chart { height: 270px; position: relative; color: var(--gold-bright); background: linear-gradient(#ffffff06 1px, transparent 1px), linear-gradient(90deg, #ffffff06 1px, transparent 1px); background-size: 40px 40px; border-radius: 7px; overflow: hidden; }
-.chart svg { width: 100%; height: 100%; padding: 12px; }
-.chart-labels { position: absolute; inset: 8px 10px auto; display: flex; justify-content: space-between; color: var(--muted); font-size: 10px; }
+.chart { height: 360px; position: relative; background: #111318; border: 1px solid var(--line); border-radius: 7px; overflow: hidden; }
 .chart-empty { height: 220px; display: grid; place-items: center; color: var(--muted); border: 1px dashed var(--line); border-radius: 7px; }
 .performance-stack { display: grid; gap: 18px; }
 .breakdown-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
