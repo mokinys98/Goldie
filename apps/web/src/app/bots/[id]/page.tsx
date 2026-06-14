@@ -16,6 +16,7 @@ import type {
 } from "@/lib/types";
 import { ConfigEditor } from "@/components/config-editor";
 import { MarketChart } from "@/components/market-chart";
+import { useNotifications } from "@/components/notification-center";
 import { PerformancePanel } from "@/components/performance-panel";
 import { StatusPill } from "@/components/status-pill";
 
@@ -33,7 +34,10 @@ export default function BotDetailPage() {
   const router = useRouter();
   const { id } = useParams<{ id: string }>();
   const client = useQueryClient();
+  const { notify } = useNotifications();
   const [tab, setTab] = useState<Tab>("Overview");
+  const [selectedFeedId, setSelectedFeedId] = useState("");
+  const [isAssigningFeed, setIsAssigningFeed] = useState(false);
 
   const bot = useQuery({
     queryKey: ["bot", id],
@@ -82,6 +86,10 @@ export default function BotDetailPage() {
     [client, id],
   );
 
+  useEffect(() => {
+    setSelectedFeedId(bot.data?.market_feed_id ?? "");
+  }, [bot.data?.market_feed_id]);
+
   const refreshConfig = () => {
     client.invalidateQueries({ queryKey: ["configs", id] });
     client.invalidateQueries({ queryKey: ["bot", id] });
@@ -89,15 +97,38 @@ export default function BotDetailPage() {
     client.invalidateQueries({ queryKey: ["runs", id] });
   };
 
-  const assignFeed = async (marketFeedId: string) => {
-    await api<Bot>(`/api/v1/bots/${id}/market-feed`, {
-      method: "PUT",
-      body: JSON.stringify({ market_feed_id: marketFeedId }),
-    });
-    await Promise.all([
-      client.invalidateQueries({ queryKey: ["bot", id] }),
-      client.invalidateQueries({ queryKey: ["bot-status", id] }),
-    ]);
+  const assignFeed = async () => {
+    if (!selectedFeedId || selectedFeedId === bot.data?.market_feed_id) return;
+    const selectedFeed = feeds.data?.find((feed) => feed.id === selectedFeedId);
+    setIsAssigningFeed(true);
+    try {
+      await api<Bot>(`/api/v1/bots/${id}/market-feed`, {
+        method: "PUT",
+        body: JSON.stringify({ market_feed_id: selectedFeedId }),
+      });
+      await Promise.all([
+        client.invalidateQueries({ queryKey: ["bot", id] }),
+        client.invalidateQueries({ queryKey: ["bot-status", id] }),
+      ]);
+      notify({
+        kind: "success",
+        position: "right",
+        title: "Market feed updated",
+        message: selectedFeed
+          ? `${selectedFeed.provider.toUpperCase()} ${selectedFeed.provider_symbol} was assigned successfully.`
+          : "The selected market feed was assigned successfully.",
+      });
+    } catch (caught) {
+      setSelectedFeedId(bot.data?.market_feed_id ?? "");
+      notify({
+        kind: "error",
+        position: "left",
+        title: "Market feed update failed",
+        message: caught instanceof Error ? caught.message : "Could not assign market feed.",
+      });
+    } finally {
+      setIsAssigningFeed(false);
+    }
   };
 
   if (bot.isLoading) return <div className="panel">Loading bot...</div>;
@@ -150,18 +181,32 @@ export default function BotDetailPage() {
           <Metric label="Max drawdown" value={money(performance.data?.max_drawdown)} />
           <div className="panel grid-span-2">
             <h2>Market feed</h2>
-            <select
-              value={bot.data.market_feed_id ?? ""}
-              onChange={(event) => void assignFeed(event.target.value)}
-              disabled={!feeds.data?.length}
-            >
-              <option value="">No feed assigned</option>
-              {(feeds.data ?? []).map((feed) => (
-                <option key={feed.id} value={feed.id}>
-                  {feed.provider.toUpperCase()} {feed.provider_symbol} ({feed.status})
-                </option>
-              ))}
-            </select>
+            <div className="market-feed-control">
+              <select
+                value={selectedFeedId}
+                onChange={(event) => setSelectedFeedId(event.target.value)}
+                disabled={!feeds.data?.length || isAssigningFeed}
+              >
+                <option value="">No feed assigned</option>
+                {(feeds.data ?? []).map((feed) => (
+                  <option key={feed.id} value={feed.id}>
+                    {feed.provider.toUpperCase()} {feed.provider_symbol} ({feed.status})
+                  </option>
+                ))}
+              </select>
+              <button
+                className="button button-primary"
+                disabled={
+                  !selectedFeedId ||
+                  selectedFeedId === bot.data.market_feed_id ||
+                  isAssigningFeed
+                }
+                onClick={() => void assignFeed()}
+                type="button"
+              >
+                {isAssigningFeed ? "Confirming..." : "Confirm change"}
+              </button>
+            </div>
           </div>
           <div className="panel grid-span-2">
             <h2>Completed M1 close</h2>

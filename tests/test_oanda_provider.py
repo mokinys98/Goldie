@@ -3,6 +3,7 @@ from decimal import Decimal
 from types import SimpleNamespace
 
 import pytest
+from goldie_collector.__main__ import CollectorSupervisor
 from goldie_collector.client import GoldieApiClient
 from goldie_collector.provider import (
     OandaApiError,
@@ -242,3 +243,33 @@ def test_collector_settings_reject_invalid_instrument() -> None:
             oanda_account_id="practice-account",
             instruments="EURUSD",
         )
+
+
+def test_remote_collector_settings_are_validated_and_coerced() -> None:
+    base = CollectorSettings(
+        api_url="https://goldie-api.example",
+        agent_token="agent-token",
+        oanda_api_token="oanda-token",
+        oanda_account_id="practice-account",
+    )
+    supervisor = object.__new__(CollectorSupervisor)
+    supervisor.base_settings = base
+
+    settings = supervisor.effective_settings(
+        "GBP_USD",
+        {
+            "quote_interval_seconds": "7.5",
+            "candle_poll_seconds": "20",
+            "heartbeat_seconds": "15",
+            "backfill_days": "14",
+            "backfill_batch_size": "500",
+            "configuration_retry_seconds": "120",
+        },
+        {},
+    )
+
+    assert settings.provider_symbol == "GBP_USD"
+    assert settings.quote_interval_seconds == 7.5
+    assert isinstance(settings.quote_interval_seconds, float)
+    assert settings.backfill_days == 14
+    assert isinstance(settings.backfill_days, int)

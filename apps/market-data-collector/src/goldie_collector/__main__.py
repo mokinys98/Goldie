@@ -215,7 +215,10 @@ class CollectorSupervisor:
             )
         }
         values.update(overrides)
-        return self.base_settings.for_instrument(symbol).model_copy(update=values)
+        instrument_settings = self.base_settings.for_instrument(symbol)
+        return CollectorSettings.model_validate(
+            instrument_settings.model_dump() | values
+        )
 
     def reconcile(self, control: dict) -> None:
         configuration = control["configuration"]
