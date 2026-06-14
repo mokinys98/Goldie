@@ -61,6 +61,15 @@ Redis is unavailable.
 Detailed setup and acceptance checks are in
 [`docs/implementation`](docs/implementation/00_LOCAL_MVP_ROADMAP.md).
 
+Run the deterministic 365-day M1 backtest benchmark with:
+
+```powershell
+uv run python benchmarks/backtest_365.py
+```
+
+The benchmark compares the optimized streaming evaluator with the legacy
+strategy path and fails if results differ or the speedup is below 3x.
+
 Railway deployment is documented in
 [`09_RAILWAY_HOSTED_SHADOW.md`](docs/implementation/09_RAILWAY_HOSTED_SHADOW.md).
 

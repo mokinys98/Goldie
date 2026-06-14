@@ -1,11 +1,18 @@
+from collections import deque
+from datetime import datetime
 from decimal import Decimal
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from ..indicators import ema_series, rsi
-from ..models import MarketContext, SignalDecision, SignalType
-from ..strategy import common_guard, completed, trade_prices
+from ..models import CandleInput, MarketContext, SignalDecision, SignalType
+from ..strategy import (
+    BacktestGuards,
+    common_guard,
+    completed,
+    trade_prices,
+)
 
 
 class EmaRsiParameters(BaseModel):
@@ -35,6 +42,20 @@ class EmaRsiStrategy:
         values = EmaRsiParameters.model_validate(parameters)
         crossover_extra = 1 if values.require_crossover else 0
         return max(values.slow_ema_period + crossover_extra, values.rsi_period + 1)
+
+    def create_backtest_evaluator(
+        self,
+        config: Any,
+        *,
+        point: Decimal,
+        spread_points: Decimal,
+    ) -> "_EmaRsiBacktestEvaluator":
+        parameters = EmaRsiParameters.model_validate(config.strategy.parameters)
+        return _EmaRsiBacktestEvaluator(
+            parameters=parameters,
+            point=point,
+            guards=BacktestGuards.from_config(config, spread_points=spread_points),
+        )
 
     def evaluate(self, context: MarketContext, config: Any) -> SignalDecision:
         candles = completed(context)
@@ -107,3 +128,123 @@ class EmaRsiStrategy:
             take_profit=take_profit,
             **guard,
         )
+
+
+def _ema_tail(
+    values: deque[Decimal],
+    period: int,
+    period_decimal: Decimal,
+    multiplier: Decimal,
+) -> tuple[Decimal, Decimal | None]:
+    # Preserve the legacy bounded-window Decimal operation order exactly.
+    iterator = iter(values)
+    seed = Decimal("0")
+    for _ in range(period):
+        seed += next(iterator)
+    current = seed / period_decimal
+    previous = None
+    for value in iterator:
+        previous = current
+        current = (value - current) * multiplier + current
+    return current, previous
+
+
+def _rsi_tail(
+    values: deque[Decimal],
+    period: int,
+    period_decimal: Decimal,
+) -> Decimal:
+    iterator = iter(values)
+    previous = next(iterator)
+    skip = len(values) - period - 1
+    gain = Decimal("0")
+    loss = Decimal("0")
+    for index, current in enumerate(iterator):
+        if index >= skip:
+            change = current - previous
+            if change > 0:
+                gain += change
+            elif change < 0:
+                loss -= change
+        previous = current
+    average_gain = gain / period_decimal
+    average_loss = loss / period_decimal
+    if average_loss == 0:
+        return Decimal("100") if average_gain > 0 else Decimal("50")
+    strength = average_gain / average_loss
+    return Decimal("100") - Decimal("100") / (Decimal("1") + strength)
+
+
+class _EmaRsiBacktestEvaluator:
+    def __init__(
+        self,
+        *,
+        parameters: EmaRsiParameters,
+        point: Decimal,
+        guards: BacktestGuards,
+    ) -> None:
+        self.parameters = parameters
+        self.point = point
+        self.guards = guards
+        self.fast_period_decimal = Decimal(parameters.fast_ema_period)
+        self.slow_period_decimal = Decimal(parameters.slow_ema_period)
+        self.rsi_period_decimal = Decimal(parameters.rsi_period)
+        self.fast_multiplier = Decimal("2") / Decimal(parameters.fast_ema_period + 1)
+        self.slow_multiplier = Decimal("2") / Decimal(parameters.slow_ema_period + 1)
+        crossover_extra = 1 if parameters.require_crossover else 0
+        required = max(
+            parameters.slow_ema_period + crossover_extra,
+            parameters.rsi_period + 1,
+        )
+        self.closes: deque[Decimal] = deque(maxlen=required)
+
+    def evaluate(
+        self,
+        candle: CandleInput,
+        observed_at: datetime,
+    ) -> tuple[SignalType, str]:
+        self.closes.append(candle.close)
+        rejection = self.guards.rejection_reason(observed_at)
+        if rejection:
+            return SignalType.NO_TRADE, rejection
+        if len(self.closes) < self.closes.maxlen:
+            return (
+                SignalType.NO_TRADE,
+                "INSUFFICIENT_COMPLETED_CANDLES",
+            )
+        fast, previous_fast = _ema_tail(
+            self.closes,
+            self.parameters.fast_ema_period,
+            self.fast_period_decimal,
+            self.fast_multiplier,
+        )
+        slow, previous_slow = _ema_tail(
+            self.closes,
+            self.parameters.slow_ema_period,
+            self.slow_period_decimal,
+            self.slow_multiplier,
+        )
+        rsi_value = _rsi_tail(
+            self.closes,
+            self.parameters.rsi_period,
+            self.rsi_period_decimal,
+        )
+        trend_points = (fast - slow) / self.point
+        crossed_up = crossed_down = True
+        if self.parameters.require_crossover:
+            assert previous_fast is not None and previous_slow is not None
+            crossed_up = previous_fast <= previous_slow and fast > slow
+            crossed_down = previous_fast >= previous_slow and fast < slow
+        if (
+            trend_points >= self.parameters.min_trend_points
+            and rsi_value <= self.parameters.buy_rsi_max
+            and crossed_up
+        ):
+            return SignalType.BUY, "EMA_RSI_BUY"
+        if (
+            trend_points <= -self.parameters.min_trend_points
+            and rsi_value >= self.parameters.sell_rsi_min
+            and crossed_down
+        ):
+            return SignalType.SELL, "EMA_RSI_SELL"
+        return SignalType.NO_TRADE, "EMA_RSI_CONDITIONS_NOT_MET"

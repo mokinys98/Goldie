@@ -55,6 +55,11 @@ DATABASE_URL=<same private PostgreSQL URL as API>
 REDIS_URL=<same private Redis URL as API>
 ```
 
+Keep one backtest worker replica and allocate at least one dedicated vCPU.
+More CPU improves one backtest; additional replicas only run separate
+backtests concurrently. Monitor worker CPU and memory in Railway Metrics
+during a 365-day M1 run.
+
 Ingestion worker:
 
 ```text
@@ -202,5 +207,6 @@ is no longer limited to one API process. Scale the API only after measuring
 database connection-pool capacity.
 
 Backtest workers can scale horizontally because PostgreSQL job claims are
-atomic. Ingestion workers can scale through their Redis consumer group, but
+atomic, but one backtest is not split across processes. Keep one replica for
+the initial deployment. Ingestion workers can scale through their Redis consumer group, but
 each replica must use a unique consumer name.

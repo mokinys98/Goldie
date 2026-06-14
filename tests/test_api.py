@@ -9,11 +9,11 @@ os.environ["LOCAL_ADMIN_PASSWORD"] = "test-password"
 os.environ["AGENT_SERVICE_TOKEN"] = "test-agent-token"
 
 from fastapi.testclient import TestClient
-from sqlalchemy import func, select
+from sqlalchemy import event, func, select
 from sqlalchemy.orm import Session
 
 from goldie_api.db import Base, SessionLocal, engine
-from goldie_api.backtests import execute_backtest
+from goldie_api.backtests import BacktestProgressReporter, execute_backtest
 from goldie_api.maintenance import prune_market_quotes
 from goldie_api.main import app
 from goldie_api.models import (
@@ -337,6 +337,7 @@ def test_backtest_api_execution_and_exports() -> None:
         )
         assert specification.status_code == 202
         start = datetime(2026, 1, 5, 10, 0, tzinfo=UTC)
+        candle_count = 2105
         candles = [
             {
                 "opened_at": (start + timedelta(minutes=index)).isoformat(),
@@ -347,7 +348,7 @@ def test_backtest_api_execution_and_exports() -> None:
                 "volume": 100,
                 "complete": True,
             }
-            for index in range(12)
+            for index in range(candle_count)
         ]
         stored = client.post(
             f"/api/v1/market-feeds/{feed_id}/candles/batch",
@@ -363,7 +364,7 @@ def test_backtest_api_execution_and_exports() -> None:
                 "config_version_id": config["id"],
                 "market_feed_id": feed_id,
                 "date_from": start.isoformat(),
-                "date_to": (start + timedelta(minutes=12)).isoformat(),
+                "date_to": (start + timedelta(minutes=candle_count)).isoformat(),
                 "initial_capital": "10000",
                 "spread_points": "2",
                 "slippage_points": "1",
@@ -372,11 +373,27 @@ def test_backtest_api_execution_and_exports() -> None:
         )
         assert created.status_code == 201
         experiment_id = uuid.UUID(created.json()["id"])
-        with SessionLocal() as db:
-            experiment = db.get(BacktestExperiment, experiment_id)
-            experiment.status = "RUNNING"
-            db.commit()
-            execute_backtest(db, experiment_id)
+        statements = []
+
+        def capture_statement(
+            _connection,
+            _cursor,
+            statement,
+            _parameters,
+            _context,
+            _executemany,
+        ) -> None:
+            statements.append(statement)
+
+        event.listen(engine, "before_cursor_execute", capture_statement)
+        try:
+            with SessionLocal() as db:
+                experiment = db.get(BacktestExperiment, experiment_id)
+                experiment.status = "RUNNING"
+                db.commit()
+                execute_backtest(db, experiment_id)
+        finally:
+            event.remove(engine, "before_cursor_execute", capture_statement)
 
         detail = client.get(f"/api/v1/backtests/{experiment_id}", headers=headers)
         trades = client.get(
@@ -393,13 +410,57 @@ def test_backtest_api_execution_and_exports() -> None:
         )
         assert detail.status_code == 200
         assert detail.json()["status"] == "SUCCEEDED"
-        assert detail.json()["progress"]["processed"] == 12
+        assert detail.json()["progress"]["processed"] == candle_count
         assert trades.status_code == 200
         assert trades.json()["total"] >= 1
         assert csv_export.status_code == 200
         assert csv_export.text.startswith("id,experiment_id,direction")
         assert json_export.status_code == 200
         assert json_export.json()["experiment"]["id"] == str(experiment_id)
+        candle_select = next(
+            statement
+            for statement in statements
+            if "FROM candles" in statement and "ORDER BY candles.opened_at" in statement
+        )
+        selected_columns = candle_select.split("FROM candles", 1)[0]
+        assert "candles.id" not in selected_columns
+        assert "candles.opened_at" in selected_columns
+        assert "candles.tick_volume" in selected_columns
+
+
+def test_backtest_progress_reporter_throttles_and_honors_cancel() -> None:
+    class FakeDialect:
+        name = "sqlite"
+
+    class FakeBind:
+        dialect = FakeDialect()
+
+    class FakeSession:
+        def get_bind(self):
+            return FakeBind()
+
+    now = [0.0]
+    writes = []
+    reporter = BacktestProgressReporter(
+        FakeSession(),
+        uuid.uuid4(),
+        clock=lambda: now[0],
+    )
+    reporter._write = lambda _db, processed, total: (
+        writes.append((processed, total)) or True
+    )
+
+    assert reporter(100, 5000)
+    assert writes == []
+    assert reporter(2000, 5000)
+    assert writes == [(2000, 5000)]
+    now[0] = 1.1
+    assert reporter(2100, 5000)
+    assert writes[-1] == (2100, 5000)
+    reporter._write = lambda _db, _processed, _total: False
+    assert reporter(5000, 5000) is False
+
+
 def test_shadow_trade_and_performance_endpoints() -> None:
     Base.metadata.drop_all(engine)
     Base.metadata.create_all(engine)

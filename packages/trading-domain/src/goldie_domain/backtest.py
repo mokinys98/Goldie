@@ -1,8 +1,8 @@
-from collections import Counter
+from collections import Counter, deque
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from decimal import Decimal
-from typing import Callable
 
 from .config import BotConfiguration
 from .models import CandleInput, MarketContext, SignalType
@@ -26,6 +26,17 @@ class BacktestInstrument:
     volume_min: Decimal
     volume_max: Decimal
     volume_step: Decimal
+
+
+@dataclass(frozen=True, slots=True)
+class BacktestCandle:
+    opened_at: datetime
+    open: Decimal
+    high: Decimal
+    low: Decimal
+    close: Decimal
+    tick_volume: int = 0
+    is_complete: bool = True
 
 
 @dataclass(frozen=True)
@@ -89,11 +100,35 @@ class BacktestEngine:
         costs: BacktestCosts,
         initial_capital: Decimal,
         progress_callback: Callable[[int, int], bool] | None = None,
+        use_prepared_strategy: bool = True,
     ) -> BacktestResult:
         ordered = sorted(
             (item for item in candles if item.is_complete),
             key=lambda item: item.opened_at,
         )
+        return self.run_stream(
+            candles=ordered,
+            total_candles=len(ordered),
+            config=config,
+            instrument=instrument,
+            costs=costs,
+            initial_capital=initial_capital,
+            progress_callback=progress_callback,
+            use_prepared_strategy=use_prepared_strategy,
+        )
+
+    def run_stream(
+        self,
+        *,
+        candles: Iterable[CandleInput | BacktestCandle],
+        total_candles: int,
+        config: BotConfiguration,
+        instrument: BacktestInstrument,
+        costs: BacktestCosts,
+        initial_capital: Decimal,
+        progress_callback: Callable[[int, int], bool] | None = None,
+        use_prepared_strategy: bool = True,
+    ) -> BacktestResult:
         reasons: Counter[str] = Counter()
         trades: list[BacktestTrade] = []
         position: _OpenPosition | None = None
@@ -101,14 +136,31 @@ class BacktestEngine:
         balance = initial_capital
         expected_step = timedelta(minutes=1)
         strategy = self.strategy or get_strategy(config.strategy.name)
-        required_candles = strategy.required_candles(
-            strategy.parameters_model.model_validate(config.strategy.parameters)
+        evaluator_factory = getattr(strategy, "create_backtest_evaluator", None)
+        prepared = (
+            evaluator_factory(
+                config,
+                point=instrument.point,
+                spread_points=costs.spread_points,
+            )
+            if use_prepared_strategy and evaluator_factory is not None
+            else None
         )
+        history: deque[CandleInput | BacktestCandle] | None = None
+        if prepared is None:
+            parameters = strategy.parameters_model.model_validate(
+                config.strategy.parameters
+            )
+            history = deque(maxlen=strategy.required_candles(parameters))
+        previous: CandleInput | BacktestCandle | None = None
+        last: CandleInput | BacktestCandle | None = None
+        processed = 0
 
-        for index, candle in enumerate(ordered):
-            if progress_callback and not progress_callback(index, len(ordered)):
+        for candle in candles:
+            if not candle.is_complete:
+                continue
+            if progress_callback and not progress_callback(processed, total_candles):
                 raise BacktestCancelled
-            previous = ordered[index - 1] if index else None
             if previous and candle.opened_at - previous.opened_at > expected_step:
                 if position is not None:
                     trade = self._close(
@@ -153,28 +205,36 @@ class BacktestEngine:
                     balance += closed.net_pnl
                     position = None
 
-            history = ordered[max(0, index + 1 - required_candles) : index + 1]
-            half_spread = costs.spread_points * instrument.point / Decimal("2")
             observed_at = candle.opened_at + expected_step
-            decision = strategy.evaluate(
-                MarketContext(
-                    observed_at=observed_at,
-                    evaluated_at=observed_at,
-                    bid=candle.close - half_spread,
-                    ask=candle.close + half_spread,
-                    point=instrument.point,
-                    candles=history,
-                ),
-                config,
-            )
-            reasons[decision.reason_code] += 1
-            if position is None and pending is None and decision.signal != SignalType.NO_TRADE:
-                pending = (decision.signal.value, observed_at)
-            elif decision.signal != SignalType.NO_TRADE:
+            if prepared is not None:
+                decision_signal, reason_code = prepared.evaluate(candle, observed_at)
+            else:
+                half_spread = costs.spread_points * instrument.point / Decimal("2")
+                assert history is not None
+                history.append(candle)
+                decision = strategy.evaluate(
+                    MarketContext(
+                        observed_at=observed_at,
+                        evaluated_at=observed_at,
+                        bid=candle.close - half_spread,
+                        ask=candle.close + half_spread,
+                        point=instrument.point,
+                        candles=list(history),
+                    ),
+                    config,
+                )
+                decision_signal = decision.signal
+                reason_code = decision.reason_code
+            reasons[reason_code] += 1
+            if position is None and pending is None and decision_signal != SignalType.NO_TRADE:
+                pending = (decision_signal.value, observed_at)
+            elif decision_signal != SignalType.NO_TRADE:
                 reasons["OPEN_POSITION_EXISTS"] += 1
+            previous = candle
+            last = candle
+            processed += 1
 
-        if position is not None and ordered:
-            last = ordered[-1]
+        if position is not None and last is not None:
             raw_exit = self._executable_close(position.direction, last.close, instrument, costs)
             trade = self._close(
                 position,
@@ -185,7 +245,7 @@ class BacktestEngine:
                 costs=costs,
             )
             trades.append(trade)
-        if progress_callback and not progress_callback(len(ordered), len(ordered)):
+        if progress_callback and not progress_callback(processed, total_candles):
             raise BacktestCancelled
 
         return BacktestResult(

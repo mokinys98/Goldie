@@ -60,6 +60,39 @@ def settings() -> tuple[BotConfiguration, BacktestInstrument, BacktestCosts]:
     return config, instrument, costs
 
 
+def ema_settings(*, require_crossover: bool) -> BotConfiguration:
+    return BotConfiguration.model_validate(
+        {
+            "market": {"symbol": "XAUUSD", "timeframe": "M1"},
+            "strategy": {
+                "name": "ema_rsi",
+                "parameters": {
+                    "fast_ema_period": 3,
+                    "slow_ema_period": 7,
+                    "rsi_period": 5,
+                    "buy_rsi_max": "65",
+                    "sell_rsi_min": "35",
+                    "min_trend_points": "1",
+                    "require_crossover": require_crossover,
+                },
+            },
+            "filters": {"max_spread_points": "20", "stale_after_seconds": 15},
+            "session": {
+                "timezone": "UTC",
+                "start_time": "00:00:00",
+                "end_time": "23:59:59",
+            },
+            "theoretical_trade": {
+                "stop_loss_points": "5",
+                "take_profit_points": "8",
+                "risk_per_trade_pct": "1",
+                "max_trade_duration_minutes": 5,
+                "max_open_shadow_positions": 1,
+            },
+        }
+    )
+
+
 def test_signal_opens_only_on_next_candle_and_is_deterministic() -> None:
     config, instrument, costs = settings()
     candles = [
@@ -131,3 +164,68 @@ def test_gap_closes_open_position_and_counts_reason() -> None:
     )
     assert result.trades[0].close_reason == "DATA_GAP"
     assert result.reason_counts["DATA_GAP"] == 1
+
+
+def test_prepared_strategies_match_legacy_backtest_results() -> None:
+    _, instrument, costs = settings()
+    start = datetime(2026, 1, 5, 10, 0, tzinfo=UTC)
+    candles = [
+        CandleInput(
+            opened_at=start + timedelta(minutes=index + (2 if index >= 80 else 0)),
+            open=Decimal("100") + Decimal(index % 13) / Decimal("10"),
+            high=Decimal("101") + Decimal(index % 17) / Decimal("10"),
+            low=Decimal("99") + Decimal(index % 11) / Decimal("10"),
+            close=Decimal("100") + Decimal((index * 7) % 19) / Decimal("10"),
+        )
+        for index in range(200)
+    ]
+    configs = [
+        settings()[0],
+        ema_settings(require_crossover=False),
+        ema_settings(require_crossover=True),
+    ]
+
+    for config in configs:
+        legacy = BacktestEngine().run(
+            candles=candles,
+            config=config,
+            instrument=instrument,
+            costs=costs,
+            initial_capital=Decimal("10000"),
+            use_prepared_strategy=False,
+        )
+        optimized = BacktestEngine().run(
+            candles=candles,
+            config=config,
+            instrument=instrument,
+            costs=costs,
+            initial_capital=Decimal("10000"),
+        )
+
+        assert optimized == legacy
+
+
+def test_run_stream_consumes_generator_and_reports_final_progress() -> None:
+    config, instrument, costs = settings()
+    candles = [
+        candle(0, "100", "100.2", "99.8", "100"),
+        candle(1, "100", "100.3", "99.9", "100.2"),
+        candle(2, "100.2", "100.6", "100.1", "100.5"),
+        candle(3, "101.0", "102.2", "100.8", "102"),
+    ]
+    progress = []
+
+    result = BacktestEngine().run_stream(
+        candles=(item for item in candles),
+        total_candles=len(candles),
+        config=config,
+        instrument=instrument,
+        costs=costs,
+        initial_capital=Decimal("10000"),
+        progress_callback=lambda processed, total: (
+            progress.append((processed, total)) or True
+        ),
+    )
+
+    assert result.trades
+    assert progress[-1] == (len(candles), len(candles))

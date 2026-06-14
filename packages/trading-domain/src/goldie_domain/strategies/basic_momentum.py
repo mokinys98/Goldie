@@ -1,10 +1,17 @@
+from collections import deque
+from datetime import datetime
 from decimal import Decimal
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from ..models import MarketContext, SignalDecision, SignalType
-from ..strategy import common_guard, completed, trade_prices
+from ..models import CandleInput, MarketContext, SignalDecision, SignalType
+from ..strategy import (
+    BacktestGuards,
+    common_guard,
+    completed,
+    trade_prices,
+)
 
 
 class BasicMomentumParameters(BaseModel):
@@ -22,6 +29,21 @@ class BasicMomentumStrategy:
     def required_candles(self, parameters: BaseModel) -> int:
         values = BasicMomentumParameters.model_validate(parameters)
         return values.lookback_candles + 1
+
+    def create_backtest_evaluator(
+        self,
+        config: Any,
+        *,
+        point: Decimal,
+        spread_points: Decimal,
+    ) -> "_BasicMomentumBacktestEvaluator":
+        parameters = BasicMomentumParameters.model_validate(config.strategy.parameters)
+        return _BasicMomentumBacktestEvaluator(
+            lookback_candles=parameters.lookback_candles,
+            min_momentum_points=parameters.min_momentum_points,
+            point=point,
+            guards=BacktestGuards.from_config(config, spread_points=spread_points),
+        )
 
     def evaluate(self, context: MarketContext, config: Any) -> SignalDecision:
         candles = completed(context)
@@ -66,3 +88,40 @@ class BasicMomentumStrategy:
             momentum_points=momentum_points,
             **guard,
         )
+
+
+class _BasicMomentumBacktestEvaluator:
+    def __init__(
+        self,
+        *,
+        lookback_candles: int,
+        min_momentum_points: Decimal,
+        point: Decimal,
+        guards: BacktestGuards,
+    ) -> None:
+        self.required_candles = lookback_candles + 1
+        self.min_momentum_points = min_momentum_points
+        self.point = point
+        self.guards = guards
+        self.closes: deque[Decimal] = deque(maxlen=self.required_candles)
+
+    def evaluate(
+        self,
+        candle: CandleInput,
+        observed_at: datetime,
+    ) -> tuple[SignalType, str]:
+        self.closes.append(candle.close)
+        rejection = self.guards.rejection_reason(observed_at)
+        if rejection:
+            return SignalType.NO_TRADE, rejection
+        if len(self.closes) < self.required_candles:
+            return (
+                SignalType.NO_TRADE,
+                "INSUFFICIENT_COMPLETED_CANDLES",
+            )
+        momentum_points = (self.closes[-1] - self.closes[0]) / self.point
+        if momentum_points >= self.min_momentum_points:
+            return SignalType.BUY, "MOMENTUM_UP"
+        if momentum_points <= -self.min_momentum_points:
+            return SignalType.SELL, "MOMENTUM_DOWN"
+        return SignalType.NO_TRADE, "MOMENTUM_BELOW_THRESHOLD"

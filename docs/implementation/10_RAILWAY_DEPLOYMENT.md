@@ -146,7 +146,10 @@ DATABASE_URL=<tas pats private PostgreSQL URL kaip API>
 REDIS_URL=<tas pats private Redis URL kaip API>
 ```
 
-Šis worker skirtas tik backtest užduotims.
+Šis worker skirtas tik backtest užduotims. Palikite vieną replica ir skirkite
+bent 1 dedikuotą vCPU. Vieno backtest greitį didina worker CPU; papildomos
+replicas tik leidžia vienu metu vykdyti daugiau atskirų backtestų. Railway
+Metrics stebėkite worker CPU ir RAM, ypač vykdydami 365 dienų M1 testą.
 
 ## Ingestion worker servisas
 
@@ -416,7 +419,8 @@ Redis Pub/Sub leidžia naudoti kelias API replicas, tačiau pirmiausia reikia
 įvertinti PostgreSQL connection pool ir bendrą DB apkrovą.
 
 Backtest workeriai gali būti plečiami horizontaliai, nes užduotys atominiu būdu
-paimamos PostgreSQL. Ingestion workeriai gali būti plečiami per Redis consumer
+paimamos PostgreSQL, tačiau viena užduotis nėra skaidoma tarp procesų. Pradinei
+konfigūracijai palikite vieną replica. Ingestion workeriai gali būti plečiami per Redis consumer
 group, bet kiekvienas turi turėti unikalų consumer vardą.
 
 Collector laikykite po vieną replica vienam feed rinkiniui, kol nėra įdiegta

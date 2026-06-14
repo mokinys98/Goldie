@@ -1,11 +1,20 @@
-from datetime import UTC
+from dataclasses import dataclass
+from datetime import UTC, datetime, time
 from decimal import Decimal
 from typing import Any, Protocol
 from zoneinfo import ZoneInfo
 
 from pydantic import BaseModel
 
-from .models import MarketContext, SignalDecision, SignalType
+from .models import CandleInput, MarketContext, SignalDecision, SignalType
+
+
+class BacktestStrategyEvaluator(Protocol):
+    def evaluate(
+        self,
+        candle: CandleInput,
+        observed_at: datetime,
+    ) -> tuple[SignalType, str]: ...
 
 
 class Strategy(Protocol):
@@ -20,6 +29,54 @@ class Strategy(Protocol):
         context: MarketContext,
         config: Any,
     ) -> SignalDecision: ...
+
+    def create_backtest_evaluator(
+        self,
+        config: Any,
+        *,
+        point: Decimal,
+        spread_points: Decimal,
+    ) -> BacktestStrategyEvaluator: ...
+
+
+@dataclass(frozen=True)
+class BacktestGuards:
+    max_spread_points: Decimal
+    spread_points: Decimal
+    timezone: ZoneInfo
+    start_time: time
+    end_time: time
+
+    @classmethod
+    def from_config(
+        cls,
+        config: Any,
+        *,
+        spread_points: Decimal,
+    ) -> "BacktestGuards":
+        return cls(
+            max_spread_points=config.filters.max_spread_points,
+            spread_points=spread_points,
+            timezone=ZoneInfo(config.session.timezone),
+            start_time=config.session.start_time,
+            end_time=config.session.end_time,
+        )
+
+    def rejection_reason(self, observed_at: datetime) -> str | None:
+        if self.spread_points > self.max_spread_points:
+            return "SPREAD_TOO_HIGH"
+        now = observed_at if observed_at.tzinfo else observed_at.replace(tzinfo=UTC)
+        session_time = (
+            now.time().replace(tzinfo=None)
+            if self.timezone.key == "UTC"
+            else now.astimezone(self.timezone).time().replace(tzinfo=None)
+        )
+        in_session = (
+            self.start_time <= session_time < self.end_time
+            if self.start_time < self.end_time
+            else (session_time >= self.start_time or session_time < self.end_time)
+        )
+        return None if in_session else "OUTSIDE_TRADING_SESSION"
 
 
 def completed(context: MarketContext) -> list:

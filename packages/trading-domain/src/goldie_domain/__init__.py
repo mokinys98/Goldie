@@ -1,5 +1,6 @@
 from .backtest import (
     BacktestCancelled,
+    BacktestCandle,
     BacktestCosts,
     BacktestEngine,
     BacktestInstrument,
@@ -34,6 +35,7 @@ from .strategy import Strategy
 __all__ = [
     "BacktestCosts",
     "BacktestCancelled",
+    "BacktestCandle",
     "BacktestEngine",
     "BacktestInstrument",
     "BacktestResult",
