@@ -13,9 +13,16 @@ from .strategy import Strategy
 
 @dataclass(frozen=True)
 class BacktestCosts:
-    spread_points: Decimal
-    slippage_points: Decimal
-    commission_per_trade: Decimal
+    spread_points: Decimal = Decimal("2")
+    fee_maker: Decimal = Decimal("0")
+    fee_taker: Decimal = Decimal("0")
+    slippage_small: Decimal = Decimal("0")
+    slippage_medium: Decimal = Decimal("0")
+    impact_model: str = "sqrt"
+    limit_fill_timeout_s: int = 30
+    min_qty_check: bool = True
+    slippage_points: Decimal | None = None
+    commission_per_trade: Decimal = Decimal("0")
 
 
 @dataclass(frozen=True)
@@ -280,7 +287,7 @@ class BacktestEngine:
         balance: Decimal,
     ) -> _OpenPosition | None:
         half_spread = costs.spread_points * instrument.point / Decimal("2")
-        slippage = costs.slippage_points * instrument.point
+        slippage = self._slippage_amount(costs, instrument)
         entry = (
             candle.open + half_spread + slippage
             if direction == "BUY"
@@ -386,7 +393,7 @@ class BacktestEngine:
         instrument: BacktestInstrument,
         costs: BacktestCosts,
     ) -> BacktestTrade:
-        slippage = costs.slippage_points * instrument.point
+        slippage = BacktestEngine._slippage_amount(costs, instrument)
         exit_price = (
             raw_exit - slippage if position.direction == "BUY" else raw_exit + slippage
         )
@@ -402,7 +409,12 @@ class BacktestEngine:
             * instrument.tick_value
             * position.volume
         )
-        commission = costs.commission_per_trade
+        commission = BacktestEngine._commission_amount(
+            costs=costs,
+            entry_price=position.entry_price,
+            exit_price=exit_price,
+            volume=position.volume,
+        )
         net = gross - commission
         return BacktestTrade(
             direction=position.direction,
@@ -466,3 +478,26 @@ class BacktestEngine:
             "max_consecutive_losses": max_losses,
             "equity_curve": equity_curve,
         }
+
+    @staticmethod
+    def _slippage_amount(
+        costs: BacktestCosts,
+        instrument: BacktestInstrument,
+    ) -> Decimal:
+        if costs.slippage_points is not None:
+            return costs.slippage_points * instrument.point
+        return costs.slippage_medium
+
+    @staticmethod
+    def _commission_amount(
+        *,
+        costs: BacktestCosts,
+        entry_price: Decimal,
+        exit_price: Decimal,
+        volume: Decimal,
+    ) -> Decimal:
+        if costs.commission_per_trade:
+            return costs.commission_per_trade
+        if not costs.fee_taker:
+            return Decimal("0")
+        return (entry_price + exit_price) * volume * costs.fee_taker

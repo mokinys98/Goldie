@@ -568,9 +568,13 @@ def test_backtest_api_execution_and_exports() -> None:
                 "date_from": start.isoformat(),
                 "date_to": (start + timedelta(minutes=candle_count)).isoformat(),
                 "initial_capital": "10000",
-                "spread_points": "2",
-                "slippage_points": "1",
-                "commission_per_trade": "1",
+                "fee_maker": "0.001",
+                "fee_taker": "0.001",
+                "slippage_small": "0.0005",
+                "slippage_medium": "0.001",
+                "impact_model": "sqrt",
+                "limit_fill_timeout_s": 30,
+                "min_qty_check": True,
             },
         )
         assert created.status_code == 201
@@ -654,9 +658,13 @@ def test_batch_backtest_uses_active_bot_configuration() -> None:
                 "date_from": "2026-01-01T00:00:00Z",
                 "date_to": "2026-01-02T00:00:00Z",
                 "initial_capital": "10000",
-                "spread_points": "2",
-                "slippage_points": "1",
-                "commission_per_trade": "0",
+                "fee_maker": "0.001",
+                "fee_taker": "0.001",
+                "slippage_small": "0.0005",
+                "slippage_medium": "0.001",
+                "impact_model": "sqrt",
+                "limit_fill_timeout_s": 30,
+                "min_qty_check": True,
             },
         )
         assert response.status_code == 200

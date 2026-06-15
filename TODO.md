@@ -1,18 +1,16 @@
-## Strategies
+Trumpas kontrolinis sąrašas (veiksmai):
 
-Truksta CRUD operacijų visur pradedant nuo strategies ten neleidzia nei sukurti nei ištrinti ar redaguoti strategies
+1. Surink ir patikrink duomenų kokybę.
+2. Apibrėžk trading assumptions (slippage, fill rules, komisijos).
+3. Implementuok greitą baseline backtester.
+4. Paleisk sanity check su keliomis strategijomis/periodais.
+5. Jei baseline OK → pridėk execution realism ir parametrų paiešką.
+6. Atlik walk‑forward / OOS ir koreguok modelius pagal overfitting indikatorius.
+7. Automatinis logging, versijavimas, reproducibility.
+8. Paruošk santrauką su aiškiais KPI ir veiksmų planu gyvai prekybai.
+Praktiniai patarimai dėl laiko taupymo:
 
-Truksta View stategy kokie jau yra išsaugoti parametrai
-Išjunk versijavimą stategijoms /strategies
-Sukūrus naują strategį ji iškarto yra published ir nereikia papildomai spaudelioti du syk, kad patvirtintai ją
-Sukūrus naują botą per stategį jis automatiškai yra įjungiamas.
-Truksta CRUD operacijų Bots skiltyje, norisi ištrinti senus, atnaujinti naujus pvz pavadinimus, 
-
-## Bots
-
-Bots skilyje turi sukurti nauja web puslapį (Tab) - performance, kuris rodo visų turimų "bot instances".
-performance langas rodo vienos dienos, ir galima rodyklėmis tiek su kalendoriumi pasikeisti dieną.
-Tada yra agregavimas akumuliuotas performance 1d 3d 7d 30d
-
-## BackTests 
-Sukurti nauja mygtuką backtests puslapyje kuris darytu bach backtests, esme tokia jog ten yra pasirenkami Botai ne kaip sarašas o korteles pvz 16:9 ar 4:3 formatu tu ant ju paspaudi ir vadinasi tu taip pasirinkai bota. Toliau backtesto config ir market feed imami to boto, kas yra vartotojui duodama suvesti tai tik From, to, Capital, Spread, Slippage points, Comm.
+Start small: pirmasis sprintas — tik baseline ir duomenų patikra.
+Profiling + paralelizacija: identifikuok lėtus kaštus, palygink lokalų vs cloud.
+Panaudok sanity‑samples: vietoj pilnos istorijos testuok su reprezentatyviais segmentais.
+Automatizuok eksperimentus: CI‑style runs, rezultatai į DB/CSV su metaduomenimis.

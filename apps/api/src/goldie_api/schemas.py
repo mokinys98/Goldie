@@ -333,9 +333,13 @@ class BacktestCreate(BaseModel):
     date_from: datetime
     date_to: datetime
     initial_capital: Decimal = Field(default=Decimal("10000"), gt=0)
-    spread_points: Decimal = Field(default=Decimal("2"), ge=0)
-    slippage_points: Decimal = Field(default=Decimal("1"), ge=0)
-    commission_per_trade: Decimal = Field(default=Decimal("0"), ge=0)
+    fee_maker: Decimal = Field(default=Decimal("0.001"), ge=0)
+    fee_taker: Decimal = Field(default=Decimal("0.001"), ge=0)
+    slippage_small: Decimal = Field(default=Decimal("0.0005"), ge=0)
+    slippage_medium: Decimal = Field(default=Decimal("0.001"), ge=0)
+    impact_model: str = Field(default="sqrt", pattern="^(sqrt)$")
+    limit_fill_timeout_s: int = Field(default=30, ge=0)
+    min_qty_check: bool = True
 
 
 class BatchBacktestCreate(BaseModel):
@@ -343,9 +347,13 @@ class BatchBacktestCreate(BaseModel):
     date_from: datetime
     date_to: datetime
     initial_capital: Decimal = Field(default=Decimal("10000"), gt=0)
-    spread_points: Decimal = Field(default=Decimal("2"), ge=0)
-    slippage_points: Decimal = Field(default=Decimal("1"), ge=0)
-    commission_per_trade: Decimal = Field(default=Decimal("0"), ge=0)
+    fee_maker: Decimal = Field(default=Decimal("0.001"), ge=0)
+    fee_taker: Decimal = Field(default=Decimal("0.001"), ge=0)
+    slippage_small: Decimal = Field(default=Decimal("0.0005"), ge=0)
+    slippage_medium: Decimal = Field(default=Decimal("0.001"), ge=0)
+    impact_model: str = Field(default="sqrt", pattern="^(sqrt)$")
+    limit_fill_timeout_s: int = Field(default=30, ge=0)
+    min_qty_check: bool = True
 
 
 class BatchBacktestResult(BaseModel):
@@ -365,9 +373,13 @@ class BacktestRead(OrmModel):
     date_from: datetime
     date_to: datetime
     initial_capital: Decimal
-    spread_points: Decimal
-    slippage_points: Decimal
-    commission_per_trade: Decimal
+    fee_maker: Decimal
+    fee_taker: Decimal
+    slippage_small: Decimal
+    slippage_medium: Decimal
+    impact_model: str
+    limit_fill_timeout_s: int
+    min_qty_check: bool
     config_snapshot: dict
     progress: dict
     summary: dict

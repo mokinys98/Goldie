@@ -24,9 +24,13 @@ export default function NewBacktestPage() {
   const [dateFrom, setDateFrom] = useState(inputDate(30));
   const [dateTo, setDateTo] = useState(inputDate(0));
   const [initialCapital, setInitialCapital] = useState("10000");
-  const [spread, setSpread] = useState("2");
-  const [slippage, setSlippage] = useState("1");
-  const [commission, setCommission] = useState("0");
+  const [feeMaker, setFeeMaker] = useState("0.001");
+  const [feeTaker, setFeeTaker] = useState("0.001");
+  const [slippageSmall, setSlippageSmall] = useState("0.0005");
+  const [slippageMedium, setSlippageMedium] = useState("0.001");
+  const [impactModel, setImpactModel] = useState("sqrt");
+  const [limitFillTimeout, setLimitFillTimeout] = useState("30");
+  const [minQtyCheck, setMinQtyCheck] = useState(true);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const bots = useQuery({
@@ -73,9 +77,13 @@ export default function NewBacktestPage() {
           date_from: new Date(dateFrom).toISOString(),
           date_to: new Date(dateTo).toISOString(),
           initial_capital: initialCapital,
-          spread_points: spread,
-          slippage_points: slippage,
-          commission_per_trade: commission,
+          fee_maker: feeMaker,
+          fee_taker: feeTaker,
+          slippage_small: slippageSmall,
+          slippage_medium: slippageMedium,
+          impact_model: impactModel,
+          limit_fill_timeout_s: Number(limitFillTimeout),
+          min_qty_check: minQtyCheck,
         }),
       });
       router.push(`/backtests/${experiment.id}`);
@@ -119,9 +127,18 @@ export default function NewBacktestPage() {
           <label>From<input required type="datetime-local" value={dateFrom} onChange={(event) => setDateFrom(event.target.value)} /></label>
           <label>To<input required type="datetime-local" value={dateTo} onChange={(event) => setDateTo(event.target.value)} /></label>
           <label>Initial capital<input required type="number" min="1" step="0.01" value={initialCapital} onChange={(event) => setInitialCapital(event.target.value)} /></label>
-          <label>Spread points<input required type="number" min="0" step="0.01" value={spread} onChange={(event) => setSpread(event.target.value)} /></label>
-          <label>Slippage points<input required type="number" min="0" step="0.01" value={slippage} onChange={(event) => setSlippage(event.target.value)} /></label>
-          <label>Commission / trade<input required type="number" min="0" step="0.01" value={commission} onChange={(event) => setCommission(event.target.value)} /></label>
+          <label>Fee maker<input required type="number" min="0" step="0.0001" value={feeMaker} onChange={(event) => setFeeMaker(event.target.value)} /></label>
+          <label>Fee taker<input required type="number" min="0" step="0.0001" value={feeTaker} onChange={(event) => setFeeTaker(event.target.value)} /></label>
+          <label>Slippage small<input required type="number" min="0" step="0.0001" value={slippageSmall} onChange={(event) => setSlippageSmall(event.target.value)} /></label>
+          <label>Slippage medium<input required type="number" min="0" step="0.0001" value={slippageMedium} onChange={(event) => setSlippageMedium(event.target.value)} /></label>
+          <label>
+            Impact model
+            <select value={impactModel} onChange={(event) => setImpactModel(event.target.value)}>
+              <option value="sqrt">sqrt</option>
+            </select>
+          </label>
+          <label>Limit fill timeout (s)<input required type="number" min="0" step="1" value={limitFillTimeout} onChange={(event) => setLimitFillTimeout(event.target.value)} /></label>
+          <label className="checkbox-field">Min qty check<input type="checkbox" checked={minQtyCheck} onChange={(event) => setMinQtyCheck(event.target.checked)} /></label>
         </div>
         {error && <div className="error-box">{error}</div>}
         <div className="button-row">

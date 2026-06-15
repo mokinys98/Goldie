@@ -85,6 +85,18 @@ export default function BacktestDetailPage() {
           )}
         </div>
         <div className="panel">
+          <h2>Execution model</h2>
+          <div className="key-values">
+            <div><dt>fee_maker</dt><dd>{String(data.fee_maker)}</dd></div>
+            <div><dt>fee_taker</dt><dd>{String(data.fee_taker)}</dd></div>
+            <div><dt>slippage_small</dt><dd>{String(data.slippage_small)}</dd></div>
+            <div><dt>slippage_medium</dt><dd>{String(data.slippage_medium)}</dd></div>
+            <div><dt>impact_model</dt><dd>{data.impact_model}</dd></div>
+            <div><dt>limit_fill_timeout_s</dt><dd>{data.limit_fill_timeout_s}</dd></div>
+            <div><dt>min_qty_check</dt><dd>{String(data.min_qty_check)}</dd></div>
+          </div>
+        </div>
+        <div className="panel">
           <h2>Strategy parameters</h2>
           <div className="key-values">
             {Object.entries(configSnapshot.strategy.parameters).map(([key, value]) => (

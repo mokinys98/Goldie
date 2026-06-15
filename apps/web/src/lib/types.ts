@@ -338,9 +338,13 @@ export type BacktestExperiment = {
   date_from: string;
   date_to: string;
   initial_capital: string | number;
-  spread_points: string | number;
-  slippage_points: string | number;
-  commission_per_trade: string | number;
+  fee_maker: string | number;
+  fee_taker: string | number;
+  slippage_small: string | number;
+  slippage_medium: string | number;
+  impact_model: "sqrt";
+  limit_fill_timeout_s: number;
+  min_qty_check: boolean;
   config_snapshot: BotConfig;
   progress: { processed?: number; total?: number };
   summary: {

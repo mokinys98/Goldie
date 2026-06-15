@@ -25,6 +25,8 @@ from .models import (
     Run,
 )
 
+DEFAULT_BACKTEST_SPREAD_POINTS = Decimal("2")
+
 
 def utc_now() -> datetime:
     return datetime.now(UTC)
@@ -182,9 +184,14 @@ def execute_backtest(db: Session, experiment_id: uuid.UUID) -> None:
                 volume_step=step,
             ),
             costs=BacktestCosts(
-                spread_points=experiment.spread_points,
-                slippage_points=experiment.slippage_points,
-                commission_per_trade=experiment.commission_per_trade,
+                spread_points=DEFAULT_BACKTEST_SPREAD_POINTS,
+                fee_maker=experiment.fee_maker,
+                fee_taker=experiment.fee_taker,
+                slippage_small=experiment.slippage_small,
+                slippage_medium=experiment.slippage_medium,
+                impact_model=experiment.impact_model,
+                limit_fill_timeout_s=experiment.limit_fill_timeout_s,
+                min_qty_check=experiment.min_qty_check,
             ),
             initial_capital=experiment.initial_capital,
             progress_callback=progress,
