@@ -120,7 +120,7 @@ def register_feed(client: TestClient, symbol: str, provider_symbol: str) -> str:
     return response.json()["feed"]["id"]
 
 
-def create_and_publish_strategy(
+def create_strategy(
     client: TestClient, headers: dict[str, str], name: str = "Global momentum"
 ) -> dict:
     created = client.post(
@@ -156,19 +156,9 @@ def create_and_publish_strategy(
     )
     assert created.status_code == 201
     profile = created.json()
-    versions = client.get(
-        f"/api/v1/strategy-profiles/{profile['id']}/versions", headers=headers
-    ).json()
-    version = versions[0]
-    validated = client.post(
-        f"/api/v1/strategy-versions/{version['id']}/validate", headers=headers
-    )
-    assert validated.status_code == 200
-    published = client.post(
-        f"/api/v1/strategy-versions/{version['id']}/publish", headers=headers
-    )
-    assert published.status_code == 200
-    return published.json()
+    assert profile["status"] == "ACTIVE"
+    assert profile["config"]["strategy"]["name"] == "basic_momentum"
+    return profile
 
 
 def test_global_strategy_bulk_creation_and_overrides() -> None:
@@ -178,16 +168,11 @@ def test_global_strategy_bulk_creation_and_overrides() -> None:
         headers = login(client)
         eur_feed = register_feed(client, "EURUSD", "EUR_USD")
         xau_feed = register_feed(client, "XAUUSD", "XAU_USD")
-        version = create_and_publish_strategy(client, headers)
-
-        immutable = client.post(
-            f"/api/v1/strategy-versions/{version['id']}/validate", headers=headers
-        )
-        assert immutable.status_code == 409
+        profile = create_strategy(client, headers)
 
         request = {
             "request_id": str(uuid.uuid4()),
-            "strategy_version_id": version["id"],
+            "strategy_profile_id": profile["id"],
             "market_feed_ids": [eur_feed, xau_feed],
             "mode": "SHADOW",
             "name_template": "{symbol}-{strategy}-{mode}",
@@ -225,45 +210,92 @@ def test_global_strategy_bulk_creation_and_overrides() -> None:
         assert market_override.status_code == 409
 
 
-def test_new_strategy_version_does_not_change_linked_bot() -> None:
+def test_strategy_update_activates_linked_bot_config() -> None:
     Base.metadata.drop_all(engine)
     Base.metadata.create_all(engine)
     with TestClient(app) as client:
         headers = login(client)
         feed_id = register_feed(client, "EURUSD", "EUR_USD")
-        published = create_and_publish_strategy(client, headers, "Version isolation")
+        profile = create_strategy(client, headers, "Strategy propagation")
         bulk = client.post(
             "/api/v1/bots/bulk",
             headers=headers,
             json={
                 "request_id": str(uuid.uuid4()),
-                "strategy_version_id": published["id"],
+                "strategy_profile_id": profile["id"],
                 "market_feed_ids": [feed_id],
                 "mode": "SHADOW",
                 "name_template": "{symbol}-isolated",
             },
         ).json()
         bot = bulk[0]["bot"]
-        changed = published["config"]
+        changed = profile["config"]
         changed["filters"]["max_spread_points"] = 5
-        created = client.post(
-            f"/api/v1/strategy-profiles/{published['strategy_profile_id']}/versions",
+        updated = client.patch(
+            f"/api/v1/strategy-profiles/{profile['id']}",
             headers=headers,
             json={"config": changed},
         )
-        assert created.status_code == 201
+        assert updated.status_code == 200
         current = client.get(f"/api/v1/bots/{bot['id']}", headers=headers).json()
-        assert current["strategy_version_id"] == published["id"]
+        assert current["strategy_profile_id"] == profile["id"]
         configs = client.get(
             f"/api/v1/bots/{bot['id']}/config-versions", headers=headers
         ).json()
-        assert len(configs) == 1
+        assert len(configs) == 2
+        assert configs[0]["status"] == "ACTIVE"
+        assert configs[0]["config"]["filters"]["max_spread_points"] == "5"
+        assert configs[1]["status"] == "SUPERSEDED"
+
+
+def test_strategy_and_bot_crud_archive_preserves_history() -> None:
+    Base.metadata.drop_all(engine)
+    Base.metadata.create_all(engine)
+    with TestClient(app) as client:
+        headers = login(client)
+        feed_id = register_feed(client, "EURUSD", "EUR_USD")
+        profile = create_strategy(client, headers, "CRUD strategy")
+        bot = client.post(
+            "/api/v1/bots/bulk",
+            headers=headers,
+            json={
+                "request_id": str(uuid.uuid4()),
+                "strategy_profile_id": profile["id"],
+                "market_feed_ids": [feed_id],
+                "mode": "SHADOW",
+                "name_template": "crud-{symbol}",
+            },
+        ).json()[0]["bot"]
+        updated = client.patch(
+            f"/api/v1/bots/{bot['id']}",
+            headers=headers,
+            json={"name": "Renamed CRUD bot", "description": "Updated"},
+        )
+        assert updated.status_code == 200
+        assert updated.json()["name"] == "Renamed CRUD bot"
+
+        archived_bot = client.delete(f"/api/v1/bots/{bot['id']}", headers=headers)
+        assert archived_bot.status_code == 200
+        assert archived_bot.json()["archived_at"] is not None
+        assert client.get("/api/v1/bots", headers=headers).json() == []
+        with SessionLocal() as db:
+            assert db.scalar(select(func.count(ConfigVersion.id))) == 1
+            assert db.scalar(select(func.count(Run.id))) == 1
+
+        archived_strategy = client.delete(
+            f"/api/v1/strategy-profiles/{profile['id']}", headers=headers
+        )
+        assert archived_strategy.status_code == 200
+        assert archived_strategy.json()["status"] == "ARCHIVED"
+        assert client.get("/api/v1/strategy-profiles", headers=headers).json() == []
 
 
 def activate_first_config(client: TestClient, bot_id: str, headers: dict[str, str]) -> None:
     versions = client.get(
         f"/api/v1/bots/{bot_id}/config-versions", headers=headers
     ).json()
+    if versions[0]["status"] == "ACTIVE":
+        return
     validated = client.post(
         f"/api/v1/config-versions/{versions[0]['id']}/validate",
         headers=headers,
@@ -589,6 +621,42 @@ def test_backtest_api_execution_and_exports() -> None:
         assert "candles.tick_volume" in selected_columns
 
 
+def test_batch_backtest_uses_active_bot_configuration() -> None:
+    Base.metadata.drop_all(engine)
+    Base.metadata.create_all(engine)
+    with TestClient(app) as client:
+        headers = login(client)
+        feed_id = register_feed(client, "XAUUSD", "XAU_USD")
+        active = client.post(
+            "/api/v1/bots",
+            headers=headers,
+            json={"name": "Batch active", "market_feed_id": feed_id},
+        ).json()
+        inactive = client.post(
+            "/api/v1/bots",
+            headers=headers,
+            json={"name": "Batch inactive"},
+        ).json()
+        response = client.post(
+            "/api/v1/backtests/batch",
+            headers=headers,
+            json={
+                "bot_ids": [active["id"], inactive["id"]],
+                "date_from": "2026-01-01T00:00:00Z",
+                "date_to": "2026-01-02T00:00:00Z",
+                "initial_capital": "10000",
+                "spread_points": "2",
+                "slippage_points": "1",
+                "commission_per_trade": "0",
+            },
+        )
+        assert response.status_code == 200
+        assert [item["status"] for item in response.json()] == ["CREATED", "FAILED"]
+        assert response.json()[0]["experiment"]["config_version_id"] == active[
+            "active_config_version_id"
+        ]
+
+
 def test_backtest_progress_reporter_throttles_and_honors_cancel() -> None:
     class FakeDialect:
         name = "sqlite"
@@ -696,6 +764,16 @@ def test_shadow_trade_and_performance_endpoints() -> None:
             f"/api/v1/runs/{run_id}/performance",
             headers=headers,
         )
+        empty_bot = client.post(
+            "/api/v1/bots",
+            headers=headers,
+            json={"name": "No performance yet", "mode": "SHADOW"},
+        ).json()
+        portfolio = client.get(
+            "/api/v1/bots/performance"
+            "?date_from=2026-06-11T00:00:00Z&date_to=2026-06-12T00:00:00Z",
+            headers=headers,
+        )
 
         assert trades.status_code == 200
         assert len(trades.json()) == 1
@@ -703,6 +781,10 @@ def test_shadow_trade_and_performance_endpoints() -> None:
         assert performance.json()["closed_trades"] == 1
         assert performance.json()["win_rate"] == "100"
         assert performance.json()["net_pnl"] == "8.00000000"
+        assert portfolio.status_code == 200
+        by_id = {item["bot"]["id"]: item["performance"] for item in portfolio.json()["items"]}
+        assert by_id[bot["id"]]["net_pnl"] == "8.00000000"
+        assert by_id[empty_bot["id"]]["closed_trades"] == 0
 
 
 def test_collector_control_plane_lifecycle() -> None:

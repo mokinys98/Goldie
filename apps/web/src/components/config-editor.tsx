@@ -24,13 +24,13 @@ export function ConfigEditor({
   botId,
   versions,
   onChanged,
-  strategyVersionId,
+  strategyProfileId,
   configOverrides = {},
 }: {
   botId: string;
   versions: ConfigVersion[];
   onChanged: () => void;
-  strategyVersionId?: string | null;
+  strategyProfileId?: string | null;
   configOverrides?: Record<string, unknown>;
 }) {
   const latest = versions[0];
@@ -51,9 +51,9 @@ export function ConfigEditor({
       api<ConfigurationSchema>("/api/v1/strategies/configuration-schema"),
   });
   const inherited = useQuery({
-    queryKey: ["strategy-version", strategyVersionId],
-    queryFn: () => api<{ config: BotConfig }>(`/api/v1/strategy-versions/${strategyVersionId}`),
-    enabled: Boolean(strategyVersionId),
+    queryKey: ["strategy-profile", strategyProfileId],
+    queryFn: () => api<{ config: BotConfig }>(`/api/v1/strategy-profiles/${strategyProfileId}`),
+    enabled: Boolean(strategyProfileId),
   });
 
   async function create(values: BotConfig) {
@@ -80,7 +80,7 @@ export function ConfigEditor({
   }
 
   if (!latest) return <div className="panel">No configuration found.</div>;
-  if (strategyVersionId && inherited.data) {
+  if (strategyProfileId && inherited.data) {
     return (
       <div className="split-layout">
         <OverrideEditor
@@ -267,7 +267,7 @@ function OverrideEditor({
           }
         }}
       >
-        {busy ? "Saving..." : "Save overrides as new draft"}
+        {busy ? "Saving..." : "Save and activate overrides"}
       </button>
     </div>
   );

@@ -18,7 +18,6 @@ from ..models import (
     Run,
     Signal,
     StrategyProfile,
-    StrategyVersion,
     User,
 )
 from ..schemas import (
@@ -26,6 +25,7 @@ from ..schemas import (
     BotCreate,
     BotOverridesUpdate,
     BotRead,
+    BotUpdate,
     BulkBotCreate,
     BulkBotResult,
     ConfigCreate,
@@ -34,7 +34,12 @@ from ..schemas import (
     SignalRead,
 )
 from ..security import get_current_user
-from ..services import add_audit, effective_strategy_config, next_config_version
+from ..services import (
+    activate_config_version,
+    add_audit,
+    effective_strategy_config,
+    next_config_version,
+)
 
 router = APIRouter(prefix="/api/v1", tags=["bots"])
 
@@ -63,7 +68,11 @@ def ensure_config_matches_feed(
 
 @router.get("/bots", response_model=list[BotRead])
 def list_bots(db: Session = Depends(get_db), _: User = Depends(get_current_user)) -> list[Bot]:
-    return list(db.scalars(select(Bot).order_by(Bot.created_at)))
+    return list(
+        db.scalars(
+            select(Bot).where(Bot.archived_at.is_(None)).order_by(Bot.created_at)
+        )
+    )
 
 
 @router.post("/bots", response_model=BotRead, status_code=status.HTTP_201_CREATED)
@@ -125,18 +134,92 @@ def create_bot(
     config = ConfigVersion(
         bot_id=bot.id,
         version=1,
-        status="DRAFT",
+        status="ACTIVE" if selected_feed else "DRAFT",
         config=jsonable_encoder(
             initial_config.model_dump(mode="json")
         ),
         created_by=user.id,
     )
     db.add(config)
+    db.flush()
+    if selected_feed:
+        activate_config_version(db, bot, config)
     add_audit(
         db,
         actor_type="USER",
         actor_id=str(user.id),
         action="BOT_CREATED",
+        target_type="BOT",
+        target_id=str(bot.id),
+    )
+    db.commit()
+    db.refresh(bot)
+    return bot
+
+
+@router.patch("/bots/{bot_id}", response_model=BotRead)
+def update_bot(
+    bot_id: uuid.UUID,
+    payload: BotUpdate,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> Bot:
+    bot = get_bot_or_404(db, bot_id)
+    if bot.archived_at is not None:
+        raise HTTPException(status_code=409, detail="Archived bot cannot be edited")
+    values = payload.model_dump(exclude_none=True)
+    if "name" in values:
+        duplicate = db.scalar(
+            select(Bot).where(Bot.name == values["name"], Bot.id != bot.id)
+        )
+        if duplicate:
+            raise HTTPException(status_code=409, detail="Bot name already exists")
+    old_mode = bot.mode
+    for key, value in values.items():
+        setattr(bot, key, value)
+    if old_mode != bot.mode and bot.mode == "PAPER":
+        existing_account = db.scalar(
+            select(PaperAccount).where(PaperAccount.bot_id == bot.id)
+        )
+        if existing_account is None:
+            create_paper_account(db, bot)
+    if old_mode != bot.mode and bot.active_config_version_id is not None:
+        active_config = db.get(ConfigVersion, bot.active_config_version_id)
+        if active_config is not None:
+            activate_config_version(db, bot, active_config)
+    add_audit(
+        db,
+        actor_type="USER",
+        actor_id=str(user.id),
+        action="BOT_UPDATED",
+        target_type="BOT",
+        target_id=str(bot.id),
+    )
+    db.commit()
+    db.refresh(bot)
+    return bot
+
+
+@router.delete("/bots/{bot_id}", response_model=BotRead)
+def archive_bot(
+    bot_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> Bot:
+    bot = get_bot_or_404(db, bot_id)
+    now = datetime.now(UTC)
+    bot.archived_at = now
+    bot.state = "STOPPED"
+    for run in db.scalars(
+        select(Run).where(Run.bot_id == bot.id, Run.status == "ACTIVE")
+    ):
+        run.status = "SUPERSEDED"
+        run.ended_at = now
+    add_audit(
+        db,
+        actor_type="USER",
+        actor_id=str(user.id),
+        action="BOT_ARCHIVED",
         target_type="BOT",
         target_id=str(bot.id),
     )
@@ -165,13 +248,9 @@ def create_bots_bulk(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ) -> list[BulkBotResult]:
-    strategy_version = db.get(StrategyVersion, payload.strategy_version_id)
-    if strategy_version is None:
-        raise HTTPException(status_code=404, detail="Strategy version not found")
-    if strategy_version.status != "PUBLISHED":
-        raise HTTPException(status_code=409, detail="Only published strategy versions can be used")
-    profile = db.get(StrategyProfile, strategy_version.strategy_profile_id)
-    assert profile is not None
+    profile = db.get(StrategyProfile, payload.strategy_profile_id)
+    if profile is None or profile.status == "ARCHIVED":
+        raise HTTPException(status_code=404, detail="Active strategy not found")
     results: list[BulkBotResult] = []
     for feed_id in dict.fromkeys(payload.market_feed_ids):
         feed = db.get(MarketFeed, feed_id)
@@ -215,32 +294,31 @@ def create_bots_bulk(
                 )
             )
             continue
-        config = effective_strategy_config(
-            strategy_version, {}, symbol=feed.canonical_symbol
-        )
+        config = effective_strategy_config(profile, {}, symbol=feed.canonical_symbol)
         bot = Bot(
             name=name,
             description=payload.description,
             mode=payload.mode,
             market_feed_id=feed.id,
-            strategy_version_id=strategy_version.id,
+            strategy_profile_id=profile.id,
             config_overrides={},
         )
         db.add(bot)
         db.flush()
         if payload.mode == "PAPER":
             create_paper_account(db, bot)
-        db.add(
-            ConfigVersion(
-                bot_id=bot.id,
-                version=1,
-                status="DRAFT",
-                config=jsonable_encoder(config.model_dump(mode="json")),
-                strategy_version_id=strategy_version.id,
-                config_overrides={},
-                created_by=user.id,
-            )
+        config_row = ConfigVersion(
+            bot_id=bot.id,
+            version=1,
+            status="ACTIVE",
+            config=jsonable_encoder(config.model_dump(mode="json")),
+            strategy_profile_id=profile.id,
+            config_overrides={},
+            created_by=user.id,
         )
+        db.add(config_row)
+        db.flush()
+        activate_config_version(db, bot, config_row)
         add_audit(
             db,
             actor_type="USER",
@@ -271,34 +349,32 @@ def apply_strategy(
     user: User = Depends(get_current_user),
 ) -> ConfigVersion:
     bot = get_bot_or_404(db, bot_id)
-    strategy_version = db.get(StrategyVersion, payload.strategy_version_id)
-    if strategy_version is None:
-        raise HTTPException(status_code=404, detail="Strategy version not found")
-    if strategy_version.status not in {"PUBLISHED", "ARCHIVED"}:
-        raise HTTPException(status_code=409, detail="Strategy version is not published")
+    profile = db.get(StrategyProfile, payload.strategy_profile_id)
+    if profile is None or profile.status == "ARCHIVED":
+        raise HTTPException(status_code=404, detail="Active strategy not found")
     if bot.market_feed_id is None:
         raise HTTPException(status_code=409, detail="Bot must have an assigned market feed")
     feed = db.get(MarketFeed, bot.market_feed_id)
     assert feed is not None
-    config = effective_strategy_config(
-        strategy_version, {}, symbol=feed.canonical_symbol
-    )
-    bot.strategy_version_id = strategy_version.id
+    config = effective_strategy_config(profile, {}, symbol=feed.canonical_symbol)
+    bot.strategy_profile_id = profile.id
     bot.config_overrides = {}
     row = ConfigVersion(
         bot_id=bot.id,
         version=next_config_version(db, bot.id),
-        status="DRAFT",
+        status="ACTIVE",
         config=jsonable_encoder(config.model_dump(mode="json")),
-        strategy_version_id=strategy_version.id,
+        strategy_profile_id=profile.id,
         config_overrides={},
         created_by=user.id,
     )
     db.add(row)
+    db.flush()
+    activate_config_version(db, bot, row)
     add_audit(
         db, actor_type="USER", actor_id=str(user.id), action="STRATEGY_APPLIED",
         target_type="BOT", target_id=str(bot.id),
-        details={"strategy_version_id": str(strategy_version.id)},
+        details={"strategy_profile_id": str(profile.id)},
     )
     db.commit()
     db.refresh(row)
@@ -313,29 +389,29 @@ def update_overrides(
     user: User = Depends(get_current_user),
 ) -> ConfigVersion:
     bot = get_bot_or_404(db, bot_id)
-    if bot.strategy_version_id is None:
+    if bot.strategy_profile_id is None:
         raise HTTPException(status_code=409, detail="Bot is not linked to a strategy")
     if "market" in payload.overrides:
         raise HTTPException(status_code=409, detail="Market settings cannot be overridden")
     if bot.market_feed_id is None:
         raise HTTPException(status_code=409, detail="Bot must have an assigned market feed")
-    strategy_version = db.get(StrategyVersion, bot.strategy_version_id)
+    profile = db.get(StrategyProfile, bot.strategy_profile_id)
     feed = db.get(MarketFeed, bot.market_feed_id)
-    assert strategy_version is not None and feed is not None
-    config = effective_strategy_config(
-        strategy_version, payload.overrides, symbol=feed.canonical_symbol
-    )
+    assert profile is not None and feed is not None
+    config = effective_strategy_config(profile, payload.overrides, symbol=feed.canonical_symbol)
     bot.config_overrides = jsonable_encoder(payload.overrides)
     row = ConfigVersion(
         bot_id=bot.id,
         version=next_config_version(db, bot.id),
-        status="DRAFT",
+        status="ACTIVE",
         config=jsonable_encoder(config.model_dump(mode="json")),
-        strategy_version_id=strategy_version.id,
+        strategy_profile_id=profile.id,
         config_overrides=jsonable_encoder(payload.overrides),
         created_by=user.id,
     )
     db.add(row)
+    db.flush()
+    activate_config_version(db, bot, row)
     add_audit(
         db, actor_type="USER", actor_id=str(user.id), action="BOT_OVERRIDES_UPDATED",
         target_type="BOT", target_id=str(bot.id),
@@ -499,23 +575,7 @@ def activate_config(
         bot,
         BotConfiguration.model_validate(row.config),
     )
-    previous = db.scalar(
-        select(ConfigVersion).where(
-            ConfigVersion.bot_id == bot.id, ConfigVersion.status == "ACTIVE"
-        )
-    )
-    now = datetime.now(UTC)
-    if previous:
-        previous.status = "SUPERSEDED"
-    for run in db.scalars(select(Run).where(Run.bot_id == bot.id, Run.status == "ACTIVE")):
-        run.status = "SUPERSEDED"
-        run.ended_at = now
-    row.status = "ACTIVE"
-    row.activated_at = now
-    bot.active_config_version_id = row.id
-    bot.state = "MONITORING"
-    run = Run(bot_id=bot.id, config_version_id=row.id, mode=bot.mode)
-    db.add(run)
+    activate_config_version(db, bot, row)
     add_audit(
         db,
         actor_type="USER",

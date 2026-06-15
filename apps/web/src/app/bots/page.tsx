@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useRouter } from "next/navigation";
 import { api, ApiError } from "@/lib/api";
 import type { Bot } from "@/lib/types";
@@ -9,6 +9,7 @@ import { StatusPill } from "@/components/status-pill";
 
 export default function BotsPage() {
   const router = useRouter();
+  const client = useQueryClient();
   const query = useQuery({
     queryKey: ["bots"],
     queryFn: () => api<Bot[]>("/api/v1/bots"),
@@ -26,9 +27,10 @@ export default function BotsPage() {
           <h1>Bot instances</h1>
           <p>Independent read-only research configurations.</p>
         </div>
-        <Link className="button button-primary" href="/bots/new">
-          Create bot
-        </Link>
+        <div className="button-row">
+          <Link className="button button-secondary" href="/bots/performance">Performance</Link>
+          <Link className="button button-primary" href="/bots/new">Create bot</Link>
+        </div>
       </header>
 
       {query.isLoading && <div className="panel">Loading bots...</div>}
@@ -49,6 +51,7 @@ export default function BotsPage() {
                 <th>State</th>
                 <th>Active config</th>
                 <th>Updated</th>
+                <th>Actions</th>
               </tr>
             </thead>
             <tbody>
@@ -64,6 +67,11 @@ export default function BotsPage() {
                   <td><StatusPill value={bot.state} /></td>
                   <td>{bot.active_config_version_id ? "Active" : "Draft only"}</td>
                   <td>{new Date(bot.updated_at).toLocaleString()}</td>
+                  <td><button className="button button-danger" onClick={async () => {
+                    if (!window.confirm(`Archive ${bot.name}? Historical results will remain.`)) return;
+                    await api(`/api/v1/bots/${bot.id}`, { method: "DELETE" });
+                    await client.invalidateQueries({ queryKey: ["bots"] });
+                  }}>Delete</button></td>
                 </tr>
               ))}
             </tbody>

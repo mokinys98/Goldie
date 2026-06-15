@@ -17,7 +17,7 @@ export default function StrategiesPage() {
         <div>
           <span className="eyebrow">GLOBAL CONFIGURATION</span>
           <h1>Strategies</h1>
-          <p>Versioned trading configurations shared by bot instances.</p>
+          <p>Current trading configurations shared by bot instances.</p>
         </div>
         <Link className="button button-primary" href="/strategies/new">Create strategy</Link>
       </header>
@@ -27,13 +27,12 @@ export default function StrategiesPage() {
       {!!query.data?.length && (
         <div className="table-wrap">
           <table>
-            <thead><tr><th>Name</th><th>Published</th><th>Algorithm</th><th>Bots</th><th>Status</th><th>Updated</th></tr></thead>
+            <thead><tr><th>Name</th><th>Algorithm</th><th>Bots</th><th>Status</th><th>Updated</th></tr></thead>
             <tbody>
               {query.data.map((profile) => (
                 <tr key={profile.id}>
                   <td><Link className="table-link" href={`/strategies/${profile.id}`}>{profile.name}</Link><span className="table-subtitle">{profile.description}</span></td>
-                  <td>{profile.published_version ? `v${profile.published_version.version}` : "--"}</td>
-                  <td>{profile.published_version?.config.strategy.name ?? "--"}</td>
+                  <td>{profile.config.strategy.name}</td>
                   <td>{profile.bot_count}</td>
                   <td><StatusPill value={profile.status} /></td>
                   <td>{new Date(profile.updated_at).toLocaleString()}</td>

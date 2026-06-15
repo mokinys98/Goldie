@@ -39,6 +39,10 @@ export default function BotDetailPage() {
   const [tab, setTab] = useState<Tab>("Overview");
   const [selectedFeedId, setSelectedFeedId] = useState("");
   const [isAssigningFeed, setIsAssigningFeed] = useState(false);
+  const [editingBot, setEditingBot] = useState(false);
+  const [editName, setEditName] = useState("");
+  const [editDescription, setEditDescription] = useState("");
+  const [editMode, setEditMode] = useState<"SHADOW" | "PAPER">("SHADOW");
 
   const bot = useQuery({
     queryKey: ["bot", id],
@@ -79,7 +83,7 @@ export default function BotDetailPage() {
     queryKey: ["strategy-profiles"],
     queryFn: () => api<StrategyProfile[]>("/api/v1/strategy-profiles"),
   });
-  const [selectedStrategyVersionId, setSelectedStrategyVersionId] = useState("");
+  const [selectedStrategyProfileId, setSelectedStrategyProfileId] = useState("");
 
   useEffect(
     () =>
@@ -159,8 +163,39 @@ export default function BotDetailPage() {
           <StatusPill value={bot.data.mode} />
           <StatusPill value={live?.agent_effective_status ?? "OFFLINE"} />
           <span className="readonly-badge">NO ORDER EXECUTION</span>
+          <button className="button button-secondary" onClick={() => {
+            setEditName(bot.data.name);
+            setEditDescription(bot.data.description);
+            setEditMode(bot.data.mode);
+            setEditingBot(true);
+          }}>Edit</button>
+          <button className="button button-danger" onClick={async () => {
+            if (!window.confirm("Archive this bot? Historical results will remain.")) return;
+            await api(`/api/v1/bots/${id}`, { method: "DELETE" });
+            router.push("/bots");
+          }}>Delete</button>
         </div>
       </header>
+      {editingBot && (
+        <form className="panel compact-form form-grid" onSubmit={async (event) => {
+          event.preventDefault();
+          await api(`/api/v1/bots/${id}`, {
+            method: "PATCH",
+            body: JSON.stringify({
+              name: editName,
+              description: editDescription,
+              mode: editMode,
+            }),
+          });
+          setEditingBot(false);
+          await client.invalidateQueries({ queryKey: ["bot", id] });
+        }}>
+          <label>Name<input required value={editName} onChange={(event) => setEditName(event.target.value)} /></label>
+          <label>Description<input value={editDescription} onChange={(event) => setEditDescription(event.target.value)} /></label>
+          <label>Mode<select value={editMode} onChange={(event) => setEditMode(event.target.value as "SHADOW" | "PAPER")}><option value="SHADOW">SHADOW</option><option value="PAPER">PAPER</option></select></label>
+          <div className="button-row"><button className="button button-primary">Save</button><button type="button" className="button button-secondary" onClick={() => setEditingBot(false)}>Cancel</button></div>
+        </form>
+      )}
       <div className="tabs">
         {tabs.map((item) => (
           <button
@@ -244,19 +279,19 @@ export default function BotDetailPage() {
           <div className="panel strategy-assignment">
             <div>
               <h2>Global strategy</h2>
-              <p className="muted">{bot.data.strategy_version_id ? "This bot inherits a versioned global strategy." : "Standalone legacy configuration. Assign a published strategy to start inheriting it."}</p>
+              <p className="muted">{bot.data.strategy_profile_id ? "This bot inherits the current global strategy." : "Standalone configuration. Assign a strategy to start inheriting it."}</p>
             </div>
-            <select value={selectedStrategyVersionId} onChange={(event) => setSelectedStrategyVersionId(event.target.value)}>
-              <option value="">Select published strategy</option>
-              {(strategyProfiles.data ?? []).filter((item) => item.published_version).map((item) => <option key={item.id} value={item.published_version!.id}>{item.name} · v{item.published_version!.version}</option>)}
+            <select value={selectedStrategyProfileId} onChange={(event) => setSelectedStrategyProfileId(event.target.value)}>
+              <option value="">Select strategy</option>
+              {(strategyProfiles.data ?? []).map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
             </select>
-            <button className="button button-secondary" disabled={!selectedStrategyVersionId} onClick={async () => { await api(`/api/v1/bots/${id}/apply-strategy`, { method: "POST", body: JSON.stringify({ strategy_version_id: selectedStrategyVersionId }) }); setSelectedStrategyVersionId(""); refreshConfig(); }}>Apply as new draft</button>
+            <button className="button button-secondary" disabled={!selectedStrategyProfileId} onClick={async () => { await api(`/api/v1/bots/${id}/apply-strategy`, { method: "POST", body: JSON.stringify({ strategy_profile_id: selectedStrategyProfileId }) }); setSelectedStrategyProfileId(""); refreshConfig(); }}>Apply and activate</button>
           </div>
           <ConfigEditor
             botId={id}
             versions={configs.data}
             onChanged={refreshConfig}
-            strategyVersionId={bot.data.strategy_version_id}
+            strategyProfileId={bot.data.strategy_profile_id}
             configOverrides={bot.data.config_overrides}
           />
         </>

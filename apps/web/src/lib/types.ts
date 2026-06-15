@@ -6,8 +6,9 @@ export type Bot = {
   state: string;
   active_config_version_id: string | null;
   market_feed_id: string | null;
-  strategy_version_id?: string | null;
+  strategy_profile_id?: string | null;
   config_overrides?: Record<string, unknown>;
+  archived_at?: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -38,7 +39,7 @@ export type ConfigVersion = {
   validation_errors: unknown[] | null;
   created_at: string;
   activated_at: string | null;
-  strategy_version_id?: string | null;
+  strategy_profile_id?: string | null;
   config_overrides?: Record<string, unknown>;
 };
 
@@ -76,26 +77,13 @@ export type StrategyMetadata = {
   defaults: Record<string, string | number | boolean>;
 };
 
-export type StrategyVersion = {
-  id: string;
-  strategy_profile_id: string;
-  version: number;
-  status: "DRAFT" | "VALIDATED" | "PUBLISHED" | "ARCHIVED";
-  config: BotConfig;
-  validation_errors: unknown[] | null;
-  published_at: string | null;
-  created_at: string;
-  updated_at: string;
-};
-
 export type StrategyProfile = {
   id: string;
   name: string;
   description: string;
   status: "DRAFT" | "ACTIVE" | "ARCHIVED";
-  current_published_version_id: string | null;
+  config: BotConfig;
   bot_count: number;
-  published_version: StrategyVersion | null;
   created_at: string;
   updated_at: string;
 };
@@ -406,4 +394,21 @@ export type BacktestTrade = {
 export type BacktestTradePage = {
   items: BacktestTrade[];
   total: number;
+};
+
+export type BotsPerformance = {
+  date_from: string;
+  date_to: string;
+  total: Performance;
+  items: Array<{
+    bot: Pick<Bot, "id" | "name" | "mode" | "state">;
+    performance: Performance;
+  }>;
+};
+
+export type BatchBacktestResult = {
+  bot_id: string;
+  status: "CREATED" | "FAILED";
+  experiment: BacktestExperiment | null;
+  error: string | null;
 };

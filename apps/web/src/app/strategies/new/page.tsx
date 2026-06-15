@@ -13,7 +13,7 @@ export default function NewStrategyPage() {
   return (
     <section>
       <header className="page-header">
-        <div><span className="eyebrow">NEW GLOBAL STRATEGY</span><h1>Create strategy</h1><p>Create the first immutable draft version.</p></div>
+        <div><span className="eyebrow">NEW GLOBAL STRATEGY</span><h1>Create strategy</h1><p>The strategy becomes active immediately.</p></div>
       </header>
       <div className="strategy-create-layout">
         <div className="panel form-grid">
@@ -21,7 +21,7 @@ export default function NewStrategyPage() {
           <label>Description<textarea value={description} onChange={(event) => setDescription(event.target.value)} /></label>
         </div>
         <StrategyConfigForm
-          submitLabel="Create strategy draft"
+          submitLabel="Create strategy"
           onSubmit={async (config: BotConfig) => {
             if (name.trim().length < 2) throw new Error("Strategy name is required");
             const profile = await api<StrategyProfile>("/api/v1/strategy-profiles", {

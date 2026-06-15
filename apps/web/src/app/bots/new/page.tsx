@@ -55,7 +55,7 @@ export default function NewBotPage() {
         <div>
           <span className="eyebrow">NEW INSTANCE</span>
           <h1>Create bot</h1>
-          <p>The bot starts in SHADOW mode with a draft configuration.</p>
+          <p>A bot with a market feed starts monitoring immediately.</p>
         </div>
       </header>
       <form className="panel form-grid" onSubmit={submit}>

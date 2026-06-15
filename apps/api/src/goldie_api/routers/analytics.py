@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from ..db import get_db
@@ -33,10 +33,15 @@ def filtered_outcomes(
         query = query.where(SignalOutcome.result == result)
     if direction:
         query = query.where(SignalOutcome.direction == direction)
+    occurred_at = func.coalesce(
+        SignalOutcome.closed_at,
+        SignalOutcome.opened_at,
+        SignalOutcome.created_at,
+    )
     if date_from:
-        query = query.where(SignalOutcome.created_at >= date_from)
+        query = query.where(occurred_at >= date_from)
     if date_to:
-        query = query.where(SignalOutcome.created_at <= date_to)
+        query = query.where(occurred_at < date_to)
     return list(db.scalars(query.order_by(SignalOutcome.created_at.desc())))
 
 
@@ -86,3 +91,48 @@ def run_performance(
     if db.get(Run, run_id) is None:
         raise HTTPException(status_code=404, detail="Run not found")
     return performance_summary(filtered_outcomes(db, run_id=run_id))
+
+
+@router.get("/bots/performance")
+def bots_performance(
+    date_from: datetime,
+    date_to: datetime,
+    db: Session = Depends(get_db),
+    _: User = Depends(get_current_user),
+) -> dict:
+    if date_to <= date_from:
+        raise HTTPException(status_code=422, detail="date_to must be after date_from")
+    bots = list(
+        db.scalars(
+            select(Bot)
+            .where(Bot.archived_at.is_(None))
+            .order_by(Bot.name)
+        )
+    )
+    items = []
+    combined: list[SignalOutcome] = []
+    for bot in bots:
+        outcomes = filtered_outcomes(
+            db,
+            bot_id=bot.id,
+            date_from=date_from,
+            date_to=date_to,
+        )
+        combined.extend(outcomes)
+        items.append(
+            {
+                "bot": {
+                    "id": bot.id,
+                    "name": bot.name,
+                    "mode": bot.mode,
+                    "state": bot.state,
+                },
+                "performance": performance_summary(outcomes),
+            }
+        )
+    return {
+        "date_from": date_from,
+        "date_to": date_to,
+        "total": performance_summary(combined),
+        "items": items,
+    }

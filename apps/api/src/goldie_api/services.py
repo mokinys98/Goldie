@@ -15,7 +15,7 @@ from .models import (
     MarketTick,
     Run,
     Signal,
-    StrategyVersion,
+    StrategyProfile,
 )
 
 
@@ -67,18 +67,47 @@ def merge_config(base: dict, overrides: dict) -> dict:
 
 
 def effective_strategy_config(
-    strategy_version: StrategyVersion,
+    strategy_profile: StrategyProfile,
     overrides: dict,
     *,
     symbol: str,
 ) -> BotConfiguration:
     sanitized = dict(overrides)
     sanitized.pop("market", None)
-    merged = merge_config(strategy_version.config, sanitized)
+    merged = merge_config(strategy_profile.config, sanitized)
     market = dict(merged.get("market") or {})
     market["symbol"] = symbol
     merged["market"] = market
     return BotConfiguration.model_validate(merged)
+
+
+def activate_config_version(
+    db: Session,
+    bot: Bot,
+    row: ConfigVersion,
+    *,
+    now: datetime | None = None,
+) -> None:
+    activated_at = now or utc_now()
+    previous = db.scalar(
+        select(ConfigVersion).where(
+            ConfigVersion.bot_id == bot.id,
+            ConfigVersion.status == "ACTIVE",
+            ConfigVersion.id != row.id,
+        )
+    )
+    if previous:
+        previous.status = "SUPERSEDED"
+    for run in db.scalars(
+        select(Run).where(Run.bot_id == bot.id, Run.status == "ACTIVE")
+    ):
+        run.status = "SUPERSEDED"
+        run.ended_at = activated_at
+    row.status = "ACTIVE"
+    row.activated_at = activated_at
+    bot.active_config_version_id = row.id
+    bot.state = "MONITORING"
+    db.add(Run(bot_id=bot.id, config_version_id=row.id, mode=bot.mode))
 
 
 def evaluate_latest_signal(db: Session, bot: Bot) -> tuple[Signal | None, bool]:

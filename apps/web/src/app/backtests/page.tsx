@@ -31,9 +31,10 @@ export default function BacktestsPage() {
           <h1>Backtests</h1>
           <p>Deterministic M1 simulations using immutable strategy configurations.</p>
         </div>
-        <Link className="button button-primary" href="/backtests/new">
-          New backtest
-        </Link>
+        <div className="button-row">
+          <Link className="button button-secondary" href="/backtests/batch">Batch backtest</Link>
+          <Link className="button button-primary" href="/backtests/new">New backtest</Link>
+        </div>
       </header>
       {experiments.isLoading && <div className="panel">Loading backtests...</div>}
       {experiments.error && <div className="error-box">{experiments.error.message}</div>}

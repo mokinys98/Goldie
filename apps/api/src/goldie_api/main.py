@@ -77,15 +77,14 @@ async def request_timing(request: Request, call_next):
     return response
 
 app.include_router(auth.router)
+app.include_router(analytics.router)
 app.include_router(bots.router)
 app.include_router(feeds.router)
 app.include_router(collector.router)
 app.include_router(status.router)
-app.include_router(analytics.router)
 app.include_router(backtests.router)
 app.include_router(strategies.router)
 app.include_router(strategies.profiles)
-app.include_router(strategies.versions)
 
 
 @app.exception_handler(Exception)

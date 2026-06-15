@@ -20,7 +20,14 @@ from ..models import (
     Run,
     User,
 )
-from ..schemas import BacktestCreate, BacktestRead, BacktestTradePage, BacktestTradeRead
+from ..schemas import (
+    BacktestCreate,
+    BacktestRead,
+    BacktestTradePage,
+    BacktestTradeRead,
+    BatchBacktestCreate,
+    BatchBacktestResult,
+)
 from ..security import get_current_user
 from ..settings import get_settings
 
@@ -100,6 +107,77 @@ def create_backtest(
     except Exception:
         pass
     return experiment
+
+
+@router.post("/batch", response_model=list[BatchBacktestResult])
+def create_backtests_batch(
+    payload: BatchBacktestCreate,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> list[BatchBacktestResult]:
+    results: list[BatchBacktestResult] = []
+    for bot_id in dict.fromkeys(payload.bot_ids):
+        bot = db.get(Bot, bot_id)
+        if bot is None or bot.archived_at is not None:
+            results.append(
+                BatchBacktestResult(
+                    bot_id=bot_id,
+                    status="FAILED",
+                    error="Active bot not found",
+                )
+            )
+            continue
+        if bot.active_config_version_id is None:
+            results.append(
+                BatchBacktestResult(
+                    bot_id=bot.id,
+                    status="FAILED",
+                    error="Bot has no active configuration",
+                )
+            )
+            continue
+        if bot.market_feed_id is None:
+            results.append(
+                BatchBacktestResult(
+                    bot_id=bot.id,
+                    status="FAILED",
+                    error="Bot has no market feed",
+                )
+            )
+            continue
+        try:
+            experiment = create_backtest(
+                BacktestCreate(
+                    bot_id=bot.id,
+                    config_version_id=bot.active_config_version_id,
+                    market_feed_id=bot.market_feed_id,
+                    date_from=payload.date_from,
+                    date_to=payload.date_to,
+                    initial_capital=payload.initial_capital,
+                    spread_points=payload.spread_points,
+                    slippage_points=payload.slippage_points,
+                    commission_per_trade=payload.commission_per_trade,
+                ),
+                db,
+                user,
+            )
+            results.append(
+                BatchBacktestResult(
+                    bot_id=bot.id,
+                    status="CREATED",
+                    experiment=BacktestRead.model_validate(experiment),
+                )
+            )
+        except HTTPException as exc:
+            db.rollback()
+            results.append(
+                BatchBacktestResult(
+                    bot_id=bot.id,
+                    status="FAILED",
+                    error=str(exc.detail),
+                )
+            )
+    return results
 
 
 @router.get("", response_model=list[BacktestRead])

@@ -36,8 +36,9 @@ class BotRead(OrmModel):
     state: str
     active_config_version_id: uuid.UUID | None
     market_feed_id: uuid.UUID | None
-    strategy_version_id: uuid.UUID | None
+    strategy_profile_id: uuid.UUID | None
     config_overrides: dict
+    archived_at: datetime | None
     created_at: datetime
     updated_at: datetime
 
@@ -55,7 +56,7 @@ class ConfigRead(OrmModel):
     validation_errors: list | None
     created_at: datetime
     activated_at: datetime | None
-    strategy_version_id: uuid.UUID | None
+    strategy_profile_id: uuid.UUID | None
     config_overrides: dict
 
 
@@ -68,23 +69,7 @@ class StrategyProfileCreate(BaseModel):
 class StrategyProfileUpdate(BaseModel):
     name: str | None = Field(default=None, min_length=2, max_length=120)
     description: str | None = Field(default=None, max_length=2000)
-    status: str | None = Field(default=None, pattern="^(DRAFT|ACTIVE|ARCHIVED)$")
-
-
-class StrategyVersionCreate(BaseModel):
-    config: BotConfiguration
-
-
-class StrategyVersionRead(OrmModel):
-    id: uuid.UUID
-    strategy_profile_id: uuid.UUID
-    version: int
-    status: str
-    config: dict
-    validation_errors: list | None
-    published_at: datetime | None
-    created_at: datetime
-    updated_at: datetime
+    config: BotConfiguration | None = None
 
 
 class StrategyProfileRead(OrmModel):
@@ -92,15 +77,20 @@ class StrategyProfileRead(OrmModel):
     name: str
     description: str
     status: str
-    current_published_version_id: uuid.UUID | None
+    config: dict
     created_at: datetime
     updated_at: datetime
     bot_count: int = 0
-    published_version: StrategyVersionRead | None = None
 
 
 class BotApplyStrategy(BaseModel):
-    strategy_version_id: uuid.UUID
+    strategy_profile_id: uuid.UUID
+
+
+class BotUpdate(BaseModel):
+    name: str | None = Field(default=None, min_length=2, max_length=120)
+    description: str | None = Field(default=None, max_length=1000)
+    mode: str | None = Field(default=None, pattern="^(SHADOW|PAPER)$")
 
 
 class BotOverridesUpdate(BaseModel):
@@ -109,7 +99,7 @@ class BotOverridesUpdate(BaseModel):
 
 class BulkBotCreate(BaseModel):
     request_id: uuid.UUID
-    strategy_version_id: uuid.UUID
+    strategy_profile_id: uuid.UUID
     market_feed_ids: list[uuid.UUID] = Field(min_length=1, max_length=100)
     mode: str = Field(default="SHADOW", pattern="^(SHADOW|PAPER)$")
     name_template: str = Field(
@@ -346,6 +336,23 @@ class BacktestCreate(BaseModel):
     spread_points: Decimal = Field(default=Decimal("2"), ge=0)
     slippage_points: Decimal = Field(default=Decimal("1"), ge=0)
     commission_per_trade: Decimal = Field(default=Decimal("0"), ge=0)
+
+
+class BatchBacktestCreate(BaseModel):
+    bot_ids: list[uuid.UUID] = Field(min_length=1, max_length=100)
+    date_from: datetime
+    date_to: datetime
+    initial_capital: Decimal = Field(default=Decimal("10000"), gt=0)
+    spread_points: Decimal = Field(default=Decimal("2"), ge=0)
+    slippage_points: Decimal = Field(default=Decimal("1"), ge=0)
+    commission_per_trade: Decimal = Field(default=Decimal("0"), ge=0)
+
+
+class BatchBacktestResult(BaseModel):
+    bot_id: uuid.UUID
+    status: str
+    experiment: "BacktestRead | None" = None
+    error: str | None = None
 
 
 class BacktestRead(OrmModel):
