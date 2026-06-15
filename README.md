@@ -79,6 +79,49 @@ Reproduce a stored backtest from its immutable `run_id` with:
 uv run --package goldie-api goldie-replay-backtest --run-id <run-id> --pretty
 ```
 
+## Optimization workflow
+
+Goldie optimization v1 uses the same deterministic M1 backtest engine as
+ordinary backtests. Optuna samples only `config.strategy.parameters`; session,
+filters, theoretical trade settings, and execution-cost inputs stay fixed from
+the chosen config snapshot.
+
+Local prerequisites:
+
+```powershell
+uv sync --all-packages
+```
+
+Run the dedicated optimization worker locally:
+
+```powershell
+uv run --package goldie-optuna-worker python -m goldie_optuna_worker
+```
+
+How to use it:
+
+1. Start API, web, PostgreSQL, Redis, and the regular backtest worker.
+2. Start `goldie-optuna-worker`.
+3. In the UI open `Optimization`.
+4. Create a run by choosing one bot, one validated config version, one market
+   feed, one date range, and `n_trials`.
+5. Watch progress on the optimization detail page.
+6. Inspect `best_candidate`, top trials, and raw summary metrics.
+
+Current v1 defaults:
+
+- objective: `BALANCED`
+- search scope: strategy parameters only
+- one worker process runs one optimization sequentially
+- PostgreSQL is the source of truth; Redis is wake-up/signaling only
+
+Current v1 limitations:
+
+- no automatic promotion of optimized params into active bot configs
+- no distributed single-study execution
+- no custom objective formulas in the UI
+- no optimization over `filters`, `session`, or `theoretical_trade`
+
 Railway deployment is documented in
 [`09_RAILWAY_HOSTED_SHADOW.md`](docs/implementation/09_RAILWAY_HOSTED_SHADOW.md).
 
@@ -87,6 +130,9 @@ Stage II managed database purchasing requirements are in
 
 Railway Hobby deployment instructions are in
 [`docs/implementation/10_RAILWAY_DEPLOYMENT.md`](docs/implementation/10_RAILWAY_DEPLOYMENT.md).
+
+Optuna worker setup and deployment instructions are in
+[`docs/implementation/11_OPTUNA_OPTIMIZATION_WORKFLOW.md`](docs/implementation/11_OPTUNA_OPTIMIZATION_WORKFLOW.md).
 
 Shadow trade outcome rules, Railway migration checks and quality gates are in
 [`docs/implementation/12_SHADOW_OUTCOME_EVALUATION.md`](docs/implementation/12_SHADOW_OUTCOME_EVALUATION.md).

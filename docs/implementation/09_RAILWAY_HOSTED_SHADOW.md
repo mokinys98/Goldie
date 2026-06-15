@@ -2,7 +2,7 @@
 
 ## Architecture
 
-Create one Railway project with eight services:
+Create one Railway project with nine services:
 
 1. PostgreSQL.
 2. Redis.
@@ -12,7 +12,8 @@ Create one Railway project with eight services:
 5. `market-data-collector` using `railway/collector.toml`.
 6. `ingestion-worker` using `railway/ingestion-worker.toml`.
 7. `worker` using `railway/worker.toml`.
-8. `maintenance` using `railway/maintenance.toml`.
+8. `optuna-worker` using `railway/optuna-worker.toml`.
+9. `maintenance` using `railway/maintenance.toml`.
 
 PostgreSQL is the system of record. Redis is used for market-data transport,
 short-lived dashboard cache, backtest wake-ups, and WebSocket event fan-out.
@@ -20,7 +21,9 @@ short-lived dashboard cache, backtest wake-ups, and WebSocket event fan-out.
 The collector can use HTTP or Redis Streams. The dedicated ingestion worker
 consumes Stream events and writes them to PostgreSQL. The separate `worker`
 service executes asynchronous backtests, so long backtests cannot block market
-data ingestion.
+data ingestion. The separate `optuna-worker` service executes asynchronous
+strategy-parameter optimization runs, so Optuna trial loops cannot starve
+ordinary backtest jobs.
 
 Keep one collector replica per configured feed set. Start API, ingestion
 worker, backtest worker, and maintenance with one replica each. Scale only
@@ -59,6 +62,17 @@ Keep one backtest worker replica and allocate at least one dedicated vCPU.
 More CPU improves one backtest; additional replicas only run separate
 backtests concurrently. Monitor worker CPU and memory in Railway Metrics
 during a 365-day M1 run.
+
+Optuna worker:
+
+```text
+DATABASE_URL=<same private PostgreSQL URL as API>
+REDIS_URL=<same private Redis URL as API>
+```
+
+Keep one Optuna worker replica initially. In v1 one worker process runs one
+optimization study sequentially. Additional replicas allow more independent
+optimization runs in parallel, but one study is not split across processes.
 
 Ingestion worker:
 
@@ -142,13 +156,14 @@ Maintenance needs only `DATABASE_URL` and `QUOTE_RETENTION_DAYS`.
 
 1. Deploy PostgreSQL and Redis.
 2. Deploy API and confirm that all Alembic migrations completed.
-3. Deploy Web and the backtest worker.
+3. Deploy Web, the backtest worker, and the Optuna worker.
 4. Deploy the ingestion worker.
 5. Deploy the collector with `INGESTION_TRANSPORT=http`.
 6. Verify collector heartbeat, quotes, candles, and shadow evaluation.
 7. Change collector `INGESTION_TRANSPORT` to `redis` and redeploy it.
 8. Verify Stream consumption, PostgreSQL writes, and dashboard updates.
-9. Deploy maintenance.
+9. Create one optimization run from the UI and confirm the Optuna worker picks it up.
+10. Deploy maintenance.
 
 Railway config-as-code files must be selected as each service's Config File in
 the Railway service settings. The maintenance cron runs daily at 02:15 UTC and
@@ -178,6 +193,7 @@ After Redis cutover:
 7. `/health/live` remains below 250 ms during ingestion.
 8. Cached collector overview is below 500 ms and its p95 is below 1 second.
 9. A backtest reaches a terminal state without delaying ingestion.
+10. An optimization run reaches a terminal state and stores top trials.
 
 Use an authenticated request when measuring
 `/api/v1/collector/overview`; browser page-load time alone does not isolate API
@@ -210,3 +226,6 @@ Backtest workers can scale horizontally because PostgreSQL job claims are
 atomic, but one backtest is not split across processes. Keep one replica for
 the initial deployment. Ingestion workers can scale through their Redis consumer group, but
 each replica must use a unique consumer name.
+
+Optuna workers can also scale horizontally because optimization job claims are
+atomic in PostgreSQL, but one study is not split across processes in v1.
