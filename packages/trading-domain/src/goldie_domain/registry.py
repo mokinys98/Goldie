@@ -2,7 +2,16 @@ from typing import Any
 
 from pydantic import BaseModel
 
-from .strategies import BasicMomentumStrategy, EmaRsiStrategy
+from .strategies import (
+    BasicMomentumStrategy,
+    BollingerEmaRsiMeanReversionStrategy,
+    BollingerMomentumBreakoutStrategy,
+    BollingerRsiMeanReversionStrategy,
+    EmaAtrTrendStrategy,
+    EmaMomentumBreakoutStrategy,
+    EmaRsiStrategy,
+    RangeBreakScalperStrategy,
+)
 from .strategy import Strategy
 
 _STRATEGIES: dict[str, Strategy] = {}
@@ -73,3 +82,9 @@ def strategy_catalog() -> list[dict[str, Any]]:
 
 register_strategy(BasicMomentumStrategy())
 register_strategy(EmaRsiStrategy())
+register_strategy(BollingerRsiMeanReversionStrategy())
+register_strategy(EmaMomentumBreakoutStrategy())
+register_strategy(EmaAtrTrendStrategy())
+register_strategy(BollingerMomentumBreakoutStrategy())
+register_strategy(BollingerEmaRsiMeanReversionStrategy())
+register_strategy(RangeBreakScalperStrategy())

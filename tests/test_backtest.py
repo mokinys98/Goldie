@@ -205,6 +205,70 @@ def test_prepared_strategies_match_legacy_backtest_results() -> None:
         assert optimized == legacy
 
 
+def test_prepared_combo_strategy_matches_legacy_backtest_result() -> None:
+    _, instrument, costs = settings()
+    start = datetime(2026, 1, 5, 10, 0, tzinfo=UTC)
+    candles = [
+        CandleInput(
+            opened_at=start + timedelta(minutes=index),
+            open=Decimal("100") + Decimal(index % 5) / Decimal("10"),
+            high=Decimal("100.4") + Decimal(index % 7) / Decimal("10"),
+            low=Decimal("99.6") - Decimal(index % 3) / Decimal("10"),
+            close=Decimal("100") + Decimal((index * 3) % 11 - 5) / Decimal("10"),
+        )
+        for index in range(80)
+    ]
+    config = BotConfiguration.model_validate(
+        {
+            "market": {"symbol": "XAUUSD", "timeframe": "M1"},
+            "strategy": {
+                "name": "bb_rsi_mean_reversion",
+                "parameters": {
+                    "bollinger_period": 10,
+                    "bollinger_deviations": "1.5",
+                    "rsi_period": 7,
+                    "buy_rsi_max": "45",
+                    "sell_rsi_min": "55",
+                    "atr_period": 7,
+                    "atr_stop_multiplier": "1.5",
+                    "require_touch_band": True,
+                },
+            },
+            "filters": {"max_spread_points": "20", "stale_after_seconds": 15},
+            "session": {
+                "timezone": "UTC",
+                "start_time": "00:00:00",
+                "end_time": "23:59:59",
+            },
+            "theoretical_trade": {
+                "stop_loss_points": "5",
+                "take_profit_points": "8",
+                "risk_per_trade_pct": "1",
+                "max_trade_duration_minutes": 5,
+                "max_open_shadow_positions": 1,
+            },
+        }
+    )
+
+    legacy = BacktestEngine().run(
+        candles=candles,
+        config=config,
+        instrument=instrument,
+        costs=costs,
+        initial_capital=Decimal("10000"),
+        use_prepared_strategy=False,
+    )
+    prepared = BacktestEngine().run(
+        candles=candles,
+        config=config,
+        instrument=instrument,
+        costs=costs,
+        initial_capital=Decimal("10000"),
+    )
+
+    assert prepared == legacy
+
+
 def test_run_stream_consumes_generator_and_reports_final_progress() -> None:
     config, instrument, costs = settings()
     candles = [

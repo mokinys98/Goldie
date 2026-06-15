@@ -95,7 +95,16 @@ def test_strategy_catalog_endpoint() -> None:
         response = client.get("/api/v1/strategies", headers=headers)
         assert response.status_code == 200
         catalog = {item["name"]: item for item in response.json()}
-        assert set(catalog) == {"basic_momentum", "ema_rsi"}
+        assert set(catalog) == {
+            "basic_momentum",
+            "ema_rsi",
+            "bb_rsi_mean_reversion",
+            "ema_momentum_breakout",
+            "ema_atr_trend",
+            "bb_momentum_breakout",
+            "bb_ema_rsi_mean_reversion",
+            "range_break_scalper",
+        }
         assert catalog["ema_rsi"]["required_candles"] == 21
         assert "fast_ema_period" in catalog["ema_rsi"]["parameters"]
         parameter = catalog["ema_rsi"]["parameters"]["fast_ema_period"]

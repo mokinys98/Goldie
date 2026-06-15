@@ -24,10 +24,12 @@ export function StrategyConfigForm({
   initialConfig = defaultBotConfig,
   submitLabel,
   onSubmit,
+  onImportedFileName,
 }: {
   initialConfig?: BotConfig;
   submitLabel: string;
   onSubmit: (config: BotConfig) => Promise<void>;
+  onImportedFileName?: (name: string) => void;
 }) {
   const initial = normalizeBotConfig(initialConfig);
   const [strategyName, setStrategyName] = useState(initial.strategy.name);
@@ -89,6 +91,7 @@ export function StrategyConfigForm({
       const normalized = normalizeBotConfig(validated);
       form.reset(normalized);
       setStrategyName(normalized.strategy.name);
+      onImportedFileName?.(strategyNameFromFile(file.name));
       setNotice(`Imported ${file.name}. Review the settings before saving.`);
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "Could not import strategy JSON");
@@ -206,6 +209,10 @@ export function StrategyConfigForm({
       </button>
     </form>
   );
+}
+
+export function strategyNameFromFile(fileName: string): string {
+  return fileName.replace(/\.json$/i, "");
 }
 
 type Register = ReturnType<typeof useForm<BotConfig>>["register"];

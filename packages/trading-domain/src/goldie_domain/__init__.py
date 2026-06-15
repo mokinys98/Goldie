@@ -20,6 +20,7 @@ from .indicators import (
     sma,
 )
 from .models import CandleInput, MarketContext, SignalDecision, SignalType
+from .registry import get_strategy, register_strategy, strategy_catalog
 from .shadow import (
     PositionSize,
     ShadowCloseReason,
@@ -28,8 +29,16 @@ from .shadow import (
     calculate_position_size,
     evaluate_shadow_position,
 )
-from .registry import get_strategy, register_strategy, strategy_catalog
-from .strategies import BasicMomentumStrategy, EmaRsiStrategy
+from .strategies import (
+    BasicMomentumStrategy,
+    BollingerEmaRsiMeanReversionStrategy,
+    BollingerMomentumBreakoutStrategy,
+    BollingerRsiMeanReversionStrategy,
+    EmaAtrTrendStrategy,
+    EmaMomentumBreakoutStrategy,
+    EmaRsiStrategy,
+    RangeBreakScalperStrategy,
+)
 from .strategy import Strategy
 
 __all__ = [
@@ -41,12 +50,18 @@ __all__ = [
     "BacktestResult",
     "BacktestTrade",
     "BasicMomentumStrategy",
+    "BollingerEmaRsiMeanReversionStrategy",
+    "BollingerMomentumBreakoutStrategy",
+    "BollingerRsiMeanReversionStrategy",
     "BollingerBands",
     "BotConfiguration",
     "CandleInput",
+    "EmaAtrTrendStrategy",
+    "EmaMomentumBreakoutStrategy",
     "EmaRsiStrategy",
     "MarketContext",
     "PositionSize",
+    "RangeBreakScalperStrategy",
     "ShadowCloseReason",
     "ShadowEvaluation",
     "ShadowResult",

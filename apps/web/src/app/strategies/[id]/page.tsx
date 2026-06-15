@@ -82,6 +82,7 @@ export default function StrategyDetailPage() {
           <StrategyConfigForm
             initialConfig={data.config}
             submitLabel="Save strategy"
+            onImportedFileName={setName}
             onSubmit={async (config: BotConfig) => {
               await api(`/api/v1/strategy-profiles/${id}`, {
                 method: "PATCH",

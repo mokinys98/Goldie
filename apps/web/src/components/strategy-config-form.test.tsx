@@ -4,7 +4,10 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { api } from "@/lib/api";
 import { defaultBotConfig, serializeStrategyConfig } from "@/lib/config";
-import { StrategyConfigForm } from "./strategy-config-form";
+import {
+  StrategyConfigForm,
+  strategyNameFromFile,
+} from "./strategy-config-form";
 
 vi.mock("@/lib/api", () => ({ api: vi.fn() }));
 
@@ -31,11 +34,15 @@ const strategies = [
   },
 ];
 
-function renderForm() {
+function renderForm(onImportedFileName?: (name: string) => void) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
     <QueryClientProvider client={client}>
-      <StrategyConfigForm submitLabel="Save" onSubmit={vi.fn()} />
+      <StrategyConfigForm
+        submitLabel="Save"
+        onSubmit={vi.fn()}
+        onImportedFileName={onImportedFileName}
+      />
     </QueryClientProvider>,
   );
 }
@@ -54,7 +61,8 @@ describe("StrategyConfigForm JSON transfer", () => {
   });
 
   it("imports a dynamically registered strategy and all configuration sections", async () => {
-    const { container } = renderForm();
+    const onImportedFileName = vi.fn();
+    const { container } = renderForm(onImportedFileName);
     const configuration = {
       ...defaultBotConfig,
       strategy: {
@@ -77,12 +85,18 @@ describe("StrategyConfigForm JSON transfer", () => {
     expect(container.querySelector('[name="strategy.parameters.window"]')).toHaveValue(24);
     expect(container.querySelector('[name="filters.max_spread_points"]')).toHaveValue(44);
     expect(screen.getByText(/Imported future-strategy.json/)).toBeInTheDocument();
+    expect(onImportedFileName).toHaveBeenCalledWith("future-strategy");
     await waitFor(() => {
       expect(api).toHaveBeenCalledWith(
         "/api/v1/strategies/validate-configuration",
         expect.objectContaining({ method: "POST" }),
       );
     });
+  });
+
+  it("removes only the JSON extension from an imported file name", () => {
+    expect(strategyNameFromFile("strategy-balanced.JSON")).toBe("strategy-balanced");
+    expect(strategyNameFromFile("strategy.v2.json")).toBe("strategy.v2");
   });
 
   it("shows server validation errors without replacing the form", async () => {
