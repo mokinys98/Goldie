@@ -65,6 +65,14 @@ def configuration_schema(_: User = Depends(get_current_user)) -> dict:
     return sections
 
 
+@router.post("/validate-configuration")
+def validate_configuration(
+    config: BotConfiguration,
+    _: User = Depends(get_current_user),
+) -> dict:
+    return jsonable_encoder(config.model_dump(mode="json"))
+
+
 def profile_read(db: Session, row: StrategyProfile) -> StrategyProfileRead:
     published = (
         db.get(StrategyVersion, row.current_published_version_id)

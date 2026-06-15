@@ -2,10 +2,16 @@
 
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useQuery } from "@tanstack/react-query";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useForm } from "react-hook-form";
 import { api } from "@/lib/api";
-import { botConfigSchema, defaultBotConfig, normalizeBotConfig } from "@/lib/config";
+import {
+  botConfigSchema,
+  defaultBotConfig,
+  extractStrategyConfig,
+  normalizeBotConfig,
+  serializeStrategyConfig,
+} from "@/lib/config";
 import type {
   BotConfig,
   ConfigurationSchema,
@@ -27,6 +33,8 @@ export function StrategyConfigForm({
   const [strategyName, setStrategyName] = useState(initial.strategy.name);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
+  const fileInput = useRef<HTMLInputElement>(null);
   const strategies = useQuery({
     queryKey: ["strategies"],
     queryFn: () => api<StrategyMetadata[]>("/api/v1/strategies"),
@@ -66,9 +74,84 @@ export function StrategyConfigForm({
     form.setValue("strategy.parameters", metadata?.defaults ?? {});
   }
 
+  async function importConfiguration(file: File | undefined) {
+    if (!file) return;
+    setBusy(true);
+    setError("");
+    setNotice("");
+    try {
+      const parsed = JSON.parse(await readTextFile(file)) as unknown;
+      const configuration = extractStrategyConfig(parsed);
+      const validated = await api<BotConfig>("/api/v1/strategies/validate-configuration", {
+        method: "POST",
+        body: JSON.stringify(configuration),
+      });
+      const normalized = normalizeBotConfig(validated);
+      form.reset(normalized);
+      setStrategyName(normalized.strategy.name);
+      setNotice(`Imported ${file.name}. Review the settings before saving.`);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Could not import strategy JSON");
+    } finally {
+      setBusy(false);
+      if (fileInput.current) fileInput.current.value = "";
+    }
+  }
+
+  function exportConfiguration() {
+    setError("");
+    setNotice("");
+    const result = botConfigSchema.safeParse(form.getValues());
+    if (!result.success) {
+      setError("Fix invalid values before exporting the strategy.");
+      return;
+    }
+    const blob = new Blob([serializeStrategyConfig(result.data)], {
+      type: "application/json",
+    });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = `strategy-${result.data.strategy.name}.json`;
+    anchor.click();
+    URL.revokeObjectURL(url);
+  }
+
   const meta = (section: string, field: string) => schema.data?.[section]?.[field];
   return (
     <form className="panel config-form" onSubmit={form.handleSubmit(submit)}>
+      <div className="config-transfer">
+        <div>
+          <strong>JSON configuration</strong>
+          <span>Import or export every strategy, filter, session, market and risk setting.</span>
+        </div>
+        <div className="button-row">
+          <input
+            ref={fileInput}
+            className="visually-hidden"
+            type="file"
+            accept="application/json,.json"
+            aria-label="Strategy JSON file"
+            onChange={(event) => void importConfiguration(event.target.files?.[0])}
+          />
+          <button
+            className="button button-secondary"
+            type="button"
+            disabled={busy}
+            onClick={() => fileInput.current?.click()}
+          >
+            Import JSON
+          </button>
+          <button
+            className="button button-secondary"
+            type="button"
+            disabled={busy}
+            onClick={exportConfiguration}
+          >
+            Export JSON
+          </button>
+        </div>
+      </div>
       <fieldset>
         <legend>Algorithm</legend>
         <label>
@@ -114,6 +197,7 @@ export function StrategyConfigForm({
         <NumberField label="Maximum open shadow positions" path="theoretical_trade.max_open_shadow_positions" metadata={meta("theoretical_trade", "max_open_shadow_positions")} register={form.register} integer />
       </fieldset>
       {error && <div className="error-box">{error}</div>}
+      {notice && <div className="success-box">{notice}</div>}
       {Object.keys(form.formState.errors).length > 0 && (
         <div className="error-box">Strategy contains invalid values.</div>
       )}
@@ -125,6 +209,15 @@ export function StrategyConfigForm({
 }
 
 type Register = ReturnType<typeof useForm<BotConfig>>["register"];
+
+function readTextFile(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result ?? ""));
+    reader.onerror = () => reject(new Error(`Could not read ${file.name}.`));
+    reader.readAsText(file);
+  });
+}
 
 function ParameterField({ name, metadata, register }: { name: string; metadata: StrategyParameterMetadata; register: Register }) {
   const label = metadata.title ?? name.replaceAll("_", " ");
