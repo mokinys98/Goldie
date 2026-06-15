@@ -4,15 +4,33 @@ import time
 from redis import Redis
 from redis.exceptions import RedisError
 
-from goldie_api.db import SessionLocal
-from goldie_api.optimizations import (
-    claim_next_optimization,
-    execute_optimization,
-    reset_interrupted_optimizations,
-)
+
+def validate_database_configuration() -> None:
+    if not os.getenv("RAILWAY_ENVIRONMENT_ID"):
+        return
+
+    database_url = os.getenv("DATABASE_URL", "")
+    if not database_url:
+        raise RuntimeError(
+            "DATABASE_URL is required for the Railway Optuna worker. "
+            "Set it to the same PostgreSQL reference variable used by the API service."
+        )
+    if not database_url.startswith(("postgresql://", "postgres://", "postgresql+psycopg://")):
+        raise RuntimeError(
+            "The Railway Optuna worker requires a PostgreSQL DATABASE_URL shared with the API."
+        )
 
 
 def main() -> None:
+    validate_database_configuration()
+
+    from goldie_api.db import SessionLocal
+    from goldie_api.optimizations import (
+        claim_next_optimization,
+        execute_optimization,
+        reset_interrupted_optimizations,
+    )
+
     client = Redis.from_url(os.getenv("REDIS_URL", "redis://localhost:6379/0"))
     with SessionLocal() as db:
         reset_interrupted_optimizations(db)

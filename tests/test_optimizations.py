@@ -153,6 +153,14 @@ def test_optimization_api_and_execution_flow() -> None:
         assert detail.json()["best_candidate"]["sampled_parameters"]
         assert trials.status_code == 200
         assert trials.json()["total"] == 3
+        trial_id = trials.json()["items"][0]["id"]
+        trial_detail = client.get(
+            f"/api/v1/optimizations/{optimization_id}/trials/{trial_id}",
+            headers=headers,
+        )
+        assert trial_detail.status_code == 200
+        assert trial_detail.json()["sampled_parameters"]
+        assert trial_detail.json()["optimization_run_id"] == str(optimization_id)
         with SessionLocal() as db:
             stored_trials = db.query(OptimizationTrial).filter_by(
                 optimization_run_id=optimization_id

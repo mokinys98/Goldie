@@ -1,7 +1,9 @@
 "use client";
 
+import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useState } from "react";
 import { api } from "@/lib/api";
 import { normalizeBotConfig } from "@/lib/config";
 import type { OptimizationRun, OptimizationTrialPage } from "@/lib/types";
@@ -10,6 +12,9 @@ import { StatusPill } from "@/components/status-pill";
 export default function OptimizationDetailPage() {
   const { id } = useParams<{ id: string }>();
   const client = useQueryClient();
+  const [applyBusy, setApplyBusy] = useState(false);
+  const [applyError, setApplyError] = useState<string | null>(null);
+  const [appliedConfigId, setAppliedConfigId] = useState<string | null>(null);
   const run = useQuery({
     queryKey: ["optimization", id],
     queryFn: () => api<OptimizationRun>(`/api/v1/optimizations/${id}`),
@@ -33,11 +38,49 @@ export default function OptimizationDetailPage() {
   }
   const configSnapshot = normalizeBotConfig(data.config_snapshot);
   const canCancel = ["PENDING", "RUNNING"].includes(data.status);
+  const canApplyBest = Boolean(
+    !applyBusy
+    && Object.keys(data.best_candidate.sampled_parameters ?? {}).length,
+  );
 
   async function cancel() {
     if (!window.confirm("Cancel this optimization?")) return;
     await api(`/api/v1/optimizations/${id}/cancel`, { method: "POST" });
     await client.invalidateQueries({ queryKey: ["optimization", id] });
+  }
+
+  async function applyBestAsNewConfig() {
+    if (!canApplyBest || !data) return;
+    if (!window.confirm("Create and activate a new config from the current best candidate?")) {
+      return;
+    }
+    const current = data;
+    setApplyBusy(true);
+    setApplyError(null);
+    setAppliedConfigId(null);
+    try {
+      const nextConfig = {
+        ...configSnapshot,
+        strategy: {
+          ...configSnapshot.strategy,
+          parameters: {
+            ...configSnapshot.strategy.parameters,
+            ...(current.best_candidate.sampled_parameters ?? {}),
+          },
+        },
+      };
+      const created = await api<{ id: string }>(`/api/v1/bots/${current.bot_id}/config-versions`, {
+        method: "POST",
+        body: JSON.stringify({ config: nextConfig }),
+      });
+      await api(`/api/v1/config-versions/${created.id}/validate`, { method: "POST" });
+      await api(`/api/v1/config-versions/${created.id}/activate`, { method: "POST" });
+      setAppliedConfigId(created.id);
+    } catch (reason) {
+      setApplyError(reason instanceof Error ? reason.message : "Could not apply best candidate");
+    } finally {
+      setApplyBusy(false);
+    }
   }
 
   return (
@@ -53,6 +96,13 @@ export default function OptimizationDetailPage() {
         </div>
         <div className="button-row">
           <StatusPill value={data.status} />
+          <button
+            className="button button-primary"
+            disabled={!canApplyBest}
+            onClick={() => void applyBestAsNewConfig()}
+          >
+            {applyBusy ? "Applying..." : "Apply best as new config"}
+          </button>
           {canCancel && (
             <button className="button button-secondary" onClick={() => void cancel()}>
               Cancel
@@ -61,6 +111,16 @@ export default function OptimizationDetailPage() {
         </div>
       </header>
       {data.error && <div className="error-box">{data.error}</div>}
+      {applyError && <div className="error-box">{applyError}</div>}
+      {appliedConfigId && (
+        <div className="panel">
+          New config created and activated.
+          {" "}
+          <Link className="table-link" href={`/bots/${data.bot_id}`}>
+            Open bot
+          </Link>
+        </div>
+      )}
       <div className="panel backtest-progress">
         <strong>Progress</strong>
         <progress
@@ -140,6 +200,7 @@ export default function OptimizationDetailPage() {
             <table>
               <thead>
                 <tr>
+                  <th>ID</th>
                   <th>Trial</th>
                   <th>Status</th>
                   <th>Score</th>
@@ -150,6 +211,11 @@ export default function OptimizationDetailPage() {
               </thead>
               <tbody>{trials.data.items.map((trial) => (
                 <tr key={trial.id}>
+                  <td>
+                    <Link className="table-link" href={`/optimizations/${id}/trials/${trial.id}`}>
+                      {trial.id.slice(0, 8)}
+                    </Link>
+                  </td>
                   <td>{trial.trial_number}</td>
                   <td><StatusPill value={trial.status} /></td>
                   <td>{trial.score ?? "--"}</td>

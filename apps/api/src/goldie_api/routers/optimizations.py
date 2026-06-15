@@ -19,6 +19,7 @@ from ..models import (
 from ..schemas import (
     OptimizationCreate,
     OptimizationRunRead,
+    OptimizationTrialRead,
     OptimizationTrialPage,
 )
 from ..security import get_current_user
@@ -32,6 +33,17 @@ def get_optimization(db: Session, optimization_id: uuid.UUID) -> OptimizationRun
     if optimization is None:
         raise HTTPException(status_code=404, detail="Optimization not found")
     return optimization
+
+
+def get_optimization_trial(
+    db: Session,
+    optimization_id: uuid.UUID,
+    trial_id: uuid.UUID,
+) -> OptimizationTrial:
+    trial = db.get(OptimizationTrial, trial_id)
+    if trial is None or trial.optimization_run_id != optimization_id:
+        raise HTTPException(status_code=404, detail="Optimization trial not found")
+    return trial
 
 
 @router.post("", response_model=OptimizationRunRead, status_code=status.HTTP_201_CREATED)
@@ -165,6 +177,17 @@ def list_optimization_trials(
         )
     )
     return {"items": items, "total": total or 0}
+
+
+@router.get("/{optimization_id}/trials/{trial_id}", response_model=OptimizationTrialRead)
+def read_optimization_trial(
+    optimization_id: uuid.UUID,
+    trial_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    _: User = Depends(get_current_user),
+) -> OptimizationTrial:
+    get_optimization(db, optimization_id)
+    return get_optimization_trial(db, optimization_id, trial_id)
 
 
 @router.post("/{optimization_id}/cancel", response_model=OptimizationRunRead)
