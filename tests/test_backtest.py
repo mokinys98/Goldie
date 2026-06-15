@@ -2,6 +2,7 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 from goldie_domain import (
+    BacktestCandle,
     BacktestCosts,
     BacktestEngine,
     BacktestInstrument,
@@ -293,3 +294,40 @@ def test_run_stream_consumes_generator_and_reports_final_progress() -> None:
 
     assert result.trades
     assert progress[-1] == (len(candles), len(candles))
+
+
+def test_run_stream_accepts_lightweight_candles_for_combo_strategies() -> None:
+    _, instrument, costs = settings()
+    config = ema_settings(require_crossover=False)
+    config.strategy.name = "range_break_scalper"
+    config.strategy.parameters = {
+        "fast_ema_period": 3,
+        "slow_ema_period": 7,
+        "rsi_period": 5,
+        "buy_rsi_min": "55",
+        "sell_rsi_max": "45",
+        "range_lookback": 5,
+        "min_breakout_points": "1",
+    }
+    start = datetime(2026, 1, 5, 10, 0, tzinfo=UTC)
+    candles = [
+        BacktestCandle(
+            opened_at=start + timedelta(minutes=index),
+            open=Decimal("100"),
+            high=Decimal("101"),
+            low=Decimal("99"),
+            close=Decimal("100") + Decimal(index % 3) / Decimal("10"),
+        )
+        for index in range(30)
+    ]
+
+    result = BacktestEngine().run_stream(
+        candles=iter(candles),
+        total_candles=len(candles),
+        config=config,
+        instrument=instrument,
+        costs=costs,
+        initial_capital=Decimal("10000"),
+    )
+
+    assert isinstance(result.reason_counts, dict)

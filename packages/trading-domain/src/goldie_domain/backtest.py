@@ -73,6 +73,20 @@ class BacktestCancelled(Exception):
     pass
 
 
+def _as_candle_input(candle: CandleInput | BacktestCandle) -> CandleInput:
+    if isinstance(candle, CandleInput):
+        return candle
+    return CandleInput(
+        opened_at=candle.opened_at,
+        open=candle.open,
+        high=candle.high,
+        low=candle.low,
+        close=candle.close,
+        tick_volume=candle.tick_volume,
+        is_complete=candle.is_complete,
+    )
+
+
 @dataclass
 class _OpenPosition:
     direction: str
@@ -211,7 +225,7 @@ class BacktestEngine:
             else:
                 half_spread = costs.spread_points * instrument.point / Decimal("2")
                 assert history is not None
-                history.append(candle)
+                history.append(_as_candle_input(candle))
                 decision = strategy.evaluate(
                     MarketContext(
                         observed_at=observed_at,

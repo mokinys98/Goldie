@@ -271,6 +271,16 @@ class _ReplayBacktestEvaluator:
         self.candles: deque[CandleInput] = deque(maxlen=required_candles)
 
     def evaluate(self, candle: CandleInput, observed_at: datetime) -> tuple[SignalType, str]:
+        if not isinstance(candle, CandleInput):
+            candle = CandleInput(
+                opened_at=candle.opened_at,
+                open=candle.open,
+                high=candle.high,
+                low=candle.low,
+                close=candle.close,
+                tick_volume=candle.tick_volume,
+                is_complete=candle.is_complete,
+            )
         self.candles.append(candle)
         rejection = self.guards.rejection_reason(observed_at)
         if rejection:
