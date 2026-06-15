@@ -40,7 +40,6 @@ export function FieldHelp({
         className="field-help"
         aria-label={`${label}. ${text}`}
         data-tooltip={text}
-        title={text || `No help metadata is available for ${label}.`}
       >
         ?
       </span>

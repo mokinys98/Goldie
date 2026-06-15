@@ -72,7 +72,7 @@ tr:last-child td { border-bottom: 0; }
 
 label { display: flex; flex-direction: column; gap: 7px; color: #c9d3df; font-size: 12px; font-weight: 700; }
 .field-label { display: inline-flex; align-items: center; gap: 7px; }
-.field-help { position: relative; width: 19px; height: 19px; padding: 0; border: 1px solid #58677a; border-radius: 999px; background: #18212d; color: #c9d3df; font-size: 11px; font-weight: 850; line-height: 17px; }
+.field-help { position: relative; display: inline-grid; place-items: center; flex: 0 0 20px; width: 20px; height: 20px; padding: 0; border: 1px solid #58677a; border-radius: 50%; background: #18212d; color: #c9d3df; font-size: 11px; font-weight: 850; line-height: 1; text-align: center; }
 .field-help:hover, .field-help:focus-visible { border-color: var(--gold); color: var(--gold-bright); outline: none; }
 .field-help:hover::after, .field-help:focus-visible::after { content: attr(data-tooltip); position: absolute; z-index: 40; left: 24px; top: -8px; width: min(360px, 70vw); padding: 10px 12px; border: 1px solid var(--line); border-radius: 7px; background: #202a37; color: var(--text); box-shadow: 0 12px 32px #0009; text-align: left; font-size: 11px; font-weight: 500; line-height: 1.45; white-space: normal; pointer-events: none; }
 input, textarea, select { width: 100%; padding: 10px 11px; border: 1px solid var(--line); border-radius: 6px; background: #0c1118; color: var(--text); outline: none; }
@@ -89,6 +89,7 @@ textarea { min-height: 100px; resize: vertical; }
 .dashboard-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; }
 .grid-span-2 { grid-column: span 2; }
 .split-layout { display: grid; grid-template-columns: minmax(0, 1.3fr) minmax(320px, .7fr); gap: 18px; align-items: start; }
+.strategy-create-layout { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; align-items: start; }
 .section-title { display: flex; justify-content: space-between; gap: 16px; align-items: flex-start; margin-bottom: 18px; }
 .section-title h2 { margin-bottom: 5px; }
 .section-title p { color: var(--muted); margin: 0; font-size: 13px; }
@@ -197,6 +198,7 @@ legend { color: var(--gold); padding: 0 8px; font-size: 12px; font-weight: 800; 
   .main { padding: 24px; }
   .dashboard-grid { grid-template-columns: 1fr 1fr; }
   .split-layout { grid-template-columns: 1fr; }
+  .strategy-create-layout { grid-template-columns: 1fr; }
   .breakdown-grid { grid-template-columns: 1fr; }
   .compact-form { grid-template-columns: 1fr; }
   .bulk-grid { grid-template-columns: 1fr; }

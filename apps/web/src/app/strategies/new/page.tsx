@@ -15,7 +15,7 @@ export default function NewStrategyPage() {
       <header className="page-header">
         <div><span className="eyebrow">NEW GLOBAL STRATEGY</span><h1>Create strategy</h1><p>Create the first immutable draft version.</p></div>
       </header>
-      <div className="split-layout">
+      <div className="strategy-create-layout">
         <div className="panel form-grid">
           <label>Name<input required minLength={2} maxLength={120} value={name} onChange={(event) => setName(event.target.value)} /></label>
           <label>Description<textarea value={description} onChange={(event) => setDescription(event.target.value)} /></label>
