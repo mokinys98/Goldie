@@ -108,6 +108,18 @@ def sample_parameters(
                 else float(parameter["exclusive_minimum"]) + 1e-9
             )
         upper = parameter["maximum"]
+        if name == "medium_ema_period" and "fast_ema_period" in sampled:
+            lower = max(lower, int(sampled["fast_ema_period"]) + 1)
+        elif name == "slow_ema_period":
+            preceding_period = sampled.get("medium_ema_period", sampled.get("fast_ema_period"))
+            if preceding_period is not None:
+                lower = max(lower, int(preceding_period) + 1)
+        elif name == "sell_rsi_min" and "buy_rsi_max" in sampled:
+            lower = max(lower, sampled["buy_rsi_max"])
+        elif name == "sell_rsi_max" and "buy_rsi_min" in sampled:
+            upper = min(upper, sampled["buy_rsi_min"])
+        elif name == "max_atr_points" and "min_atr_points" in sampled:
+            lower = max(lower, sampled["min_atr_points"])
         if parameter["type"] == "integer":
             sampled[name] = trial.suggest_int(name, int(lower), int(upper))
         else:

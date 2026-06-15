@@ -14,7 +14,11 @@ from fastapi.testclient import TestClient
 from goldie_api.db import Base, SessionLocal, engine
 from goldie_api.main import app
 from goldie_api.models import OptimizationRun, OptimizationTrial
-from goldie_api.optimizations import compute_balanced_score, execute_optimization
+from goldie_api.optimizations import (
+    compute_balanced_score,
+    execute_optimization,
+    sample_parameters,
+)
 
 
 def login(client: TestClient) -> dict[str, str]:
@@ -103,6 +107,35 @@ def test_compute_balanced_score_penalizes_drawdown_and_low_trade_count() -> None
 def test_compute_balanced_score_rejects_candidate_without_trades() -> None:
     summary = {"net_pnl": "0", "max_drawdown": "0", "total_trades": 0}
     assert compute_balanced_score(summary) == Decimal("-99999")
+
+
+class BoundaryTrial:
+    def suggest_float(self, name: str, lower: float, upper: float) -> float:
+        return upper if name == "buy_rsi_max" else lower
+
+    def suggest_int(self, name: str, lower: int, upper: int) -> int:
+        return upper if name in {"fast_ema_period", "medium_ema_period"} else lower
+
+
+def test_sample_parameters_respects_dependent_strategy_bounds() -> None:
+    sampled = sample_parameters(
+        BoundaryTrial(),
+        search_space=[
+            {"name": "buy_rsi_max", "type": "number", "minimum": 0, "maximum": 100},
+            {"name": "sell_rsi_min", "type": "number", "minimum": 0, "maximum": 100},
+            {"name": "fast_ema_period", "type": "integer", "minimum": 2, "maximum": 20},
+            {"name": "medium_ema_period", "type": "integer", "minimum": 3, "maximum": 30},
+            {"name": "slow_ema_period", "type": "integer", "minimum": 4, "maximum": 40},
+        ],
+        defaults={},
+    )
+
+    assert sampled["buy_rsi_max"] <= sampled["sell_rsi_min"]
+    assert (
+        sampled["fast_ema_period"]
+        < sampled["medium_ema_period"]
+        < sampled["slow_ema_period"]
+    )
 
 
 def test_optimization_api_and_execution_flow() -> None:
