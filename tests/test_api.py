@@ -17,6 +17,7 @@ from goldie_api.backtests import BacktestProgressReporter, execute_backtest
 from goldie_api.maintenance import prune_market_quotes
 from goldie_api.main import app
 from goldie_api.models import (
+    Bot,
     Candle,
     BacktestExperiment,
     ConfigVersion,
@@ -97,6 +98,166 @@ def test_strategy_catalog_endpoint() -> None:
         assert set(catalog) == {"basic_momentum", "ema_rsi"}
         assert catalog["ema_rsi"]["required_candles"] == 21
         assert "fast_ema_period" in catalog["ema_rsi"]["parameters"]
+        parameter = catalog["ema_rsi"]["parameters"]["fast_ema_period"]
+        assert parameter["description"]
+        assert parameter["unit"] == "candles"
+        assert parameter["impact"]
+
+
+def register_feed(client: TestClient, symbol: str, provider_symbol: str) -> str:
+    response = client.post(
+        "/api/v1/market-feeds/register",
+        headers={"X-Agent-Token": "test-agent-token"},
+        json={
+            "provider": "oanda",
+            "environment": "practice",
+            "canonical_symbol": symbol,
+            "provider_symbol": provider_symbol,
+            "agent_name": f"collector-{symbol.lower()}",
+        },
+    )
+    assert response.status_code == 201
+    return response.json()["feed"]["id"]
+
+
+def create_and_publish_strategy(
+    client: TestClient, headers: dict[str, str], name: str = "Global momentum"
+) -> dict:
+    created = client.post(
+        "/api/v1/strategy-profiles",
+        headers=headers,
+        json={
+            "name": name,
+            "description": "Shared configuration",
+            "initial_config": {
+                "market": {"symbol": "EURUSD", "timeframe": "M1"},
+                "strategy": {
+                    "name": "basic_momentum",
+                    "parameters": {
+                        "lookback_candles": 5,
+                        "min_momentum_points": 50,
+                    },
+                },
+                "filters": {"max_spread_points": 30, "stale_after_seconds": 15},
+                "session": {
+                    "timezone": "Europe/Vilnius",
+                    "start_time": "10:00:00",
+                    "end_time": "18:00:00",
+                },
+                "theoretical_trade": {
+                    "stop_loss_points": 70,
+                    "take_profit_points": 100,
+                    "risk_per_trade_pct": 0.25,
+                    "max_trade_duration_minutes": 5,
+                    "max_open_shadow_positions": 1,
+                },
+            },
+        },
+    )
+    assert created.status_code == 201
+    profile = created.json()
+    versions = client.get(
+        f"/api/v1/strategy-profiles/{profile['id']}/versions", headers=headers
+    ).json()
+    version = versions[0]
+    validated = client.post(
+        f"/api/v1/strategy-versions/{version['id']}/validate", headers=headers
+    )
+    assert validated.status_code == 200
+    published = client.post(
+        f"/api/v1/strategy-versions/{version['id']}/publish", headers=headers
+    )
+    assert published.status_code == 200
+    return published.json()
+
+
+def test_global_strategy_bulk_creation_and_overrides() -> None:
+    Base.metadata.drop_all(engine)
+    Base.metadata.create_all(engine)
+    with TestClient(app) as client:
+        headers = login(client)
+        eur_feed = register_feed(client, "EURUSD", "EUR_USD")
+        xau_feed = register_feed(client, "XAUUSD", "XAU_USD")
+        version = create_and_publish_strategy(client, headers)
+
+        immutable = client.post(
+            f"/api/v1/strategy-versions/{version['id']}/validate", headers=headers
+        )
+        assert immutable.status_code == 409
+
+        request = {
+            "request_id": str(uuid.uuid4()),
+            "strategy_version_id": version["id"],
+            "market_feed_ids": [eur_feed, xau_feed],
+            "mode": "SHADOW",
+            "name_template": "{symbol}-{strategy}-{mode}",
+        }
+        first = client.post("/api/v1/bots/bulk", headers=headers, json=request)
+        assert first.status_code == 200
+        assert [item["status"] for item in first.json()] == ["CREATED", "CREATED"]
+        second = client.post("/api/v1/bots/bulk", headers=headers, json=request)
+        assert second.status_code == 200
+        assert [item["status"] for item in second.json()] == ["EXISTS", "EXISTS"]
+        with SessionLocal() as db:
+            assert db.scalar(select(func.count(Bot.id))) == 2
+
+        eur_bot = first.json()[0]["bot"]
+        override = client.put(
+            f"/api/v1/bots/{eur_bot['id']}/overrides",
+            headers=headers,
+            json={
+                "overrides": {
+                    "filters": {"max_spread_points": 12},
+                    "theoretical_trade": {"risk_per_trade_pct": 0.1},
+                }
+            },
+        )
+        assert override.status_code == 200
+        assert override.json()["config"]["market"]["symbol"] == "EURUSD"
+        assert override.json()["config"]["filters"]["max_spread_points"] == "12"
+        assert override.json()["config_overrides"]["filters"]["max_spread_points"] == 12
+
+        market_override = client.put(
+            f"/api/v1/bots/{eur_bot['id']}/overrides",
+            headers=headers,
+            json={"overrides": {"market": {"symbol": "XAUUSD"}}},
+        )
+        assert market_override.status_code == 409
+
+
+def test_new_strategy_version_does_not_change_linked_bot() -> None:
+    Base.metadata.drop_all(engine)
+    Base.metadata.create_all(engine)
+    with TestClient(app) as client:
+        headers = login(client)
+        feed_id = register_feed(client, "EURUSD", "EUR_USD")
+        published = create_and_publish_strategy(client, headers, "Version isolation")
+        bulk = client.post(
+            "/api/v1/bots/bulk",
+            headers=headers,
+            json={
+                "request_id": str(uuid.uuid4()),
+                "strategy_version_id": published["id"],
+                "market_feed_ids": [feed_id],
+                "mode": "SHADOW",
+                "name_template": "{symbol}-isolated",
+            },
+        ).json()
+        bot = bulk[0]["bot"]
+        changed = published["config"]
+        changed["filters"]["max_spread_points"] = 5
+        created = client.post(
+            f"/api/v1/strategy-profiles/{published['strategy_profile_id']}/versions",
+            headers=headers,
+            json={"config": changed},
+        )
+        assert created.status_code == 201
+        current = client.get(f"/api/v1/bots/{bot['id']}", headers=headers).json()
+        assert current["strategy_version_id"] == published["id"]
+        configs = client.get(
+            f"/api/v1/bots/{bot['id']}/config-versions", headers=headers
+        ).json()
+        assert len(configs) == 1
 
 
 def activate_first_config(client: TestClient, bot_id: str, headers: dict[str, str]) -> None:

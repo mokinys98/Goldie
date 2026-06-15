@@ -10,17 +10,31 @@ from sqlalchemy import desc, select
 from sqlalchemy.orm import Session
 
 from ..db import get_db
-from ..models import Bot, ConfigVersion, MarketFeed, PaperAccount, Run, Signal, User
+from ..models import (
+    Bot,
+    ConfigVersion,
+    MarketFeed,
+    PaperAccount,
+    Run,
+    Signal,
+    StrategyProfile,
+    StrategyVersion,
+    User,
+)
 from ..schemas import (
+    BotApplyStrategy,
     BotCreate,
+    BotOverridesUpdate,
     BotRead,
+    BulkBotCreate,
+    BulkBotResult,
     ConfigCreate,
     ConfigRead,
     MarketFeedAssignment,
     SignalRead,
 )
 from ..security import get_current_user
-from ..services import add_audit, next_config_version
+from ..services import add_audit, effective_strategy_config, next_config_version
 
 router = APIRouter(prefix="/api/v1", tags=["bots"])
 
@@ -129,6 +143,207 @@ def create_bot(
     db.commit()
     db.refresh(bot)
     return bot
+
+
+def create_paper_account(db: Session, bot: Bot) -> None:
+    opening_balance = Decimal("10000")
+    db.add(
+        PaperAccount(
+            bot_id=bot.id,
+            currency="USD",
+            initial_balance=opening_balance,
+            balance=opening_balance,
+            equity=opening_balance,
+            available_cash=opening_balance,
+        )
+    )
+
+
+@router.post("/bots/bulk", response_model=list[BulkBotResult])
+def create_bots_bulk(
+    payload: BulkBotCreate,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> list[BulkBotResult]:
+    strategy_version = db.get(StrategyVersion, payload.strategy_version_id)
+    if strategy_version is None:
+        raise HTTPException(status_code=404, detail="Strategy version not found")
+    if strategy_version.status != "PUBLISHED":
+        raise HTTPException(status_code=409, detail="Only published strategy versions can be used")
+    profile = db.get(StrategyProfile, strategy_version.strategy_profile_id)
+    assert profile is not None
+    results: list[BulkBotResult] = []
+    for feed_id in dict.fromkeys(payload.market_feed_ids):
+        feed = db.get(MarketFeed, feed_id)
+        if feed is None:
+            results.append(
+                BulkBotResult(
+                    market_feed_id=feed_id,
+                    name="",
+                    status="FAILED",
+                    error="Market feed not found",
+                )
+            )
+            continue
+        values = {
+            "symbol": feed.canonical_symbol,
+            "strategy": profile.name.lower().replace(" ", "-"),
+            "mode": payload.mode.lower(),
+        }
+        try:
+            name = payload.name_template.format(**values)
+        except (KeyError, ValueError):
+            name = ""
+        if not 2 <= len(name) <= 120:
+            results.append(
+                BulkBotResult(
+                    market_feed_id=feed.id,
+                    name=name,
+                    status="FAILED",
+                    error="Generated bot name must contain 2-120 characters",
+                )
+            )
+            continue
+        existing = db.scalar(select(Bot).where(Bot.name == name))
+        if existing:
+            results.append(
+                BulkBotResult(
+                    market_feed_id=feed.id,
+                    name=name,
+                    status="EXISTS",
+                    bot=BotRead.model_validate(existing),
+                )
+            )
+            continue
+        config = effective_strategy_config(
+            strategy_version, {}, symbol=feed.canonical_symbol
+        )
+        bot = Bot(
+            name=name,
+            description=payload.description,
+            mode=payload.mode,
+            market_feed_id=feed.id,
+            strategy_version_id=strategy_version.id,
+            config_overrides={},
+        )
+        db.add(bot)
+        db.flush()
+        if payload.mode == "PAPER":
+            create_paper_account(db, bot)
+        db.add(
+            ConfigVersion(
+                bot_id=bot.id,
+                version=1,
+                status="DRAFT",
+                config=jsonable_encoder(config.model_dump(mode="json")),
+                strategy_version_id=strategy_version.id,
+                config_overrides={},
+                created_by=user.id,
+            )
+        )
+        add_audit(
+            db,
+            actor_type="USER",
+            actor_id=str(user.id),
+            action="BOT_BULK_CREATED",
+            target_type="BOT",
+            target_id=str(bot.id),
+            details={"request_id": str(payload.request_id), "market_feed_id": str(feed.id)},
+        )
+        db.commit()
+        db.refresh(bot)
+        results.append(
+            BulkBotResult(
+                market_feed_id=feed.id,
+                name=name,
+                status="CREATED",
+                bot=BotRead.model_validate(bot),
+            )
+        )
+    return results
+
+
+@router.post("/bots/{bot_id}/apply-strategy", response_model=ConfigRead)
+def apply_strategy(
+    bot_id: uuid.UUID,
+    payload: BotApplyStrategy,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> ConfigVersion:
+    bot = get_bot_or_404(db, bot_id)
+    strategy_version = db.get(StrategyVersion, payload.strategy_version_id)
+    if strategy_version is None:
+        raise HTTPException(status_code=404, detail="Strategy version not found")
+    if strategy_version.status not in {"PUBLISHED", "ARCHIVED"}:
+        raise HTTPException(status_code=409, detail="Strategy version is not published")
+    if bot.market_feed_id is None:
+        raise HTTPException(status_code=409, detail="Bot must have an assigned market feed")
+    feed = db.get(MarketFeed, bot.market_feed_id)
+    assert feed is not None
+    config = effective_strategy_config(
+        strategy_version, {}, symbol=feed.canonical_symbol
+    )
+    bot.strategy_version_id = strategy_version.id
+    bot.config_overrides = {}
+    row = ConfigVersion(
+        bot_id=bot.id,
+        version=next_config_version(db, bot.id),
+        status="DRAFT",
+        config=jsonable_encoder(config.model_dump(mode="json")),
+        strategy_version_id=strategy_version.id,
+        config_overrides={},
+        created_by=user.id,
+    )
+    db.add(row)
+    add_audit(
+        db, actor_type="USER", actor_id=str(user.id), action="STRATEGY_APPLIED",
+        target_type="BOT", target_id=str(bot.id),
+        details={"strategy_version_id": str(strategy_version.id)},
+    )
+    db.commit()
+    db.refresh(row)
+    return row
+
+
+@router.put("/bots/{bot_id}/overrides", response_model=ConfigRead)
+def update_overrides(
+    bot_id: uuid.UUID,
+    payload: BotOverridesUpdate,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> ConfigVersion:
+    bot = get_bot_or_404(db, bot_id)
+    if bot.strategy_version_id is None:
+        raise HTTPException(status_code=409, detail="Bot is not linked to a strategy")
+    if "market" in payload.overrides:
+        raise HTTPException(status_code=409, detail="Market settings cannot be overridden")
+    if bot.market_feed_id is None:
+        raise HTTPException(status_code=409, detail="Bot must have an assigned market feed")
+    strategy_version = db.get(StrategyVersion, bot.strategy_version_id)
+    feed = db.get(MarketFeed, bot.market_feed_id)
+    assert strategy_version is not None and feed is not None
+    config = effective_strategy_config(
+        strategy_version, payload.overrides, symbol=feed.canonical_symbol
+    )
+    bot.config_overrides = jsonable_encoder(payload.overrides)
+    row = ConfigVersion(
+        bot_id=bot.id,
+        version=next_config_version(db, bot.id),
+        status="DRAFT",
+        config=jsonable_encoder(config.model_dump(mode="json")),
+        strategy_version_id=strategy_version.id,
+        config_overrides=jsonable_encoder(payload.overrides),
+        created_by=user.id,
+    )
+    db.add(row)
+    add_audit(
+        db, actor_type="USER", actor_id=str(user.id), action="BOT_OVERRIDES_UPDATED",
+        target_type="BOT", target_id=str(bot.id),
+        details={"overrides": payload.overrides},
+    )
+    db.commit()
+    db.refresh(row)
+    return row
 
 
 @router.put("/bots/{bot_id}/market-feed", response_model=BotRead)

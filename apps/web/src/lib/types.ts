@@ -6,6 +6,8 @@ export type Bot = {
   state: string;
   active_config_version_id: string | null;
   market_feed_id: string | null;
+  strategy_version_id?: string | null;
+  config_overrides?: Record<string, unknown>;
   created_at: string;
   updated_at: string;
 };
@@ -36,6 +38,8 @@ export type ConfigVersion = {
   validation_errors: unknown[] | null;
   created_at: string;
   activated_at: string | null;
+  strategy_version_id?: string | null;
+  config_overrides?: Record<string, unknown>;
 };
 
 export type Signal = {
@@ -60,6 +64,8 @@ export type StrategyParameterMetadata = {
   maximum?: number;
   exclusiveMinimum?: number;
   default?: string | number | boolean;
+  unit?: string;
+  impact?: string;
 };
 
 export type StrategyMetadata = {
@@ -68,6 +74,43 @@ export type StrategyMetadata = {
   required_candles: number;
   parameters: Record<string, StrategyParameterMetadata>;
   defaults: Record<string, string | number | boolean>;
+};
+
+export type StrategyVersion = {
+  id: string;
+  strategy_profile_id: string;
+  version: number;
+  status: "DRAFT" | "VALIDATED" | "PUBLISHED" | "ARCHIVED";
+  config: BotConfig;
+  validation_errors: unknown[] | null;
+  published_at: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type StrategyProfile = {
+  id: string;
+  name: string;
+  description: string;
+  status: "DRAFT" | "ACTIVE" | "ARCHIVED";
+  current_published_version_id: string | null;
+  bot_count: number;
+  published_version: StrategyVersion | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type ConfigurationSchema = Record<
+  string,
+  Record<string, StrategyParameterMetadata>
+>;
+
+export type BulkBotResult = {
+  market_feed_id: string;
+  name: string;
+  status: "CREATED" | "EXISTS" | "FAILED";
+  bot: Bot | null;
+  error: string | null;
 };
 
 export type ShadowTrade = {

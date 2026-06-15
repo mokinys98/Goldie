@@ -53,6 +53,10 @@ class Bot(Base, TimestampMixin):
     market_feed_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("market_feeds.id"), index=True, nullable=True
     )
+    strategy_version_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("strategy_versions.id"), index=True, nullable=True
+    )
+    config_overrides: Mapped[dict] = mapped_column(JSON, default=dict)
 
     configs: Mapped[list["ConfigVersion"]] = relationship(
         back_populates="bot", cascade="all, delete-orphan"
@@ -72,8 +76,42 @@ class ConfigVersion(Base, TimestampMixin):
     validation_errors: Mapped[list | None] = mapped_column(JSON, nullable=True)
     created_by: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id"))
     activated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    strategy_version_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("strategy_versions.id"), index=True, nullable=True
+    )
+    config_overrides: Mapped[dict] = mapped_column(JSON, default=dict)
 
     bot: Mapped[Bot] = relationship(back_populates="configs")
+
+
+class StrategyProfile(Base, TimestampMixin):
+    __tablename__ = "strategy_profiles"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    name: Mapped[str] = mapped_column(String(120), unique=True, index=True)
+    description: Mapped[str] = mapped_column(Text, default="")
+    status: Mapped[str] = mapped_column(String(20), default="DRAFT", index=True)
+    current_published_version_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, nullable=True
+    )
+
+
+class StrategyVersion(Base, TimestampMixin):
+    __tablename__ = "strategy_versions"
+    __table_args__ = (
+        UniqueConstraint("strategy_profile_id", "version", name="uq_strategy_profile_version"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    strategy_profile_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("strategy_profiles.id"), index=True
+    )
+    version: Mapped[int] = mapped_column(Integer)
+    status: Mapped[str] = mapped_column(String(20), default="DRAFT", index=True)
+    config: Mapped[dict] = mapped_column(JSON)
+    validation_errors: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    created_by: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id"))
+    published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class Run(Base, TimestampMixin):

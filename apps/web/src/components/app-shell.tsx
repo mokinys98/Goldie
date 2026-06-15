@@ -22,6 +22,12 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             Bots
           </Link>
           <Link
+            className={pathname.startsWith("/strategies") ? "active" : ""}
+            href="/strategies"
+          >
+            Strategies
+          </Link>
+          <Link
             className={pathname.startsWith("/collector") ? "active" : ""}
             href="/collector"
           >

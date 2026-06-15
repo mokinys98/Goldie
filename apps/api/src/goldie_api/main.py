@@ -84,6 +84,8 @@ app.include_router(status.router)
 app.include_router(analytics.router)
 app.include_router(backtests.router)
 app.include_router(strategies.router)
+app.include_router(strategies.profiles)
+app.include_router(strategies.versions)
 
 
 @app.exception_handler(Exception)

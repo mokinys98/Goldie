@@ -15,6 +15,7 @@ from .models import (
     MarketTick,
     Run,
     Signal,
+    StrategyVersion,
 )
 
 
@@ -53,6 +54,31 @@ def next_config_version(db: Session, bot_id: uuid.UUID) -> int:
         select(func.max(ConfigVersion.version)).where(ConfigVersion.bot_id == bot_id)
     )
     return (current or 0) + 1
+
+
+def merge_config(base: dict, overrides: dict) -> dict:
+    result = dict(base)
+    for key, value in overrides.items():
+        if isinstance(value, dict) and isinstance(result.get(key), dict):
+            result[key] = merge_config(result[key], value)
+        else:
+            result[key] = value
+    return result
+
+
+def effective_strategy_config(
+    strategy_version: StrategyVersion,
+    overrides: dict,
+    *,
+    symbol: str,
+) -> BotConfiguration:
+    sanitized = dict(overrides)
+    sanitized.pop("market", None)
+    merged = merge_config(strategy_version.config, sanitized)
+    market = dict(merged.get("market") or {})
+    market["symbol"] = symbol
+    merged["market"] = market
+    return BotConfiguration.model_validate(merged)
 
 
 def evaluate_latest_signal(db: Session, bot: Bot) -> tuple[Signal | None, bool]:

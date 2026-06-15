@@ -17,8 +17,16 @@ from ..strategy import (
 class BasicMomentumParameters(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    lookback_candles: int = Field(default=5, ge=2, le=100)
-    min_momentum_points: Decimal = Field(default=Decimal("50"), gt=0, le=10000)
+    lookback_candles: int = Field(
+        default=5, ge=2, le=100,
+        description="Užbaigtų žvakių skaičius kainos pokyčiui apskaičiuoti.",
+        json_schema_extra={"unit": "candles", "impact": "Didinant signalas vertina ilgesnį ir lėtesnį judėjimą."},
+    )
+    min_momentum_points: Decimal = Field(
+        default=Decimal("50"), gt=0, le=10000,
+        description="Mažiausias kainos pokytis, reikalingas BUY arba SELL signalui.",
+        json_schema_extra={"unit": "points", "impact": "Didinant signalų bus mažiau, bet reikės stipresnio judėjimo."},
+    )
 
 
 class BasicMomentumStrategy:

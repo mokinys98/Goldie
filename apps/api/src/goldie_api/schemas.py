@@ -36,6 +36,8 @@ class BotRead(OrmModel):
     state: str
     active_config_version_id: uuid.UUID | None
     market_feed_id: uuid.UUID | None
+    strategy_version_id: uuid.UUID | None
+    config_overrides: dict
     created_at: datetime
     updated_at: datetime
 
@@ -53,6 +55,75 @@ class ConfigRead(OrmModel):
     validation_errors: list | None
     created_at: datetime
     activated_at: datetime | None
+    strategy_version_id: uuid.UUID | None
+    config_overrides: dict
+
+
+class StrategyProfileCreate(BaseModel):
+    name: str = Field(min_length=2, max_length=120)
+    description: str = Field(default="", max_length=2000)
+    initial_config: BotConfiguration
+
+
+class StrategyProfileUpdate(BaseModel):
+    name: str | None = Field(default=None, min_length=2, max_length=120)
+    description: str | None = Field(default=None, max_length=2000)
+    status: str | None = Field(default=None, pattern="^(DRAFT|ACTIVE|ARCHIVED)$")
+
+
+class StrategyVersionCreate(BaseModel):
+    config: BotConfiguration
+
+
+class StrategyVersionRead(OrmModel):
+    id: uuid.UUID
+    strategy_profile_id: uuid.UUID
+    version: int
+    status: str
+    config: dict
+    validation_errors: list | None
+    published_at: datetime | None
+    created_at: datetime
+    updated_at: datetime
+
+
+class StrategyProfileRead(OrmModel):
+    id: uuid.UUID
+    name: str
+    description: str
+    status: str
+    current_published_version_id: uuid.UUID | None
+    created_at: datetime
+    updated_at: datetime
+    bot_count: int = 0
+    published_version: StrategyVersionRead | None = None
+
+
+class BotApplyStrategy(BaseModel):
+    strategy_version_id: uuid.UUID
+
+
+class BotOverridesUpdate(BaseModel):
+    overrides: dict = Field(default_factory=dict)
+
+
+class BulkBotCreate(BaseModel):
+    request_id: uuid.UUID
+    strategy_version_id: uuid.UUID
+    market_feed_ids: list[uuid.UUID] = Field(min_length=1, max_length=100)
+    mode: str = Field(default="SHADOW", pattern="^(SHADOW|PAPER)$")
+    name_template: str = Field(
+        default="{symbol}-{strategy}-{mode}", min_length=2, max_length=120
+    )
+    description: str = Field(default="", max_length=1000)
+
+
+class BulkBotResult(BaseModel):
+    market_feed_id: uuid.UUID
+    name: str
+    status: str
+    bot: BotRead | None = None
+    error: str | None = None
 
 
 class AgentRead(OrmModel):

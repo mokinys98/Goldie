@@ -13,6 +13,7 @@ import type {
   Run,
   ShadowTrade,
   Signal,
+  StrategyProfile,
 } from "@/lib/types";
 import { ConfigEditor } from "@/components/config-editor";
 import { MarketChart } from "@/components/market-chart";
@@ -74,6 +75,11 @@ export default function BotDetailPage() {
     queryFn: () => api<ShadowTrade[]>(`/api/v1/bots/${id}/shadow-trades?limit=200`),
     refetchInterval: 10000,
   });
+  const strategyProfiles = useQuery({
+    queryKey: ["strategy-profiles"],
+    queryFn: () => api<StrategyProfile[]>("/api/v1/strategy-profiles"),
+  });
+  const [selectedStrategyVersionId, setSelectedStrategyVersionId] = useState("");
 
   useEffect(
     () =>
@@ -234,7 +240,26 @@ export default function BotDetailPage() {
       )}
 
       {tab === "Configuration" && configs.data && (
-        <ConfigEditor botId={id} versions={configs.data} onChanged={refreshConfig} />
+        <>
+          <div className="panel strategy-assignment">
+            <div>
+              <h2>Global strategy</h2>
+              <p className="muted">{bot.data.strategy_version_id ? "This bot inherits a versioned global strategy." : "Standalone legacy configuration. Assign a published strategy to start inheriting it."}</p>
+            </div>
+            <select value={selectedStrategyVersionId} onChange={(event) => setSelectedStrategyVersionId(event.target.value)}>
+              <option value="">Select published strategy</option>
+              {(strategyProfiles.data ?? []).filter((item) => item.published_version).map((item) => <option key={item.id} value={item.published_version!.id}>{item.name} · v{item.published_version!.version}</option>)}
+            </select>
+            <button className="button button-secondary" disabled={!selectedStrategyVersionId} onClick={async () => { await api(`/api/v1/bots/${id}/apply-strategy`, { method: "POST", body: JSON.stringify({ strategy_version_id: selectedStrategyVersionId }) }); setSelectedStrategyVersionId(""); refreshConfig(); }}>Apply as new draft</button>
+          </div>
+          <ConfigEditor
+            botId={id}
+            versions={configs.data}
+            onChanged={refreshConfig}
+            strategyVersionId={bot.data.strategy_version_id}
+            configOverrides={bot.data.config_overrides}
+          />
+        </>
       )}
 
       {tab === "Live Monitor" && (

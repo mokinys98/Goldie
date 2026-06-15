@@ -18,13 +18,13 @@ from ..strategy import (
 class EmaRsiParameters(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    fast_ema_period: int = Field(default=9, ge=2, le=200)
-    slow_ema_period: int = Field(default=21, ge=3, le=500)
-    rsi_period: int = Field(default=14, ge=2, le=200)
-    buy_rsi_max: Decimal = Field(default=Decimal("70"), ge=0, le=100)
-    sell_rsi_min: Decimal = Field(default=Decimal("30"), ge=0, le=100)
-    min_trend_points: Decimal = Field(default=Decimal("0"), ge=0, le=10000)
-    require_crossover: bool = False
+    fast_ema_period: int = Field(default=9, ge=2, le=200, description="Greitos EMA periodas.", json_schema_extra={"unit": "candles", "impact": "Mažinant EMA greičiau reaguoja į kainą."})
+    slow_ema_period: int = Field(default=21, ge=3, le=500, description="Lėtos EMA periodas.", json_schema_extra={"unit": "candles", "impact": "Didinant bazinė tendencija tampa lygesnė."})
+    rsi_period: int = Field(default=14, ge=2, le=200, description="RSI indikatoriaus skaičiavimo periodas.", json_schema_extra={"unit": "candles", "impact": "Didinant RSI tampa mažiau jautrus trumpiems pokyčiams."})
+    buy_rsi_max: Decimal = Field(default=Decimal("70"), ge=0, le=100, description="Didžiausia RSI reikšmė, prie kurios leidžiamas BUY.", json_schema_extra={"unit": "RSI", "impact": "Mažinant BUY filtras griežtėja."})
+    sell_rsi_min: Decimal = Field(default=Decimal("30"), ge=0, le=100, description="Mažiausia RSI reikšmė, prie kurios leidžiamas SELL.", json_schema_extra={"unit": "RSI", "impact": "Didinant SELL filtras griežtėja."})
+    min_trend_points: Decimal = Field(default=Decimal("0"), ge=0, le=10000, description="Mažiausias atstumas tarp greitos ir lėtos EMA.", json_schema_extra={"unit": "points", "impact": "Didinant reikalaujama stipresnės tendencijos."})
+    require_crossover: bool = Field(default=False, description="Reikalauja, kad EMA susikirtimas įvyktų paskutinėje žvakėje.", json_schema_extra={"unit": "boolean", "impact": "Įjungus signalai tampa retesni ir priklauso nuo naujo susikirtimo."})
 
     @model_validator(mode="after")
     def validate_periods(self) -> "EmaRsiParameters":
