@@ -18,6 +18,9 @@ dependencies = [
   "uvicorn[standard]>=0.34,<1"
 ]
 
+[project.scripts]
+goldie-replay-backtest = "goldie_api.replay_backtest:main"
+
 [project.optional-dependencies]
 dev = [
   "httpx>=0.28,<1",
@@ -27,4 +30,3 @@ dev = [
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/goldie_api"]
-

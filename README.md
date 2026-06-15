@@ -70,6 +70,12 @@ uv run python benchmarks/backtest_365.py
 The benchmark compares the optimized streaming evaluator with the legacy
 strategy path and fails if results differ or the speedup is below 3x.
 
+Reproduce a stored backtest from its immutable `run_id` with:
+
+```powershell
+uv run --package goldie-api goldie-replay-backtest --run-id <run-id> --pretty
+```
+
 Railway deployment is documented in
 [`09_RAILWAY_HOSTED_SHADOW.md`](docs/implementation/09_RAILWAY_HOSTED_SHADOW.md).
 
