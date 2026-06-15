@@ -28,6 +28,7 @@ from .models import (
 )
 
 MIN_BALANCED_TRADES = 5
+NO_TRADES_SCORE = Decimal("-99999")
 
 
 def _catalog_entry(name: str) -> dict[str, Any]:
@@ -49,6 +50,8 @@ def compute_balanced_score(summary: dict[str, Any]) -> Decimal:
     net_pnl = _as_decimal(summary.get("net_pnl"))
     max_drawdown = _as_decimal(summary.get("max_drawdown"))
     total_trades = int(summary.get("total_trades") or 0)
+    if total_trades == 0:
+        return NO_TRADES_SCORE
     trade_penalty = Decimal(max(0, MIN_BALANCED_TRADES - total_trades)) * Decimal("50")
     drawdown_penalty = max_drawdown * Decimal("1.5")
     return net_pnl - drawdown_penalty - trade_penalty
