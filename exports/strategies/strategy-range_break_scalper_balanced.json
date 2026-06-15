@@ -1,0 +1,39 @@
+{
+  "format": "goldie-strategy-configuration",
+  "version": 1,
+  "exported_at": "2026-06-15T12:34:04.703Z",
+  "configuration": {
+    "market": {
+      "symbol": "EURUSD",
+      "timeframe": "M1"
+    },
+    "strategy": {
+      "name": "range_break_scalper",
+      "parameters": {
+        "fast_ema_period": 3,
+        "slow_ema_period": 8,
+        "rsi_period": 7,
+        "buy_rsi_min": 55,
+        "sell_rsi_max": 45,
+        "range_lookback": 5,
+        "min_breakout_points": 2
+      }
+    },
+    "filters": {
+      "max_spread_points": 30,
+      "stale_after_seconds": 15
+    },
+    "session": {
+      "timezone": "Europe/Vilnius",
+      "start_time": "10:00:00",
+      "end_time": "18:00:00"
+    },
+    "theoretical_trade": {
+      "stop_loss_points": 70,
+      "take_profit_points": 100,
+      "risk_per_trade_pct": 0.25,
+      "max_trade_duration_minutes": 5,
+      "max_open_shadow_positions": 1
+    }
+  }
+}

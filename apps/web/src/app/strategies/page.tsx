@@ -19,7 +19,12 @@ export default function StrategiesPage() {
           <h1>Strategies</h1>
           <p>Current trading configurations shared by bot instances.</p>
         </div>
-        <Link className="button button-primary" href="/strategies/new">Create strategy</Link>
+        <div className="button-row">
+          <Link className="button button-secondary" href="/strategies/bulk">
+            Bulk bots creation
+          </Link>
+          <Link className="button button-primary" href="/strategies/new">Create strategy</Link>
+        </div>
       </header>
       {query.isLoading && <div className="panel">Loading strategies...</div>}
       {query.error && <div className="error-box">{query.error.message}</div>}

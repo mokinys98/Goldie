@@ -1,0 +1,12 @@
+{
+  "format": "goldie-strategy-configuration",
+  "version": 1,
+  "exported_at": "2026-06-15T12:40:00.000Z",
+  "configuration": {
+    "market": {"symbol": "EURUSD", "timeframe": "M1"},
+    "strategy": {"name": "ema_momentum_breakout", "parameters": {"fast_ema_period": 3, "medium_ema_period": 8, "slow_ema_period": 21, "momentum_period": 3, "min_momentum_points": 8, "atr_period": 10, "min_atr_points": 0}},
+    "filters": {"max_spread_points": 25, "stale_after_seconds": 10},
+    "session": {"timezone": "Europe/Vilnius", "start_time": "08:00:00", "end_time": "16:00:00"},
+    "theoretical_trade": {"stop_loss_points": 55, "take_profit_points": 140, "risk_per_trade_pct": 0.4, "max_trade_duration_minutes": 4, "max_open_shadow_positions": 1}
+  }
+}

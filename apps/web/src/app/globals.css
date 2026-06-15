@@ -166,6 +166,19 @@ legend { color: var(--gold); padding: 0 8px; font-size: 12px; font-weight: 800; 
 .strategy-identity-grid textarea { min-height: 82px; }
 .bulk-grid { display: grid; grid-template-columns: minmax(300px, 1.15fr) minmax(320px, .85fr); gap: 32px; margin-bottom: 18px; align-items: start; }
 .bulk-grid h3 { margin: 0 0 14px; font-size: 14px; color: var(--gold-bright); }
+.bulk-selection-grid { display: grid; grid-template-columns: repeat(2, minmax(260px, 1fr)) minmax(260px, .8fr); gap: 28px; align-items: start; }
+.bulk-selection-grid h3 { margin: 0; font-size: 14px; color: var(--gold-bright); }
+.selection-heading { min-height: 38px; display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; margin-bottom: 10px; }
+.selection-heading .button { padding: 0 4px; font-size: 11px; }
+.bulk-selection-list { max-height: 360px; padding-right: 6px; }
+.bulk-option { align-items: flex-start; border: 1px solid var(--line); border-radius: 7px; padding: 10px !important; background: #0c1118; }
+.bulk-option input { margin-top: 3px; }
+.bulk-option span { display: grid; gap: 3px; min-width: 0; }
+.bulk-option strong { color: var(--text); font-size: 12px; }
+.bulk-option small { color: var(--muted); font-size: 10px; font-weight: 500; overflow-wrap: anywhere; }
+.bulk-total { display: grid; grid-template-columns: 1fr auto; gap: 9px 16px; padding: 14px; border: 1px solid var(--line); border-radius: 7px; background: #0c1118; }
+.bulk-total span { color: var(--muted); font-size: 12px; }
+.bulk-total strong { color: var(--gold-bright); text-align: right; }
 .selection-list { display: grid; gap: 10px; max-height: 280px; overflow: auto; }
 .selection-list .checkbox-row { margin: 0; padding: 7px 4px; }
 .bulk-controls { align-content: start; }
@@ -246,7 +259,7 @@ legend { color: var(--gold); padding: 0 8px; font-size: 12px; font-weight: 800; 
   .strategy-create-layout { grid-template-columns: 1fr; }
   .breakdown-grid { grid-template-columns: 1fr; }
   .compact-form { grid-template-columns: 1fr; }
-  .bulk-grid, .strategy-identity-grid { grid-template-columns: 1fr; }
+  .bulk-grid, .bulk-selection-grid, .strategy-identity-grid { grid-template-columns: 1fr; }
   .bot-filter-panel { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .bot-filter-search { grid-column: 1 / -1; }
   .strategy-assignment, .override-row { grid-template-columns: 1fr; }

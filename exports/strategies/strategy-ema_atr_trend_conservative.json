@@ -1,10 +1,10 @@
 {
   "format": "goldie-strategy-configuration",
   "version": 1,
-  "exported_at": "2026-06-15T13:10:00.000Z",
+  "exported_at": "2026-06-15T12:41:00.000Z",
   "configuration": {
     "market": {"symbol": "EURUSD", "timeframe": "M1"},
-    "strategy": {"name": "bb_rsi_mean_reversion", "parameters": {"bollinger_period": 20, "bollinger_deviations": 2.5, "rsi_period": 18, "buy_rsi_max": 40, "sell_rsi_min": 60, "atr_period": 20, "atr_stop_multiplier": 2.0, "require_touch_band": true}},
+    "strategy": {"name": "ema_atr_trend", "parameters": {"fast_ema_period": 12, "slow_ema_period": 30, "atr_period": 20, "min_atr_points": 8, "max_atr_points": 1000, "min_trend_points": 20, "atr_stop_multiplier": 2.0, "require_crossover": false}},
     "filters": {"max_spread_points": 35, "stale_after_seconds": 20},
     "session": {"timezone": "Europe/Vilnius", "start_time": "10:00:00", "end_time": "20:00:00"},
     "theoretical_trade": {"stop_loss_points": 85, "take_profit_points": 90, "risk_per_trade_pct": 0.15, "max_trade_duration_minutes": 8, "max_open_shadow_positions": 1}
