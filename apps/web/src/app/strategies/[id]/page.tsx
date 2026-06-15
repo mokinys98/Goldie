@@ -62,26 +62,22 @@ export default function StrategyDetailPage() {
           </button>
         </div>
       </header>
-      <div className="split-layout">
-        <div className="panel">
-          <h2>Current parameters</h2>
-          <ConfigValues config={data.config} />
-        </div>
-        <div className="panel">
-          <h2>Usage</h2>
-          <dl className="key-values">
-            <div><dt>Linked bots</dt><dd>{data.bot_count}</dd></div>
-            <div><dt>Algorithm</dt><dd>{data.config.strategy.name}</dd></div>
-            <div><dt>Updated</dt><dd>{new Date(data.updated_at).toLocaleString()}</dd></div>
-          </dl>
-          <Link className="button button-primary table-actions" href="#bulk">Create bots</Link>
-        </div>
-      </div>
       {editing && (
         <div className="strategy-editor-section">
-          <div className="panel form-grid">
-            <label>Name<input value={name} onChange={(event) => setName(event.target.value)} /></label>
-            <label>Description<textarea value={description} onChange={(event) => setDescription(event.target.value)} /></label>
+          <div className="panel">
+            <div className="section-title">
+              <div>
+                <h2>Edit strategy</h2>
+                <p>Saving updates this strategy and activates the new configuration for linked bots.</p>
+              </div>
+              <button className="button button-secondary" onClick={() => setEditing(false)}>
+                Cancel
+              </button>
+            </div>
+            <div className="strategy-identity-grid">
+              <label>Name<input value={name} onChange={(event) => setName(event.target.value)} /></label>
+              <label>Description<textarea value={description} onChange={(event) => setDescription(event.target.value)} /></label>
+            </div>
           </div>
           <StrategyConfigForm
             initialConfig={data.config}
@@ -97,7 +93,25 @@ export default function StrategyDetailPage() {
           />
         </div>
       )}
-      <BulkCreate strategy={data} />
+      {!editing && (
+        <>
+          <div className="split-layout">
+            <div className="panel">
+              <h2>Current parameters</h2>
+              <ConfigValues config={data.config} />
+            </div>
+            <div className="panel">
+              <h2>Usage</h2>
+              <dl className="key-values">
+                <div><dt>Linked bots</dt><dd>{data.bot_count}</dd></div>
+                <div><dt>Algorithm</dt><dd>{data.config.strategy.name}</dd></div>
+                <div><dt>Updated</dt><dd>{new Date(data.updated_at).toLocaleString()}</dd></div>
+              </dl>
+            </div>
+          </div>
+          <BulkCreate strategy={data} />
+        </>
+      )}
     </section>
   );
 }
@@ -151,7 +165,7 @@ function BulkCreate({ strategy }: { strategy: StrategyProfile }) {
             ))}
           </div>
         </div>
-        <div className="form-grid">
+        <div className="form-grid bulk-controls">
           <h3>2. Naming and mode</h3>
           <label>Mode<select value={mode} onChange={(event) => setMode(event.target.value as "SHADOW" | "PAPER")}><option value="SHADOW">SHADOW</option><option value="PAPER">PAPER</option></select></label>
           <label>Name template<input value={template} onChange={(event) => setTemplate(event.target.value)} /></label>

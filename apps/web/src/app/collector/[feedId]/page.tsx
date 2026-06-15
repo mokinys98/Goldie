@@ -267,7 +267,7 @@ function Commands({ feedId, commands }: { feedId: string; commands: CollectorCom
       </div>
       <div className="panel">
         <h2>Historical backfill</h2>
-        <p className="muted">One global backfill at a time, up to 365 days.</p>
+        <p className="muted">One backfill per feed at a time, up to 365 days.</p>
         <div className="form-grid compact-form">
           <label>Start<input type="datetime-local" value={start} onChange={(event) => setStart(event.target.value)} /></label>
           <label>End<input type="datetime-local" value={end} onChange={(event) => setEnd(event.target.value)} /></label>

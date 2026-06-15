@@ -13,7 +13,13 @@ logging.basicConfig(
     format="%(asctime)s %(levelname)s %(name)s %(message)s",
 )
 logger = logging.getLogger("goldie-market-data-collector")
-backfill_lock = threading.Lock()
+backfill_locks: dict[str, threading.Lock] = {}
+backfill_locks_guard = threading.Lock()
+
+
+def backfill_lock(symbol: str) -> threading.Lock:
+    with backfill_locks_guard:
+        return backfill_locks.setdefault(symbol, threading.Lock())
 
 
 def parse_time(value: str) -> datetime:
@@ -30,7 +36,7 @@ def run_backfill(
     *,
     command_id: str | None = None,
 ) -> datetime:
-    with backfill_lock:
+    with backfill_lock(settings.provider_symbol):
         candles = provider.candles(start, end)
         total = len(candles)
         accepted = 0
@@ -202,7 +208,7 @@ class CollectorSupervisor:
         self.globally_paused = False
         self.applied_version: int | None = None
         self.last_error: str | None = None
-        self.backfill_thread: threading.Thread | None = None
+        self.backfill_threads: dict[str, threading.Thread] = {}
 
     def on_registered(self, symbol: str, feed_id: str) -> None:
         self.feed_symbols[feed_id] = symbol
@@ -285,6 +291,8 @@ class CollectorSupervisor:
                 "FAILED",
                 error=f"{type(exc).__name__}: {exc}",
             )
+        finally:
+            self.backfill_threads.pop(symbol, None)
 
     def handle_command(self, command: dict) -> None:
         command_id = command["id"]
@@ -333,20 +341,22 @@ class CollectorSupervisor:
                 result={"symbols": symbols},
             )
         elif action == "BACKFILL":
-            if self.backfill_thread and self.backfill_thread.is_alive():
+            active_thread = self.backfill_threads.get(symbols[0])
+            if active_thread and active_thread.is_alive():
                 self.control_client.update_command(
                     command_id,
                     "FAILED",
-                    error="Another backfill is active",
+                    error="Another backfill is active for this feed",
                 )
                 return
-            self.backfill_thread = threading.Thread(
+            thread = threading.Thread(
                 target=self.execute_backfill,
                 args=(command, symbols[0]),
-                name="collector-manual-backfill",
+                name=f"collector-manual-backfill-{symbols[0].lower()}",
                 daemon=True,
             )
-            self.backfill_thread.start()
+            self.backfill_threads[symbols[0]] = thread
+            thread.start()
 
     def heartbeat(self) -> None:
         statuses = {symbol: worker.status for symbol, worker in self.workers.items()}

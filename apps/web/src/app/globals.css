@@ -131,9 +131,20 @@ legend { color: var(--gold); padding: 0 8px; font-size: 12px; font-weight: 800; 
 .chart-empty { height: 220px; display: grid; place-items: center; color: var(--muted); border: 1px dashed var(--line); border-radius: 7px; }
 .performance-stack { display: grid; gap: 18px; }
 .performance-controls { display: grid; grid-template-columns: auto minmax(180px, 1fr) auto minmax(120px, .4fr); gap: 12px; align-items: end; }
-.performance-card-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+.performance-card-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(360px, 1fr)); gap: 14px; align-items: stretch; }
 .performance-metrics { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 10px; }
-.performance-bot-card .performance-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.performance-metrics .metric-card { min-width: 0; min-height: 92px; justify-content: center; overflow: hidden; }
+.performance-metrics .metric-card span, .performance-metrics .metric-card strong { min-width: 0; max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
+.performance-metrics .metric-card span { white-space: nowrap; }
+.performance-metrics .metric-card strong { white-space: nowrap; font-variant-numeric: tabular-nums; }
+.performance-bot-card { min-width: 0; min-height: 292px; display: grid; grid-template-rows: 58px 1fr; align-content: start; overflow: hidden; background: linear-gradient(145deg, var(--panel-2), var(--panel)); }
+.performance-bot-card .section-title { min-width: 0; margin-bottom: 18px; align-items: center; }
+.performance-bot-card .section-title > div { min-width: 0; overflow: hidden; }
+.performance-bot-card .section-title h2, .performance-bot-card .section-title p { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.performance-bot-card .section-title h2 { margin: 0 0 5px; }
+.performance-bot-card .section-title .table-link { flex: 0 0 auto; }
+.performance-bot-card .performance-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); align-content: start; }
+.performance-bot-card .performance-metrics .metric-card:last-child { grid-column: 1 / -1; }
 .breakdown-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
 .theoretical-banner { border: 1px solid #6f5a24; background: #211b0e; color: var(--gold-bright); border-radius: 8px; padding: 12px 14px; font-size: 12px; font-weight: 800; letter-spacing: .06em; }
 .collector-section, .collector-metrics { margin-top: 18px; }
@@ -150,14 +161,32 @@ legend { color: var(--gold); padding: 0 8px; font-size: 12px; font-weight: 800; 
 .error-text { color: #ffabb2; max-width: 320px; overflow: hidden; text-overflow: ellipsis; }
 .market-feed-control { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px; align-items: center; }
 .market-feed-control .button { min-height: 40px; white-space: nowrap; }
-.strategy-editor-section { margin-top: 18px; }
-.bulk-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; margin-bottom: 18px; }
+.strategy-editor-section { margin-top: 18px; display: grid; gap: 18px; }
+.strategy-identity-grid { display: grid; grid-template-columns: minmax(220px, .7fr) minmax(0, 1.3fr); gap: 18px; align-items: start; }
+.strategy-identity-grid textarea { min-height: 82px; }
+.bulk-grid { display: grid; grid-template-columns: minmax(300px, 1.15fr) minmax(320px, .85fr); gap: 32px; margin-bottom: 18px; align-items: start; }
 .bulk-grid h3 { margin: 0 0 14px; font-size: 14px; color: var(--gold-bright); }
 .selection-list { display: grid; gap: 10px; max-height: 280px; overflow: auto; }
-.bot-selection-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; }
-.bot-selection-card { aspect-ratio: 16 / 9; display: flex; flex-direction: column; align-items: flex-start; justify-content: center; gap: 8px; padding: 18px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); color: var(--text); text-align: left; }
-.bot-selection-card span, .bot-selection-card small { color: var(--muted); }
-.bot-selection-card.selected { border-color: var(--gold); box-shadow: inset 0 0 0 1px var(--gold); }
+.selection-list .checkbox-row { margin: 0; padding: 7px 4px; }
+.bulk-controls { align-content: start; }
+.bot-filter-panel { display: grid; grid-template-columns: minmax(260px, 1.6fr) repeat(4, minmax(140px, .75fr)); gap: 14px; align-items: end; }
+.bot-filter-panel label { min-width: 0; }
+.bot-filter-summary { grid-column: 1 / -1; display: flex; align-items: center; justify-content: space-between; gap: 14px; padding-top: 14px; border-top: 1px solid var(--line); color: var(--muted); font-size: 12px; }
+.bot-filter-summary strong { color: var(--text); }
+.bot-filter-empty { display: grid; gap: 10px; padding-block: 34px; }
+.bot-filter-empty h2, .bot-filter-empty p { margin: 0; }
+.bot-filter-empty .button { justify-self: center; margin-top: 4px; }
+.bot-selection-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 14px; }
+.bot-selection-card { width: 100%; min-width: 0; min-height: 184px; display: grid; grid-template-rows: minmax(24px, auto) 40px 20px 34px; align-content: center; gap: 8px; overflow: hidden; padding: 18px; border: 1px solid var(--line); border-radius: 10px; background: linear-gradient(145deg, var(--panel-2), var(--panel)); color: var(--text); text-align: left; transition: border-color .16s ease, box-shadow .16s ease, transform .16s ease; }
+.bot-selection-card:hover:not(:disabled) { border-color: #46566b; transform: translateY(-1px); }
+.bot-selection-card:focus-visible { outline: 2px solid var(--gold); outline-offset: 2px; }
+.bot-selection-card strong, .bot-selection-card span, .bot-selection-card small { min-width: 0; max-width: 100%; overflow: hidden; overflow-wrap: anywhere; }
+.bot-selection-card strong { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 1; line-clamp: 1; font-size: 15px; text-overflow: ellipsis; }
+.bot-selection-card span, .bot-selection-card small { color: var(--muted); line-height: 1.4; }
+.bot-selection-card span:first-of-type { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; }
+.bot-selection-card span:nth-of-type(2) { white-space: nowrap; text-overflow: ellipsis; }
+.bot-selection-card small { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; }
+.bot-selection-card.selected { border-color: var(--gold); background: linear-gradient(145deg, #211b0e, var(--panel)); box-shadow: inset 0 0 0 1px var(--gold), 0 8px 24px #0003; }
 .bot-selection-card:disabled { opacity: .45; cursor: not-allowed; }
 .strategy-assignment { margin-bottom: 18px; display: grid; grid-template-columns: 1fr minmax(220px, .7fr) auto; gap: 14px; align-items: center; }
 .strategy-assignment h2 { margin-bottom: 5px; }
@@ -217,17 +246,25 @@ legend { color: var(--gold); padding: 0 8px; font-size: 12px; font-weight: 800; 
   .strategy-create-layout { grid-template-columns: 1fr; }
   .breakdown-grid { grid-template-columns: 1fr; }
   .compact-form { grid-template-columns: 1fr; }
-  .bulk-grid { grid-template-columns: 1fr; }
+  .bulk-grid, .strategy-identity-grid { grid-template-columns: 1fr; }
+  .bot-filter-panel { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .bot-filter-search { grid-column: 1 / -1; }
   .strategy-assignment, .override-row { grid-template-columns: 1fr; }
   .performance-card-grid { grid-template-columns: 1fr; }
   .performance-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .bot-selection-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .bot-selection-grid { grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); }
 }
 
 @media (max-width: 720px) {
   .market-feed-control { grid-template-columns: 1fr; }
   .performance-controls { grid-template-columns: 1fr 1fr; }
+  .performance-card-grid { grid-template-columns: minmax(0, 1fr); }
+  .performance-bot-card { min-height: 0; }
+  .bot-filter-panel { grid-template-columns: 1fr; }
+  .bot-filter-search, .bot-filter-summary { grid-column: auto; }
+  .bot-filter-summary { align-items: stretch; flex-direction: column; }
   .bot-selection-grid { grid-template-columns: 1fr; }
+  .bot-selection-card { min-height: 174px; }
   .notification-viewport-left, .notification-viewport-right { left: 16px; right: 16px; }
   .chart-toolbar { align-items: flex-start; flex-direction: column; }
   .chart-actions { margin-left: 0; justify-content: flex-start; }

@@ -742,11 +742,15 @@ def create_command(
         active = db.scalar(
             select(CollectorCommand).where(
                 CollectorCommand.command == "BACKFILL",
+                CollectorCommand.market_feed_id == payload.market_feed_id,
                 CollectorCommand.status.in_(["PENDING", "RUNNING"]),
             )
         )
         if active:
-            raise HTTPException(status_code=409, detail="Another backfill is already active")
+            raise HTTPException(
+                status_code=409,
+                detail="Another backfill is already active for this feed",
+            )
     row = CollectorCommand(
         market_feed_id=payload.market_feed_id,
         command=payload.command,

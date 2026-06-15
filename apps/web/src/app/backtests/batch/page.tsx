@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { FormEvent, useState } from "react";
+import { FormEvent, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import type {
@@ -19,6 +19,11 @@ function inputDate(daysAgo: number): string {
 
 export default function BatchBacktestPage() {
   const [selected, setSelected] = useState<string[]>([]);
+  const [search, setSearch] = useState("");
+  const [symbolFilter, setSymbolFilter] = useState("");
+  const [strategyFilter, setStrategyFilter] = useState("");
+  const [modeFilter, setModeFilter] = useState("");
+  const [stateFilter, setStateFilter] = useState("");
   const [dateFrom, setDateFrom] = useState(inputDate(30));
   const [dateTo, setDateTo] = useState(inputDate(0));
   const [initialCapital, setInitialCapital] = useState("10000");
@@ -33,6 +38,47 @@ export default function BatchBacktestPage() {
   const strategies = useQuery({ queryKey: ["strategy-profiles"], queryFn: () => api<StrategyProfile[]>("/api/v1/strategy-profiles") });
   const feedMap = new Map((feeds.data ?? []).map((feed) => [feed.id, feed]));
   const strategyMap = new Map((strategies.data ?? []).map((strategy) => [strategy.id, strategy]));
+  const allBots = bots.data ?? [];
+  const symbols = useMemo(
+    () => [...new Set((feeds.data ?? []).map((feed) => feed.canonical_symbol))].sort(),
+    [feeds.data],
+  );
+  const strategyOptions = useMemo(
+    () => [...(strategies.data ?? [])].sort((left, right) => left.name.localeCompare(right.name)),
+    [strategies.data],
+  );
+  const modes = useMemo(
+    () => [...new Set((bots.data ?? []).map((bot) => bot.mode))].sort(),
+    [bots.data],
+  );
+  const states = useMemo(
+    () => [...new Set((bots.data ?? []).map((bot) => bot.state))].sort(),
+    [bots.data],
+  );
+  const normalizedSearch = search.trim().toLocaleLowerCase();
+  const filteredBots = allBots.filter((bot) => {
+    const feed = bot.market_feed_id ? feedMap.get(bot.market_feed_id) : undefined;
+    return (
+      (!normalizedSearch || bot.name.toLocaleLowerCase().includes(normalizedSearch))
+      && (!symbolFilter || feed?.canonical_symbol === symbolFilter)
+      && (!strategyFilter || (
+        strategyFilter === "standalone"
+          ? !bot.strategy_profile_id
+          : bot.strategy_profile_id === strategyFilter
+      ))
+      && (!modeFilter || bot.mode === modeFilter)
+      && (!stateFilter || bot.state === stateFilter)
+    );
+  });
+  const filtersActive = Boolean(search || symbolFilter || strategyFilter || modeFilter || stateFilter);
+
+  function clearFilters() {
+    setSearch("");
+    setSymbolFilter("");
+    setStrategyFilter("");
+    setModeFilter("");
+    setStateFilter("");
+  }
 
   async function submit(event: FormEvent) {
     event.preventDefault();
@@ -65,8 +111,52 @@ export default function BatchBacktestPage() {
         <Link className="button button-secondary" href="/backtests">Backtests</Link>
       </header>
       <form className="form-grid" onSubmit={submit}>
+        <div className="panel bot-filter-panel">
+          <label className="bot-filter-search">
+            Search by bot name
+            <input
+              type="search"
+              placeholder="Any part of the name..."
+              value={search}
+              onChange={(event) => setSearch(event.target.value)}
+            />
+          </label>
+          <label>
+            Currency
+            <select value={symbolFilter} onChange={(event) => setSymbolFilter(event.target.value)}>
+              <option value="">All currencies</option>
+              {symbols.map((symbol) => <option key={symbol} value={symbol}>{symbol}</option>)}
+            </select>
+          </label>
+          <label>
+            Strategy
+            <select value={strategyFilter} onChange={(event) => setStrategyFilter(event.target.value)}>
+              <option value="">All strategies</option>
+              <option value="standalone">Standalone strategy</option>
+              {strategyOptions.map((strategy) => <option key={strategy.id} value={strategy.id}>{strategy.name}</option>)}
+            </select>
+          </label>
+          <label>
+            Mode
+            <select value={modeFilter} onChange={(event) => setModeFilter(event.target.value)}>
+              <option value="">All modes</option>
+              {modes.map((mode) => <option key={mode} value={mode}>{mode}</option>)}
+            </select>
+          </label>
+          <label>
+            State
+            <select value={stateFilter} onChange={(event) => setStateFilter(event.target.value)}>
+              <option value="">All states</option>
+              {states.map((state) => <option key={state} value={state}>{state}</option>)}
+            </select>
+          </label>
+          <div className="bot-filter-summary">
+            <span aria-live="polite" data-testid="bot-filter-count">Showing <strong>{filteredBots.length}</strong> of {allBots.length} bots</span>
+            <button className="button button-secondary" disabled={!filtersActive} type="button" onClick={clearFilters}>Clear filters</button>
+          </div>
+        </div>
         <div className="bot-selection-grid">
-          {(bots.data ?? []).map((bot) => {
+          {filteredBots.map((bot) => {
             const eligible = Boolean(bot.active_config_version_id && bot.market_feed_id);
             const feed = bot.market_feed_id ? feedMap.get(bot.market_feed_id) : undefined;
             const strategy = bot.strategy_profile_id ? strategyMap.get(bot.strategy_profile_id) : undefined;
@@ -86,6 +176,13 @@ export default function BatchBacktestPage() {
             );
           })}
         </div>
+        {!filteredBots.length && !bots.isLoading && (
+          <div className="empty-state bot-filter-empty">
+            <h2>No matching bots</h2>
+            <p>Adjust the search or filters to show more cards.</p>
+            <button className="button button-secondary" type="button" onClick={clearFilters}>Clear filters</button>
+          </div>
+        )}
         <div className="panel compact-form form-grid">
           <label>From<input required type="datetime-local" value={dateFrom} onChange={(event) => setDateFrom(event.target.value)} /></label>
           <label>To<input required type="datetime-local" value={dateTo} onChange={(event) => setDateTo(event.target.value)} /></label>

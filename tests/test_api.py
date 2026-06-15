@@ -1025,6 +1025,32 @@ def test_collector_feed_data_commands_and_export() -> None:
             },
         )
         assert valid.status_code == 201
+
+        second_registration = client.post(
+            "/api/v1/market-feeds/register",
+            headers=agent_headers,
+            json={
+                "provider": "oanda",
+                "environment": "practice",
+                "canonical_symbol": "USDCHF",
+                "provider_symbol": "USD_CHF",
+                "agent_name": "test-usd-chf-agent",
+            },
+        ).json()
+        other_feed = client.post(
+            "/api/v1/collector/commands",
+            headers=headers,
+            json={
+                "command": "BACKFILL",
+                "market_feed_id": second_registration["feed"]["id"],
+                "payload": {
+                    "start": (now - timedelta(days=1)).isoformat(),
+                    "end": now.isoformat(),
+                },
+            },
+        )
+        assert other_feed.status_code == 201
+
         second = client.post(
             "/api/v1/collector/commands",
             headers=headers,
