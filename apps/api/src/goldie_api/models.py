@@ -466,6 +466,74 @@ class BacktestTrade(Base):
     experiment: Mapped[BacktestExperiment] = relationship(back_populates="trades")
 
 
+class OptimizationRun(Base, TimestampMixin):
+    __tablename__ = "optimization_runs"
+    __table_args__ = (
+        Index("ix_optimization_runs_status_created_at", "status", "created_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    bot_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("bots.id"), index=True)
+    config_version_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("config_versions.id"), index=True
+    )
+    market_feed_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("market_feeds.id"), index=True
+    )
+    run_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("runs.id"), unique=True)
+    requested_by: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id"), nullable=True
+    )
+    status: Mapped[str] = mapped_column(String(24), default="PENDING", index=True)
+    date_from: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    date_to: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    n_trials: Mapped[int] = mapped_column(Integer)
+    objective: Mapped[str] = mapped_column(String(32), default="BALANCED")
+    initial_capital: Mapped[Decimal] = mapped_column(Numeric(20, 8))
+    fee_maker: Mapped[Decimal] = mapped_column(Numeric(20, 8))
+    fee_taker: Mapped[Decimal] = mapped_column(Numeric(20, 8))
+    slippage_small: Mapped[Decimal] = mapped_column(Numeric(20, 8))
+    slippage_medium: Mapped[Decimal] = mapped_column(Numeric(20, 8))
+    impact_model: Mapped[str] = mapped_column(String(32), default="sqrt")
+    limit_fill_timeout_s: Mapped[int] = mapped_column(Integer, default=30)
+    min_qty_check: Mapped[bool] = mapped_column(Boolean, default=True)
+    config_snapshot: Mapped[dict] = mapped_column(JSON)
+    progress: Mapped[dict] = mapped_column(JSON, default=dict)
+    best_candidate: Mapped[dict] = mapped_column(JSON, default=dict)
+    summary: Mapped[dict] = mapped_column(JSON, default=dict)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    trials: Mapped[list["OptimizationTrial"]] = relationship(
+        back_populates="run", cascade="all, delete-orphan"
+    )
+
+
+class OptimizationTrial(Base, TimestampMixin):
+    __tablename__ = "optimization_trials"
+    __table_args__ = (
+        UniqueConstraint("optimization_run_id", "trial_number", name="uq_optimization_trial_number"),
+        Index("ix_optimization_trials_run_score", "optimization_run_id", "score"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    optimization_run_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("optimization_runs.id"), index=True
+    )
+    trial_number: Mapped[int] = mapped_column(Integer)
+    status: Mapped[str] = mapped_column(String(24), default="RUNNING", index=True)
+    sampled_parameters: Mapped[dict] = mapped_column(JSON, default=dict)
+    score: Mapped[Decimal | None] = mapped_column(Numeric(20, 8), nullable=True)
+    metrics: Mapped[dict] = mapped_column(JSON, default=dict)
+    summary: Mapped[dict] = mapped_column(JSON, default=dict)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    run: Mapped[OptimizationRun] = relationship(back_populates="trials")
+
+
 class AuditEvent(Base):
     __tablename__ = "audit_events"
 

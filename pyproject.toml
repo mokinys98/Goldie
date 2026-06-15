@@ -14,6 +14,7 @@ members = [
   "apps/market-data-collector",
   "apps/ingestion-worker",
   "apps/worker",
+  "apps/optuna-worker",
 ]
 
 [tool.ruff]

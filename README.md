@@ -5,6 +5,8 @@ platform provides a Next.js control UI, FastAPI API, PostgreSQL persistence, a
 deterministic signal engine, and a 24/7 OANDA market-data collector.
 Historical M1 backtests run asynchronously through a PostgreSQL-backed worker
 and use the same strategy domain as hosted shadow evaluation.
+Strategy parameter optimization runs asynchronously through a dedicated Optuna
+worker that shares the same PostgreSQL and Redis infrastructure.
 
 No order placement API or execution code exists in this phase.
 
@@ -46,7 +48,8 @@ Redis is unavailable.
 3. Open `http://localhost:3000`.
 4. Create a bot and activate its configuration.
 5. Open `Backtests` to queue a historical experiment from stored M1 candles.
-6. Start the OANDA collector after configuring its credentials:
+6. Open `Optimization` to queue Optuna parameter searches from stored M1 candles.
+7. Start the OANDA collector after configuring its credentials:
 
    ```powershell
    uv sync --all-packages

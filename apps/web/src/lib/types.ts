@@ -416,3 +416,83 @@ export type BatchBacktestResult = {
   experiment: BacktestExperiment | null;
   error: string | null;
 };
+
+export type OptimizationRun = {
+  id: string;
+  bot_id: string;
+  config_version_id: string;
+  market_feed_id: string;
+  run_id: string;
+  status: "PENDING" | "RUNNING" | "CANCEL_REQUESTED" | "CANCELLED" | "SUCCEEDED" | "FAILED";
+  date_from: string;
+  date_to: string;
+  n_trials: number;
+  objective: "BALANCED";
+  initial_capital: string | number;
+  fee_maker: string | number;
+  fee_taker: string | number;
+  slippage_small: string | number;
+  slippage_medium: string | number;
+  impact_model: "sqrt";
+  limit_fill_timeout_s: number;
+  min_qty_check: boolean;
+  config_snapshot: BotConfig;
+  progress: {
+    completed_trials?: number;
+    successful_trials?: number;
+    failed_trials?: number;
+    total_trials?: number;
+  };
+  best_candidate: {
+    trial_number?: number;
+    sampled_parameters?: Record<string, string | number | boolean>;
+    score?: string | number;
+    metrics?: Record<string, string | number>;
+    summary?: Record<string, unknown>;
+  };
+  summary: {
+    completed_trials?: number;
+    failed_trials?: number;
+    duration_seconds?: number;
+    search_space?: Array<{
+      name: string;
+      type?: string;
+      minimum?: number;
+      maximum?: number;
+      choices?: Array<string | number | boolean>;
+    }>;
+    top_candidates?: Array<{
+      trial_number: number;
+      sampled_parameters: Record<string, string | number | boolean>;
+      score: string | number;
+      metrics: Record<string, string | number>;
+      summary: Record<string, unknown>;
+    }>;
+  };
+  error: string | null;
+  started_at: string | null;
+  completed_at: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type OptimizationTrial = {
+  id: string;
+  optimization_run_id: string;
+  trial_number: number;
+  status: "RUNNING" | "SUCCEEDED" | "FAILED";
+  sampled_parameters: Record<string, string | number | boolean>;
+  score: string | number | null;
+  metrics: Record<string, string | number>;
+  summary: Record<string, unknown>;
+  error: string | null;
+  started_at: string | null;
+  completed_at: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type OptimizationTrialPage = {
+  items: OptimizationTrial[];
+  total: number;
+};

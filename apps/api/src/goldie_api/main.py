@@ -13,7 +13,7 @@ from sqlalchemy import select, text
 
 from .db import SessionLocal, engine
 from .models import User
-from .routers import analytics, auth, backtests, bots, collector, feeds, status, strategies
+from .routers import analytics, auth, backtests, bots, collector, feeds, optimizations, status, strategies
 from .realtime import relay_redis_events
 from .security import hash_password
 from .settings import get_settings
@@ -83,6 +83,7 @@ app.include_router(feeds.router)
 app.include_router(collector.router)
 app.include_router(status.router)
 app.include_router(backtests.router)
+app.include_router(optimizations.router)
 app.include_router(strategies.router)
 app.include_router(strategies.profiles)
 

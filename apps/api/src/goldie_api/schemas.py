@@ -418,3 +418,72 @@ class BacktestTradeRead(OrmModel):
 class BacktestTradePage(BaseModel):
     items: list[BacktestTradeRead]
     total: int
+
+
+class OptimizationCreate(BaseModel):
+    bot_id: uuid.UUID
+    config_version_id: uuid.UUID
+    market_feed_id: uuid.UUID
+    date_from: datetime
+    date_to: datetime
+    n_trials: int = Field(ge=1, le=500, default=25)
+    objective: str = Field(default="BALANCED", pattern="^(BALANCED)$")
+    initial_capital: Decimal = Field(default=Decimal("10000"), gt=0)
+    fee_maker: Decimal = Field(default=Decimal("0.001"), ge=0)
+    fee_taker: Decimal = Field(default=Decimal("0.001"), ge=0)
+    slippage_small: Decimal = Field(default=Decimal("0.0005"), ge=0)
+    slippage_medium: Decimal = Field(default=Decimal("0.001"), ge=0)
+    impact_model: str = Field(default="sqrt", pattern="^(sqrt)$")
+    limit_fill_timeout_s: int = Field(default=30, ge=0)
+    min_qty_check: bool = True
+
+
+class OptimizationTrialRead(OrmModel):
+    id: uuid.UUID
+    optimization_run_id: uuid.UUID
+    trial_number: int
+    status: str
+    sampled_parameters: dict
+    score: Decimal | None
+    metrics: dict
+    summary: dict
+    error: str | None
+    started_at: datetime | None
+    completed_at: datetime | None
+    created_at: datetime
+    updated_at: datetime
+
+
+class OptimizationTrialPage(BaseModel):
+    items: list[OptimizationTrialRead]
+    total: int
+
+
+class OptimizationRunRead(OrmModel):
+    id: uuid.UUID
+    bot_id: uuid.UUID
+    config_version_id: uuid.UUID
+    market_feed_id: uuid.UUID
+    run_id: uuid.UUID
+    status: str
+    date_from: datetime
+    date_to: datetime
+    n_trials: int
+    objective: str
+    initial_capital: Decimal
+    fee_maker: Decimal
+    fee_taker: Decimal
+    slippage_small: Decimal
+    slippage_medium: Decimal
+    impact_model: str
+    limit_fill_timeout_s: int
+    min_qty_check: bool
+    config_snapshot: dict
+    progress: dict
+    best_candidate: dict
+    summary: dict
+    error: str | None
+    started_at: datetime | None
+    completed_at: datetime | None
+    created_at: datetime
+    updated_at: datetime

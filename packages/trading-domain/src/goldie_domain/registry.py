@@ -38,7 +38,19 @@ def _parameter_metadata(property_schema: dict[str, Any]) -> dict[str, Any]:
     metadata = {
         key: value
         for key, value in property_schema.items()
-        if key in {"title", "description", "type", "minimum", "maximum", "default", "unit", "impact"}
+        if key
+        in {
+            "title",
+            "description",
+            "type",
+            "minimum",
+            "maximum",
+            "exclusiveMinimum",
+            "default",
+            "unit",
+            "impact",
+            "enum",
+        }
     }
     if "type" not in metadata:
         numeric_schema = next(

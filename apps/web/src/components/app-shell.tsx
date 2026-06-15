@@ -39,6 +39,12 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           >
             Backtests
           </Link>
+          <Link
+            className={pathname.startsWith("/optimizations") ? "active" : ""}
+            href="/optimizations"
+          >
+            Optimization
+          </Link>
         </nav>
         <div className="sidebar-bottom">
           <span className="readonly-badge">READ ONLY</span>
