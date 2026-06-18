@@ -265,6 +265,7 @@ export type CollectorFeedSummary = {
     ask: string | number;
     spread: string | number;
   } | null;
+  earliest_candle_at: string | null;
   latest_candle_at: string | null;
   data_lag_seconds: number | null;
   bot_count: number;

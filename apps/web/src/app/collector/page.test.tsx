@@ -42,6 +42,7 @@ const overview = {
       ask: "1.08020",
       spread: "0.00020",
     },
+    earliest_candle_at: "2026-06-14T10:00:00Z",
     latest_candle_at: "2026-06-14T11:59:00Z",
     data_lag_seconds: 2,
     bot_count: 1,
@@ -98,6 +99,7 @@ describe("CollectorPage", () => {
     expect(await screen.findByText("EUR_USD")).toBeInTheDocument();
     expect(screen.getByText("120")).toBeInTheDocument();
     expect(screen.getByText("0.00020")).toBeInTheDocument();
+    expect(screen.getByText("Earliest M1")).toBeInTheDocument();
     expect(screen.getAllByText("ONLINE").length).toBeGreaterThan(0);
   });
 

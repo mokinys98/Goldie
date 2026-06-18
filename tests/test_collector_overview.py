@@ -52,7 +52,22 @@ def test_overview_query_count_does_not_grow_with_feeds(monkeypatch, feed_count: 
                     market_feed_id=feed.id,
                     symbol=feed.canonical_symbol,
                     timeframe="M1",
-                    opened_at=now,
+                    opened_at=now.replace(hour=10),
+                    received_at=now,
+                    open="1.0",
+                    high="1.1",
+                    low="0.9",
+                    close="1.0",
+                    tick_volume=1,
+                )
+            )
+            db.add(
+                Candle(
+                    id=uuid.uuid4(),
+                    market_feed_id=feed.id,
+                    symbol=feed.canonical_symbol,
+                    timeframe="M1",
+                    opened_at=now.replace(hour=11),
                     received_at=now,
                     open="1.0",
                     high="1.1",
@@ -77,4 +92,5 @@ def test_overview_query_count_does_not_grow_with_feeds(monkeypatch, feed_count: 
             event.remove(engine, "before_cursor_execute", count_statement)
 
     assert len(result["feeds"]) == feed_count
+    assert result["feeds"][0]["earliest_candle_at"] != result["feeds"][0]["latest_candle_at"]
     assert statements <= 9

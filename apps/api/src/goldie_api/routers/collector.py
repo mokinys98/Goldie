@@ -155,6 +155,9 @@ def feed_summary(db: Session, feed: MarketFeed, now: datetime) -> dict:
         .where(Candle.market_feed_id == feed.id)
         .order_by(desc(Candle.opened_at))
     )
+    earliest_candle_at = db.scalar(
+        select(func.min(Candle.opened_at)).where(Candle.market_feed_id == feed.id)
+    )
     bots = db.scalar(select(func.count(Bot.id)).where(Bot.market_feed_id == feed.id)) or 0
     lag = None
     spread = None
@@ -180,6 +183,7 @@ def feed_summary(db: Session, feed: MarketFeed, now: datetime) -> dict:
                 if tick
                 else None
             ),
+            "earliest_candle_at": earliest_candle_at,
             "latest_candle_at": candle.opened_at if candle else None,
             "data_lag_seconds": lag,
             "bot_count": bots,
@@ -191,6 +195,7 @@ def feed_summary_from_rows(
     feed: MarketFeed,
     tick: MarketTick | None,
     candle: Candle | None,
+    earliest_candle_at: datetime | None,
     bots: int,
     now: datetime,
 ) -> dict:
@@ -218,6 +223,7 @@ def feed_summary_from_rows(
                 if tick
                 else None
             ),
+            "earliest_candle_at": earliest_candle_at,
             "latest_candle_at": candle.opened_at if candle else None,
             "data_lag_seconds": lag,
             "bot_count": bots,
@@ -242,6 +248,7 @@ def overview(
     feed_ids = [feed.id for feed in feeds]
     ticks: dict[uuid.UUID, MarketTick] = {}
     candles: dict[uuid.UUID, Candle] = {}
+    earliest_candles: dict[uuid.UUID, datetime] = {}
     bot_counts: dict[uuid.UUID, int] = {}
     if feed_ids:
         tick_times = (
@@ -266,22 +273,22 @@ def overview(
         candle_times = (
             select(
                 Candle.market_feed_id.label("feed_id"),
+                func.min(Candle.opened_at).label("earliest_opened_at"),
                 func.max(Candle.opened_at).label("opened_at"),
             )
             .where(Candle.market_feed_id.in_(feed_ids))
             .group_by(Candle.market_feed_id)
             .subquery()
         )
-        candles = {
-            row.market_feed_id: row
-            for row in db.scalars(
-                select(Candle).join(
-                    candle_times,
-                    (Candle.market_feed_id == candle_times.c.feed_id)
-                    & (Candle.opened_at == candle_times.c.opened_at),
-                )
+        for candle, earliest_opened_at in db.execute(
+            select(Candle, candle_times.c.earliest_opened_at).join(
+                candle_times,
+                (Candle.market_feed_id == candle_times.c.feed_id)
+                & (Candle.opened_at == candle_times.c.opened_at),
             )
-        }
+        ):
+            candles[candle.market_feed_id] = candle
+            earliest_candles[candle.market_feed_id] = earliest_opened_at
         bot_counts = {
             feed_id: count
             for feed_id, count in db.execute(
@@ -295,6 +302,7 @@ def overview(
             feed,
             ticks.get(feed.id),
             candles.get(feed.id),
+            earliest_candles.get(feed.id),
             bot_counts.get(feed.id, 0),
             now,
         )

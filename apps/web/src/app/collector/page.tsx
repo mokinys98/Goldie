@@ -194,7 +194,7 @@ export default function CollectorPage() {
               <thead>
                 <tr>
                   <th>Instrument</th><th>Status</th><th>Bid / Ask</th><th>Spread</th>
-                  <th>Latest M1</th><th>Lag</th><th>Bots</th>
+                  <th>Earliest M1</th><th>Latest M1</th><th>Lag</th><th>Bots</th>
                 </tr>
               </thead>
               <tbody>
@@ -213,6 +213,7 @@ export default function CollectorPage() {
                         : "--"}
                     </td>
                     <td>{feed.latest_tick?.spread ?? "--"}</td>
+                    <td>{date(feed.earliest_candle_at)}</td>
                     <td>{date(feed.latest_candle_at)}</td>
                     <td>{feed.data_lag_seconds === null ? "--" : `${feed.data_lag_seconds}s`}</td>
                     <td>{feed.bot_count}</td>

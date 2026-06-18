@@ -133,6 +133,7 @@ function Overview({ detail }: { detail: CollectorFeedDetail }) {
           canonical_symbol: feed.canonical_symbol,
           provider_symbol: feed.provider_symbol,
           last_heartbeat_at: displayDate(feed.last_heartbeat_at),
+          earliest_candle_at: displayDate(feed.earliest_candle_at),
           latest_candle_at: displayDate(feed.latest_candle_at),
           bot_count: feed.bot_count,
         }} />
