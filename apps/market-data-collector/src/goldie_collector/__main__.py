@@ -1,5 +1,6 @@
 import logging
 import random
+import sys
 import threading
 import time
 from datetime import UTC, datetime, timedelta
@@ -11,6 +12,7 @@ from .settings import CollectorSettings
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s %(levelname)s %(name)s %(message)s",
+    stream=sys.stdout,
 )
 logger = logging.getLogger("goldie-market-data-collector")
 backfill_locks: dict[str, threading.Lock] = {}
@@ -120,7 +122,7 @@ class InstrumentWorker:
                 self.status = "DEGRADED"
                 self.last_error = f"{type(exc).__name__}: {exc}"
                 delay = min(60, 2 ** min(attempt, 5)) + random.uniform(0, 15)
-                logger.error(
+                logger.warning(
                     "Collector %s failed; retrying in %.1f seconds: %s",
                     self.settings.provider_symbol,
                     delay,
@@ -213,7 +215,12 @@ class CollectorSupervisor:
     def on_registered(self, symbol: str, feed_id: str) -> None:
         self.feed_symbols[feed_id] = symbol
 
-    def effective_settings(self, symbol: str, configuration: dict, overrides: dict) -> CollectorSettings:
+    def effective_settings(
+        self,
+        symbol: str,
+        configuration: dict,
+        overrides: dict,
+    ) -> CollectorSettings:
         values = {
             key: configuration[key]
             for key in (

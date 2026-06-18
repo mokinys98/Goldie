@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, openCollectorStream } from "@/lib/api";
 import type {
@@ -15,6 +15,10 @@ export default function CollectorPage() {
   const client = useQueryClient();
   const [error, setError] = useState("");
   const [newSymbol, setNewSymbol] = useState("");
+  const [search, setSearch] = useState("");
+  const [statusFilter, setStatusFilter] = useState("");
+  const [environmentFilter, setEnvironmentFilter] = useState("");
+  const [botUsageFilter, setBotUsageFilter] = useState("");
   const overview = useQuery({
     queryKey: ["collector-overview"],
     queryFn: () => api<CollectorOverview>("/api/v1/collector/overview"),
@@ -116,6 +120,32 @@ export default function CollectorPage() {
 
   const data = overview.data;
   const isLoading = overview.isLoading || !data;
+  const feeds = useMemo(() => data?.feeds ?? [], [data?.feeds]);
+  const statuses = useMemo(() => [...new Set(feeds.map((feed) => feed.status))].sort(), [feeds]);
+  const environments = useMemo(
+    () => [...new Set(feeds.map((feed) => feed.environment))].sort(),
+    [feeds],
+  );
+  const normalizedSearch = search.trim().toLocaleLowerCase();
+  const filteredFeeds = feeds.filter((feed) => (
+    (!normalizedSearch
+      || feed.provider_symbol.toLocaleLowerCase().includes(normalizedSearch)
+      || feed.canonical_symbol.toLocaleLowerCase().includes(normalizedSearch)
+      || feed.environment.toLocaleLowerCase().includes(normalizedSearch))
+    && (!statusFilter || feed.status === statusFilter)
+    && (!environmentFilter || feed.environment === environmentFilter)
+    && (!botUsageFilter
+      || (botUsageFilter === "with-bots" ? feed.bot_count > 0 : feed.bot_count === 0))
+  ));
+  const filtersActive = Boolean(search || statusFilter || environmentFilter || botUsageFilter);
+
+  function clearFilters() {
+    setSearch("");
+    setStatusFilter("");
+    setEnvironmentFilter("");
+    setBotUsageFilter("");
+  }
+
   return (
     <section>
       <header className="page-header">
@@ -157,6 +187,44 @@ export default function CollectorPage() {
         <Metric label="Ticks / 24h" value={data?.counts.ticks_24h ?? "--"} loading={isLoading} />
       </div>
 
+      <div className="panel bot-filter-panel collector-section">
+        <label className="bot-filter-search">
+          Search instrument
+          <input
+            type="search"
+            placeholder="Instrument, symbol or environment..."
+            value={search}
+            onChange={(event) => setSearch(event.target.value)}
+          />
+        </label>
+        <label>
+          Status
+          <select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)}>
+            <option value="">All statuses</option>
+            {statuses.map((status) => <option key={status} value={status}>{status}</option>)}
+          </select>
+        </label>
+        <label>
+          Environment
+          <select value={environmentFilter} onChange={(event) => setEnvironmentFilter(event.target.value)}>
+            <option value="">All environments</option>
+            {environments.map((environment) => <option key={environment} value={environment}>{environment}</option>)}
+          </select>
+        </label>
+        <label>
+          Bots
+          <select value={botUsageFilter} onChange={(event) => setBotUsageFilter(event.target.value)}>
+            <option value="">Any bot count</option>
+            <option value="with-bots">With bots</option>
+            <option value="without-bots">No bots</option>
+          </select>
+        </label>
+        <div className="bot-filter-summary">
+          <span aria-live="polite">Showing <strong>{filteredFeeds.length}</strong> of {feeds.length} instruments</span>
+          <button className="button button-secondary" disabled={!filtersActive} type="button" onClick={clearFilters}>Clear filters</button>
+        </div>
+      </div>
+
       <div className="panel collector-section">
         <div className="section-title">
           <div>
@@ -188,6 +256,12 @@ export default function CollectorPage() {
               ? ` ${settings.data?.instruments.length} instrument(s) configured.`
               : ""}
           </p>
+        ) : !filteredFeeds.length ? (
+          <div className="empty-state bot-filter-empty">
+            <h2>No matching instruments</h2>
+            <p>Adjust the search or filters to show more rows.</p>
+            <button className="button button-secondary" type="button" onClick={clearFilters}>Clear filters</button>
+          </div>
         ) : (
           <div className="table-wrap borderless">
             <table>
@@ -198,7 +272,7 @@ export default function CollectorPage() {
                 </tr>
               </thead>
               <tbody>
-                {data.feeds.map((feed) => (
+                {filteredFeeds.map((feed) => (
                   <tr key={feed.id}>
                     <td>
                       <Link className="table-link" href={`/collector/${feed.id}`}>

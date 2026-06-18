@@ -2,14 +2,15 @@ import json
 import logging
 import os
 import socket
+import sys
 import time
 import uuid
 from datetime import UTC, datetime, timedelta
 
+from fastapi import HTTPException
 from goldie_api.ingestion import process_candle_batch, process_quote_batch
 from goldie_api.realtime import publish_event_sync
 from goldie_api.schemas import FeedCandleBatch, FeedQuoteBatch
-from fastapi import HTTPException
 from pydantic import ValidationError
 from redis import Redis
 from redis.exceptions import RedisError, ResponseError
@@ -113,6 +114,7 @@ def main() -> None:
     logging.basicConfig(
         level=os.getenv("LOG_LEVEL", "INFO"),
         format="%(asctime)s %(levelname)s %(name)s %(message)s",
+        stream=sys.stdout,
     )
     client = Redis.from_url(
         os.getenv("REDIS_URL", "redis://localhost:6379/0"),

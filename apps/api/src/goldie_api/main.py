@@ -1,8 +1,7 @@
 import asyncio
 import logging
 import time
-from contextlib import asynccontextmanager
-from contextlib import suppress
+from contextlib import asynccontextmanager, suppress
 from datetime import UTC, datetime
 
 import jwt
@@ -13,8 +12,18 @@ from sqlalchemy import select, text
 
 from .db import SessionLocal, engine
 from .models import User
-from .routers import analytics, auth, backtests, bots, collector, feeds, optimizations, status, strategies
 from .realtime import relay_redis_events
+from .routers import (
+    analytics,
+    auth,
+    backtests,
+    bots,
+    collector,
+    feeds,
+    optimizations,
+    status,
+    strategies,
+)
 from .security import hash_password
 from .settings import get_settings
 from .websocket import manager
@@ -90,6 +99,10 @@ app.include_router(strategies.profiles)
 
 @app.exception_handler(Exception)
 async def unhandled_error(_: Request, exc: Exception) -> JSONResponse:
+    logging.getLogger("goldie_api").error(
+        "Unhandled API error",
+        exc_info=(type(exc), exc, exc.__traceback__),
+    )
     return JSONResponse(
         status_code=500,
         content={

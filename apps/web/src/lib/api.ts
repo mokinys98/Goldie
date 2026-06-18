@@ -1,4 +1,9 @@
-export const API_URL = (process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000").replace(
+const DEFAULT_API_URL = process.env.NODE_ENV === "development"
+  ? ""
+  : "https://goldie-api-production.up.railway.app";
+const DEFAULT_WS_URL = "wss://goldie-api-production.up.railway.app";
+
+export const API_URL = (process.env.NEXT_PUBLIC_API_URL ?? DEFAULT_API_URL).replace(
   /\/+$/,
   "",
 );
@@ -66,7 +71,7 @@ export function openBotStream(
   onEvent: () => void,
 ): () => void {
   const token = getToken();
-  const base = (process.env.NEXT_PUBLIC_WS_URL ?? "ws://localhost:8000").replace(
+  const base = (process.env.NEXT_PUBLIC_WS_URL ?? DEFAULT_WS_URL).replace(
     /\/+$/,
     "",
   );
@@ -105,7 +110,7 @@ export function openCollectorStream(
   onEvent: (event: CollectorStreamEvent) => void,
 ): () => void {
   const token = getToken();
-  const base = (process.env.NEXT_PUBLIC_WS_URL ?? "ws://localhost:8000").replace(
+  const base = (process.env.NEXT_PUBLIC_WS_URL ?? DEFAULT_WS_URL).replace(
     /\/+$/,
     "",
   );
