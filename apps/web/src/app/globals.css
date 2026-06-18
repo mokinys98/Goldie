@@ -193,7 +193,7 @@ legend { color: var(--gold); padding: 0 8px; font-size: 12px; font-weight: 800; 
 .selection-list { display: grid; gap: 10px; max-height: 280px; overflow: auto; }
 .selection-list .checkbox-row { margin: 0; padding: 7px 4px; }
 .bulk-controls { align-content: start; }
-.bot-filter-panel { display: grid; grid-template-columns: minmax(260px, 1.6fr) repeat(4, minmax(140px, .75fr)); gap: 14px; align-items: end; }
+.bot-filter-panel { display: grid; grid-template-columns: minmax(260px, 1.6fr) repeat(4, minmax(140px, .75fr)); gap: 14px; align-items: end; margin-bottom: 18px; }
 .bot-filter-panel label { min-width: 0; }
 .bot-filter-summary { grid-column: 1 / -1; display: flex; align-items: center; justify-content: space-between; gap: 14px; padding-top: 14px; border-top: 1px solid var(--line); color: var(--muted); font-size: 12px; }
 .bot-filter-summary strong { color: var(--text); }
