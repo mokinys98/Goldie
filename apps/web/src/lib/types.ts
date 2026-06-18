@@ -338,12 +338,17 @@ export type BacktestExperiment = {
   date_from: string;
   date_to: string;
   initial_capital: string | number;
+  fill_mode: "perfect" | "simulated";
   fee_maker: string | number;
   fee_taker: string | number;
+  taker_slippage: string | number;
   slippage_small: string | number;
   slippage_medium: string | number;
+  medium_impact: string | number;
   impact_model: "sqrt";
+  model_sqrt_limit: string | number;
   limit_fill_timeout_s: number;
+  min_qty_threshold: string | number;
   min_qty_check: boolean;
   config_snapshot: BotConfig;
   progress: { processed?: number; total?: number };
@@ -429,12 +434,17 @@ export type OptimizationRun = {
   n_trials: number;
   objective: "BALANCED";
   initial_capital: string | number;
+  fill_mode: "perfect" | "simulated";
   fee_maker: string | number;
   fee_taker: string | number;
+  taker_slippage: string | number;
   slippage_small: string | number;
   slippage_medium: string | number;
+  medium_impact: string | number;
   impact_model: "sqrt";
+  model_sqrt_limit: string | number;
   limit_fill_timeout_s: number;
+  min_qty_threshold: string | number;
   min_qty_check: boolean;
   config_snapshot: BotConfig;
   progress: {
@@ -461,6 +471,7 @@ export type OptimizationRun = {
       maximum?: number;
       choices?: Array<string | number | boolean>;
     }>;
+    execution_model?: Record<string, string | number | boolean>;
     top_candidates?: Array<{
       trial_number: number;
       sampled_parameters: Record<string, string | number | boolean>;

@@ -10,7 +10,6 @@ os.environ["LOCAL_ADMIN_PASSWORD"] = "test-password"
 os.environ["AGENT_SERVICE_TOKEN"] = "test-agent-token"
 
 from fastapi.testclient import TestClient
-
 from goldie_api.db import Base, SessionLocal, engine
 from goldie_api.main import app
 from goldie_api.models import OptimizationRun, OptimizationTrial
@@ -166,16 +165,26 @@ def test_optimization_api_and_execution_flow() -> None:
                 "n_trials": 3,
                 "objective": "BALANCED",
                 "initial_capital": "10000",
+                "fill_mode": "simulated",
                 "fee_maker": "0.001",
                 "fee_taker": "0.001",
+                "taker_slippage": "0.0004",
                 "slippage_small": "0.0005",
-                "slippage_medium": "0.001",
+                "medium_impact": "0.001",
                 "impact_model": "sqrt",
+                "model_sqrt_limit": "0.7",
                 "limit_fill_timeout_s": 30,
+                "min_qty_threshold": "0.01",
                 "min_qty_check": True,
             },
         )
         assert created.status_code == 201
+        created_body = created.json()
+        assert created_body["fill_mode"] == "simulated"
+        assert Decimal(str(created_body["taker_slippage"])) == Decimal("0.0004")
+        assert Decimal(str(created_body["medium_impact"])) == Decimal("0.001")
+        assert Decimal(str(created_body["model_sqrt_limit"])) == Decimal("0.7")
+        assert Decimal(str(created_body["min_qty_threshold"])) == Decimal("0.01")
         optimization_id = UUID(created.json()["id"])
 
         with SessionLocal() as db:
@@ -189,6 +198,7 @@ def test_optimization_api_and_execution_flow() -> None:
         assert detail.status_code == 200
         assert detail.json()["status"] == "SUCCEEDED"
         assert detail.json()["best_candidate"]["sampled_parameters"]
+        assert detail.json()["summary"]["execution_model"]["fill_mode"] == "simulated"
         assert trials.status_code == 200
         assert trials.json()["total"] == 3
         trial_id = trials.json()["items"][0]["id"]
@@ -198,6 +208,9 @@ def test_optimization_api_and_execution_flow() -> None:
         )
         assert trial_detail.status_code == 200
         assert trial_detail.json()["sampled_parameters"]
+        assert "fill_mode" not in trial_detail.json()["sampled_parameters"]
+        assert "taker_slippage" not in trial_detail.json()["sampled_parameters"]
+        assert "medium_impact" not in trial_detail.json()["sampled_parameters"]
         assert trial_detail.json()["optimization_run_id"] == str(optimization_id)
         with SessionLocal() as db:
             stored_trials = db.query(OptimizationTrial).filter_by(

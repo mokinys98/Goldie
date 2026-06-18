@@ -192,6 +192,26 @@ export default function OptimizationDetailPage() {
             </div>
           </div>
         </div>
+        <div className="panel">
+          <h2>Execution model</h2>
+          <div className="key-values">
+            {Object.entries(data.summary.execution_model ?? {
+              fill_mode: data.fill_mode,
+              fee_maker: data.fee_maker,
+              fee_taker: data.fee_taker,
+              taker_slippage: data.taker_slippage,
+              slippage_small: data.slippage_small,
+              medium_impact: data.medium_impact,
+              impact_model: data.impact_model,
+              model_sqrt_limit: data.model_sqrt_limit,
+              limit_fill_timeout_s: data.limit_fill_timeout_s,
+              min_qty_threshold: data.min_qty_threshold,
+              min_qty_check: data.min_qty_check,
+            }).map(([key, value]) => (
+              <div key={key}><dt>{key}</dt><dd>{String(value)}</dd></div>
+            ))}
+          </div>
+        </div>
       </div>
       <div className="panel collector-section">
         <h2>Top trials ({trials.data?.total ?? 0})</h2>

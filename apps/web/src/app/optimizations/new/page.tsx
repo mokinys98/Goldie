@@ -127,12 +127,16 @@ export default function NewOptimizationPage() {
   const [dateTo, setDateTo] = useState(profileDate("2025-01-01"));
   const [trialCount, setTrialCount] = useState("500");
   const [initialCapital, setInitialCapital] = useState("10000");
+  const [fillMode, setFillMode] = useState<"perfect" | "simulated">("simulated");
   const [feeMaker, setFeeMaker] = useState("0.0002");
   const [feeTaker, setFeeTaker] = useState("0.0006");
+  const [takerSlippage, setTakerSlippage] = useState("0.0005");
   const [slippageSmall, setSlippageSmall] = useState("0.0002");
   const [slippageMedium, setSlippageMedium] = useState("0.001");
   const [impactModel, setImpactModel] = useState("sqrt");
+  const [modelSqrtLimit, setModelSqrtLimit] = useState("1.0");
   const [limitFillTimeout, setLimitFillTimeout] = useState("5");
+  const [minQtyThreshold, setMinQtyThreshold] = useState("0.01");
   const [minQtyCheck, setMinQtyCheck] = useState(true);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
@@ -179,12 +183,16 @@ export default function NewOptimizationPage() {
     setDateTo(profileDate(to));
     setTrialCount(selectedProfile.trials);
     setInitialCapital(selectedProfile.initialCapital);
+    setFillMode(selectedProfile.fill === "perfect" ? "perfect" : "simulated");
     setFeeMaker(selectedProfile.feeMaker);
     setFeeTaker(selectedProfile.feeTaker);
+    setTakerSlippage(selectedProfile.takerSlippage);
     setSlippageSmall(selectedProfile.slippageSmall);
     setSlippageMedium(selectedProfile.slippageMedium);
     setImpactModel("sqrt");
+    setModelSqrtLimit(selectedProfile.modelSqrtLimit);
     setLimitFillTimeout(selectedProfile.limitFillTimeout);
+    setMinQtyThreshold(selectedProfile.minQtyThreshold);
     setMinQtyCheck(selectedProfile.minQtyCheck);
   }, [selectedProfile]);
 
@@ -208,12 +216,17 @@ export default function NewOptimizationPage() {
           n_trials: Number(trialCount),
           objective: "BALANCED",
           initial_capital: initialCapital,
+          fill_mode: fillMode,
           fee_maker: feeMaker,
           fee_taker: feeTaker,
+          taker_slippage: takerSlippage,
           slippage_small: slippageSmall,
           slippage_medium: slippageMedium,
+          medium_impact: slippageMedium,
           impact_model: impactModel,
+          model_sqrt_limit: modelSqrtLimit,
           limit_fill_timeout_s: Number(limitFillTimeout),
+          min_qty_threshold: minQtyThreshold,
           min_qty_check: minQtyCheck,
         }),
       });
@@ -251,12 +264,16 @@ export default function NewOptimizationPage() {
                   setDateTo(inputDate(0));
                   setTrialCount(profile.trials);
                   setInitialCapital(profile.initialCapital);
+                  setFillMode("simulated");
                   setFeeMaker(profile.feeMaker);
                   setFeeTaker(profile.feeTaker);
+                  setTakerSlippage("0");
                   setSlippageSmall(profile.slippageSmall);
                   setSlippageMedium(profile.slippageMedium);
                   setImpactModel("sqrt");
+                  setModelSqrtLimit("1.0");
                   setLimitFillTimeout(profile.limitFillTimeout);
+                  setMinQtyThreshold("0");
                   setMinQtyCheck(profile.minQtyCheck);
                 }
               }}
@@ -268,9 +285,8 @@ export default function NewOptimizationPage() {
         </div>
         {selectedProfile && (
           <div className="info-box">
-            <strong>Fill status:</strong> `fill` is not a backend field in this app yet.
-            This page maps the profile to the supported optimizer fields and shows
-            unsupported assumptions for reference only.
+            <strong>Fill status:</strong> This profile is saved as a run-level
+            execution model. Optuna trials optimize strategy parameters only.
           </div>
         )}
         <label>
@@ -305,13 +321,13 @@ export default function NewOptimizationPage() {
               <div><dt>Initial capital</dt><dd>{selectedProfile.initialCapital}</dd></div>
               <div><dt>makerFee</dt><dd>{selectedProfile.feeMaker}</dd></div>
               <div><dt>takerFee</dt><dd>{selectedProfile.feeTaker}</dd></div>
-              <div><dt>takerSlippage</dt><dd>{selectedProfile.takerSlippage} (not sent)</dd></div>
+              <div><dt>takerSlippage</dt><dd>{selectedProfile.takerSlippage}</dd></div>
               <div><dt>smallSlippage</dt><dd>{selectedProfile.slippageSmall}</dd></div>
               <div><dt>mediumImpact</dt><dd>{selectedProfile.slippageMedium}</dd></div>
-              <div><dt>modelsqrtLimit</dt><dd>{selectedProfile.modelSqrtLimit} (not sent)</dd></div>
-              <div><dt>fill</dt><dd>{selectedProfile.fill} (not sent)</dd></div>
+              <div><dt>modelsqrtLimit</dt><dd>{selectedProfile.modelSqrtLimit}</dd></div>
+              <div><dt>fill</dt><dd>{selectedProfile.fill}</dd></div>
               <div><dt>timeout_s</dt><dd>{selectedProfile.limitFillTimeout}</dd></div>
-              <div><dt>Min_qty_check</dt><dd>{selectedProfile.minQtyThreshold} (not sent)</dd></div>
+              <div><dt>Min_qty_check</dt><dd>{selectedProfile.minQtyThreshold}</dd></div>
               <div><dt>check</dt><dd>{String(selectedProfile.minQtyCheck)}</dd></div>
             </div>
           </div>
@@ -381,6 +397,24 @@ export default function NewOptimizationPage() {
             />
           </label>
           <label>
+            Fill
+            <select value={fillMode} onChange={(event) => setFillMode(event.target.value as "perfect" | "simulated")}>
+              <option value="perfect">perfect</option>
+              <option value="simulated">simulated</option>
+            </select>
+          </label>
+          <label>
+            Taker slippage
+            <input
+              required
+              type="number"
+              min="0"
+              step="0.0001"
+              value={takerSlippage}
+              onChange={(event) => setTakerSlippage(event.target.value)}
+            />
+          </label>
+          <label>
             Slippage small
             <input
               required
@@ -392,7 +426,7 @@ export default function NewOptimizationPage() {
             />
           </label>
           <label>
-            Slippage medium
+            Medium impact
             <input
               required
               type="number"
@@ -409,6 +443,17 @@ export default function NewOptimizationPage() {
             </select>
           </label>
           <label>
+            Model sqrt limit
+            <input
+              required
+              type="number"
+              min="0"
+              step="0.1"
+              value={modelSqrtLimit}
+              onChange={(event) => setModelSqrtLimit(event.target.value)}
+            />
+          </label>
+          <label>
             Limit fill timeout (s)
             <input
               required
@@ -417,6 +462,17 @@ export default function NewOptimizationPage() {
               step="1"
               value={limitFillTimeout}
               onChange={(event) => setLimitFillTimeout(event.target.value)}
+            />
+          </label>
+          <label>
+            Min qty threshold
+            <input
+              required
+              type="number"
+              min="0"
+              step="0.01"
+              value={minQtyThreshold}
+              onChange={(event) => setMinQtyThreshold(event.target.value)}
             />
           </label>
           <label className="checkbox-field">

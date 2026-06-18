@@ -6,20 +6,25 @@ from decimal import Decimal
 
 from .config import BotConfiguration
 from .models import CandleInput, MarketContext, SignalType
-from .shadow import calculate_position_size
 from .registry import get_strategy
+from .shadow import calculate_position_size
 from .strategy import Strategy
 
 
 @dataclass(frozen=True)
 class BacktestCosts:
     spread_points: Decimal = Decimal("2")
+    fill_mode: str = "simulated"
     fee_maker: Decimal = Decimal("0")
     fee_taker: Decimal = Decimal("0")
+    taker_slippage: Decimal = Decimal("0")
     slippage_small: Decimal = Decimal("0")
     slippage_medium: Decimal = Decimal("0")
+    medium_impact: Decimal | None = None
     impact_model: str = "sqrt"
+    model_sqrt_limit: Decimal = Decimal("1")
     limit_fill_timeout_s: int = 30
+    min_qty_threshold: Decimal = Decimal("0")
     min_qty_check: bool = True
     slippage_points: Decimal | None = None
     commission_per_trade: Decimal = Decimal("0")
@@ -200,17 +205,21 @@ class BacktestEngine:
 
             if position is None and pending is not None:
                 direction, signal_at = pending
-                position = self._open(
-                    direction=direction,
-                    signal_at=signal_at,
-                    candle=candle,
-                    config=config,
-                    instrument=instrument,
-                    costs=costs,
-                    balance=balance,
-                )
-                if position is None:
-                    reasons["INVALID_POSITION_SIZE"] += 1
+                fill_age = candle.opened_at - signal_at
+                if fill_age.total_seconds() > costs.limit_fill_timeout_s:
+                    reasons["LIMIT_FILL_TIMEOUT"] += 1
+                else:
+                    position = self._open(
+                        direction=direction,
+                        signal_at=signal_at,
+                        candle=candle,
+                        config=config,
+                        instrument=instrument,
+                        costs=costs,
+                        balance=balance,
+                    )
+                    if position is None:
+                        reasons["INVALID_POSITION_SIZE"] += 1
                 pending = None
 
             if position is not None:
@@ -311,6 +320,8 @@ class BacktestEngine:
         )
         if size is None:
             return None
+        if costs.min_qty_check and size.volume < costs.min_qty_threshold:
+            return None
         return _OpenPosition(
             direction=direction,
             signal_at=signal_at,
@@ -393,7 +404,7 @@ class BacktestEngine:
         instrument: BacktestInstrument,
         costs: BacktestCosts,
     ) -> BacktestTrade:
-        slippage = BacktestEngine._slippage_amount(costs, instrument)
+        slippage = BacktestEngine._slippage_amount(costs, instrument, position.volume)
         exit_price = (
             raw_exit - slippage if position.direction == "BUY" else raw_exit + slippage
         )
@@ -483,10 +494,24 @@ class BacktestEngine:
     def _slippage_amount(
         costs: BacktestCosts,
         instrument: BacktestInstrument,
+        volume: Decimal | None = None,
     ) -> Decimal:
+        if costs.fill_mode == "perfect":
+            return Decimal("0")
         if costs.slippage_points is not None:
             return costs.slippage_points * instrument.point
-        return costs.slippage_medium
+        base = max(costs.taker_slippage, costs.slippage_small)
+        medium_impact = (
+            costs.medium_impact
+            if costs.medium_impact is not None
+            else costs.slippage_medium
+        )
+        if costs.impact_model != "sqrt" or volume is None or instrument.volume_min <= 0:
+            return base + medium_impact
+        ratio = max(volume / instrument.volume_min, Decimal("1"))
+        multiplier = ratio.sqrt() - Decimal("1")
+        multiplier = min(multiplier, costs.model_sqrt_limit)
+        return base + (medium_impact * multiplier)
 
     @staticmethod
     def _commission_amount(
@@ -496,6 +521,8 @@ class BacktestEngine:
         exit_price: Decimal,
         volume: Decimal,
     ) -> Decimal:
+        if costs.fill_mode == "perfect":
+            return Decimal("0")
         if costs.commission_per_trade:
             return costs.commission_per_trade
         if not costs.fee_taker:

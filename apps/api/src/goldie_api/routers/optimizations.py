@@ -19,8 +19,8 @@ from ..models import (
 from ..schemas import (
     OptimizationCreate,
     OptimizationRunRead,
-    OptimizationTrialRead,
     OptimizationTrialPage,
+    OptimizationTrialRead,
 )
 from ..security import get_current_user
 from ..settings import get_settings
@@ -101,12 +101,17 @@ def create_optimization(
         n_trials=payload.n_trials,
         objective=payload.objective,
         initial_capital=payload.initial_capital,
+        fill_mode=payload.fill_mode,
         fee_maker=payload.fee_maker,
         fee_taker=payload.fee_taker,
+        taker_slippage=payload.taker_slippage,
         slippage_small=payload.slippage_small,
-        slippage_medium=payload.slippage_medium,
+        slippage_medium=payload.medium_impact,
+        medium_impact=payload.medium_impact,
         impact_model=payload.impact_model,
+        model_sqrt_limit=payload.model_sqrt_limit,
         limit_fill_timeout_s=payload.limit_fill_timeout_s,
+        min_qty_threshold=payload.min_qty_threshold,
         min_qty_check=payload.min_qty_check,
         config_snapshot=config.config,
         progress={"completed_trials": 0, "total_trials": payload.n_trials},

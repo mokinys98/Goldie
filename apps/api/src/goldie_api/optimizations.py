@@ -145,6 +145,24 @@ def _candidate_payload(
     )
 
 
+def _execution_model_payload(optimization: OptimizationRun) -> dict[str, Any]:
+    return jsonable_encoder(
+        {
+            "fill_mode": optimization.fill_mode,
+            "fee_maker": optimization.fee_maker,
+            "fee_taker": optimization.fee_taker,
+            "taker_slippage": optimization.taker_slippage,
+            "slippage_small": optimization.slippage_small,
+            "medium_impact": optimization.medium_impact,
+            "impact_model": optimization.impact_model,
+            "model_sqrt_limit": optimization.model_sqrt_limit,
+            "limit_fill_timeout_s": optimization.limit_fill_timeout_s,
+            "min_qty_threshold": optimization.min_qty_threshold,
+            "min_qty_check": optimization.min_qty_check,
+        }
+    )
+
+
 def reset_interrupted_optimizations(db: Session) -> int:
     result = db.execute(
         update(OptimizationRun)
@@ -291,12 +309,17 @@ def execute_optimization(db: Session, optimization_id: uuid.UUID) -> None:
         )
         costs = BacktestCosts(
             spread_points=DEFAULT_BACKTEST_SPREAD_POINTS,
+            fill_mode=optimization.fill_mode,
             fee_maker=optimization.fee_maker,
             fee_taker=optimization.fee_taker,
+            taker_slippage=optimization.taker_slippage,
             slippage_small=optimization.slippage_small,
-            slippage_medium=optimization.slippage_medium,
+            slippage_medium=optimization.medium_impact,
+            medium_impact=optimization.medium_impact,
             impact_model=optimization.impact_model,
+            model_sqrt_limit=optimization.model_sqrt_limit,
             limit_fill_timeout_s=optimization.limit_fill_timeout_s,
+            min_qty_threshold=optimization.min_qty_threshold,
             min_qty_check=optimization.min_qty_check,
         )
         study = optuna.create_study(direction="maximize")
@@ -317,6 +340,7 @@ def execute_optimization(db: Session, optimization_id: uuid.UUID) -> None:
                             "failed_trials": failed,
                             "duration_seconds": int(monotonic() - started),
                             "search_space": search_space,
+                            "execution_model": _execution_model_payload(optimization),
                             "top_candidates": _top_candidates(db, optimization.id),
                         }
                     )
@@ -409,6 +433,7 @@ def execute_optimization(db: Session, optimization_id: uuid.UUID) -> None:
                 "failed_trials": failed,
                 "duration_seconds": int(monotonic() - started),
                 "search_space": search_space,
+                "execution_model": _execution_model_payload(optimization),
                 "top_candidates": _top_candidates(db, optimization.id),
             }
         )

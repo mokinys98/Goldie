@@ -3,7 +3,7 @@ from datetime import datetime
 from decimal import Decimal
 
 from goldie_domain.config import BotConfiguration
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class OrmModel(BaseModel):
@@ -326,34 +326,53 @@ class CollectorCommandUpdate(BaseModel):
     error: str | None = Field(default=None, max_length=4000)
 
 
-class BacktestCreate(BaseModel):
+class ExecutionModelFields(BaseModel):
+    fill_mode: str = Field(default="simulated", pattern="^(perfect|simulated)$")
+    fee_maker: Decimal = Field(default=Decimal("0.001"), ge=0)
+    fee_taker: Decimal = Field(default=Decimal("0.001"), ge=0)
+    taker_slippage: Decimal = Field(default=Decimal("0"), ge=0)
+    slippage_small: Decimal = Field(default=Decimal("0.0005"), ge=0)
+    medium_impact: Decimal = Field(default=Decimal("0.001"), ge=0)
+    slippage_medium: Decimal | None = Field(default=None, ge=0)
+    impact_model: str = Field(default="sqrt", pattern="^(sqrt)$")
+    model_sqrt_limit: Decimal = Field(default=Decimal("1.0"), ge=0)
+    limit_fill_timeout_s: int = Field(default=30, ge=0)
+    min_qty_threshold: Decimal = Field(default=Decimal("0"), ge=0)
+    min_qty_check: bool = True
+
+    @model_validator(mode="before")
+    @classmethod
+    def support_legacy_slippage_medium(cls, data):
+        if isinstance(data, dict):
+            values = dict(data)
+            if "medium_impact" not in values and "slippage_medium" in values:
+                values["medium_impact"] = values["slippage_medium"]
+            if "slippage_medium" not in values and "medium_impact" in values:
+                values["slippage_medium"] = values["medium_impact"]
+            return values
+        return data
+
+    @model_validator(mode="after")
+    def mirror_legacy_slippage_medium(self):
+        if self.slippage_medium is None:
+            self.slippage_medium = self.medium_impact
+        return self
+
+
+class BacktestCreate(ExecutionModelFields):
     bot_id: uuid.UUID
     config_version_id: uuid.UUID
     market_feed_id: uuid.UUID
     date_from: datetime
     date_to: datetime
     initial_capital: Decimal = Field(default=Decimal("10000"), gt=0)
-    fee_maker: Decimal = Field(default=Decimal("0.001"), ge=0)
-    fee_taker: Decimal = Field(default=Decimal("0.001"), ge=0)
-    slippage_small: Decimal = Field(default=Decimal("0.0005"), ge=0)
-    slippage_medium: Decimal = Field(default=Decimal("0.001"), ge=0)
-    impact_model: str = Field(default="sqrt", pattern="^(sqrt)$")
-    limit_fill_timeout_s: int = Field(default=30, ge=0)
-    min_qty_check: bool = True
 
 
-class BatchBacktestCreate(BaseModel):
+class BatchBacktestCreate(ExecutionModelFields):
     bot_ids: list[uuid.UUID] = Field(min_length=1, max_length=100)
     date_from: datetime
     date_to: datetime
     initial_capital: Decimal = Field(default=Decimal("10000"), gt=0)
-    fee_maker: Decimal = Field(default=Decimal("0.001"), ge=0)
-    fee_taker: Decimal = Field(default=Decimal("0.001"), ge=0)
-    slippage_small: Decimal = Field(default=Decimal("0.0005"), ge=0)
-    slippage_medium: Decimal = Field(default=Decimal("0.001"), ge=0)
-    impact_model: str = Field(default="sqrt", pattern="^(sqrt)$")
-    limit_fill_timeout_s: int = Field(default=30, ge=0)
-    min_qty_check: bool = True
 
 
 class BatchBacktestResult(BaseModel):
@@ -373,12 +392,17 @@ class BacktestRead(OrmModel):
     date_from: datetime
     date_to: datetime
     initial_capital: Decimal
+    fill_mode: str
     fee_maker: Decimal
     fee_taker: Decimal
+    taker_slippage: Decimal
     slippage_small: Decimal
     slippage_medium: Decimal
+    medium_impact: Decimal
     impact_model: str
+    model_sqrt_limit: Decimal
     limit_fill_timeout_s: int
+    min_qty_threshold: Decimal
     min_qty_check: bool
     config_snapshot: dict
     progress: dict
@@ -420,7 +444,7 @@ class BacktestTradePage(BaseModel):
     total: int
 
 
-class OptimizationCreate(BaseModel):
+class OptimizationCreate(ExecutionModelFields):
     bot_id: uuid.UUID
     config_version_id: uuid.UUID
     market_feed_id: uuid.UUID
@@ -429,13 +453,6 @@ class OptimizationCreate(BaseModel):
     n_trials: int = Field(ge=1, le=500, default=25)
     objective: str = Field(default="BALANCED", pattern="^(BALANCED)$")
     initial_capital: Decimal = Field(default=Decimal("10000"), gt=0)
-    fee_maker: Decimal = Field(default=Decimal("0.001"), ge=0)
-    fee_taker: Decimal = Field(default=Decimal("0.001"), ge=0)
-    slippage_small: Decimal = Field(default=Decimal("0.0005"), ge=0)
-    slippage_medium: Decimal = Field(default=Decimal("0.001"), ge=0)
-    impact_model: str = Field(default="sqrt", pattern="^(sqrt)$")
-    limit_fill_timeout_s: int = Field(default=30, ge=0)
-    min_qty_check: bool = True
 
 
 class OptimizationTrialRead(OrmModel):
@@ -471,12 +488,17 @@ class OptimizationRunRead(OrmModel):
     n_trials: int
     objective: str
     initial_capital: Decimal
+    fill_mode: str
     fee_maker: Decimal
     fee_taker: Decimal
+    taker_slippage: Decimal
     slippage_small: Decimal
     slippage_medium: Decimal
+    medium_impact: Decimal
     impact_model: str
+    model_sqrt_limit: Decimal
     limit_fill_timeout_s: int
+    min_qty_threshold: Decimal
     min_qty_check: bool
     config_snapshot: dict
     progress: dict

@@ -578,6 +578,8 @@ def test_backtest_api_execution_and_exports() -> None:
             },
         )
         assert created.status_code == 201
+        assert created.json()["fill_mode"] == "simulated"
+        assert created.json()["medium_impact"] == created.json()["slippage_medium"]
         experiment_id = uuid.UUID(created.json()["id"])
         statements = []
 

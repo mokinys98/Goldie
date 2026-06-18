@@ -331,3 +331,89 @@ def test_run_stream_accepts_lightweight_candles_for_combo_strategies() -> None:
     )
 
     assert isinstance(result.reason_counts, dict)
+
+
+def test_perfect_fill_has_no_slippage_or_commission() -> None:
+    _, instrument, _ = settings()
+    costs = BacktestCosts(
+        fill_mode="perfect",
+        fee_taker=Decimal("0.01"),
+        taker_slippage=Decimal("0.5"),
+        slippage_small=Decimal("0.5"),
+        medium_impact=Decimal("0.5"),
+    )
+
+    assert BacktestEngine._slippage_amount(costs, instrument, Decimal("100")) == 0
+    assert (
+        BacktestEngine._commission_amount(
+            costs=costs,
+            entry_price=Decimal("100"),
+            exit_price=Decimal("101"),
+            volume=Decimal("10"),
+        )
+        == 0
+    )
+
+
+def test_simulated_fill_applies_fee_and_slippage() -> None:
+    _, instrument, _ = settings()
+    costs = BacktestCosts(
+        fill_mode="simulated",
+        fee_taker=Decimal("0.001"),
+        taker_slippage=Decimal("0.1"),
+        slippage_small=Decimal("0.2"),
+        medium_impact=Decimal("0.3"),
+        model_sqrt_limit=Decimal("1"),
+    )
+
+    slippage = BacktestEngine._slippage_amount(costs, instrument, Decimal("4"))
+    commission = BacktestEngine._commission_amount(
+        costs=costs,
+        entry_price=Decimal("100"),
+        exit_price=Decimal("101"),
+        volume=Decimal("10"),
+    )
+
+    assert slippage > costs.slippage_small
+    assert commission == Decimal("2.010")
+
+
+def test_min_qty_threshold_rejects_small_position() -> None:
+    config, instrument, costs = settings()
+    costs = BacktestCosts(
+        spread_points=costs.spread_points,
+        fill_mode="simulated",
+        min_qty_check=True,
+        min_qty_threshold=Decimal("1000000"),
+    )
+    result = BacktestEngine().run(
+        candles=[
+            candle(0, "100", "100.2", "99.8", "100"),
+            candle(1, "100", "100.3", "99.9", "100.2"),
+            candle(2, "100.2", "100.6", "100.1", "100.5"),
+            candle(3, "101.0", "102.2", "100.8", "102"),
+        ],
+        config=config,
+        instrument=instrument,
+        costs=costs,
+        initial_capital=Decimal("10000"),
+    )
+
+    assert result.trades == []
+    assert result.reason_counts["INVALID_POSITION_SIZE"] == 1
+
+
+def test_model_sqrt_limit_caps_impact() -> None:
+    _, instrument, _ = settings()
+    costs = BacktestCosts(
+        fill_mode="simulated",
+        taker_slippage=Decimal("0"),
+        slippage_small=Decimal("0"),
+        medium_impact=Decimal("0.1"),
+        model_sqrt_limit=Decimal("0.7"),
+    )
+
+    assert (
+        BacktestEngine._slippage_amount(costs, instrument, Decimal("1000000"))
+        == Decimal("0.07")
+    )

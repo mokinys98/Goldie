@@ -413,12 +413,17 @@ class BacktestExperiment(Base, TimestampMixin):
     date_from: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     date_to: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     initial_capital: Mapped[Decimal] = mapped_column(Numeric(20, 8))
+    fill_mode: Mapped[str] = mapped_column(String(16), default="simulated")
     fee_maker: Mapped[Decimal] = mapped_column(Numeric(20, 8))
     fee_taker: Mapped[Decimal] = mapped_column(Numeric(20, 8))
+    taker_slippage: Mapped[Decimal] = mapped_column(Numeric(20, 8), default=Decimal("0"))
     slippage_small: Mapped[Decimal] = mapped_column(Numeric(20, 8))
     slippage_medium: Mapped[Decimal] = mapped_column(Numeric(20, 8))
+    medium_impact: Mapped[Decimal] = mapped_column(Numeric(20, 8), default=Decimal("0.001"))
     impact_model: Mapped[str] = mapped_column(String(32), default="sqrt")
+    model_sqrt_limit: Mapped[Decimal] = mapped_column(Numeric(20, 8), default=Decimal("1.0"))
     limit_fill_timeout_s: Mapped[int] = mapped_column(Integer, default=30)
+    min_qty_threshold: Mapped[Decimal] = mapped_column(Numeric(20, 8), default=Decimal("0"))
     min_qty_check: Mapped[bool] = mapped_column(Boolean, default=True)
     config_snapshot: Mapped[dict] = mapped_column(JSON)
     progress: Mapped[dict] = mapped_column(JSON, default=dict)
@@ -490,12 +495,17 @@ class OptimizationRun(Base, TimestampMixin):
     n_trials: Mapped[int] = mapped_column(Integer)
     objective: Mapped[str] = mapped_column(String(32), default="BALANCED")
     initial_capital: Mapped[Decimal] = mapped_column(Numeric(20, 8))
+    fill_mode: Mapped[str] = mapped_column(String(16), default="simulated")
     fee_maker: Mapped[Decimal] = mapped_column(Numeric(20, 8))
     fee_taker: Mapped[Decimal] = mapped_column(Numeric(20, 8))
+    taker_slippage: Mapped[Decimal] = mapped_column(Numeric(20, 8), default=Decimal("0"))
     slippage_small: Mapped[Decimal] = mapped_column(Numeric(20, 8))
     slippage_medium: Mapped[Decimal] = mapped_column(Numeric(20, 8))
+    medium_impact: Mapped[Decimal] = mapped_column(Numeric(20, 8), default=Decimal("0.001"))
     impact_model: Mapped[str] = mapped_column(String(32), default="sqrt")
+    model_sqrt_limit: Mapped[Decimal] = mapped_column(Numeric(20, 8), default=Decimal("1.0"))
     limit_fill_timeout_s: Mapped[int] = mapped_column(Integer, default=30)
+    min_qty_threshold: Mapped[Decimal] = mapped_column(Numeric(20, 8), default=Decimal("0"))
     min_qty_check: Mapped[bool] = mapped_column(Boolean, default=True)
     config_snapshot: Mapped[dict] = mapped_column(JSON)
     progress: Mapped[dict] = mapped_column(JSON, default=dict)
@@ -513,7 +523,11 @@ class OptimizationRun(Base, TimestampMixin):
 class OptimizationTrial(Base, TimestampMixin):
     __tablename__ = "optimization_trials"
     __table_args__ = (
-        UniqueConstraint("optimization_run_id", "trial_number", name="uq_optimization_trial_number"),
+        UniqueConstraint(
+            "optimization_run_id",
+            "trial_number",
+            name="uq_optimization_trial_number",
+        ),
         Index("ix_optimization_trials_run_score", "optimization_run_id", "score"),
     )
 
