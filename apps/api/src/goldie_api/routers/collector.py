@@ -152,11 +152,19 @@ def feed_summary(db: Session, feed: MarketFeed, now: datetime) -> dict:
     )
     candle = db.scalar(
         select(Candle)
-        .where(Candle.market_feed_id == feed.id)
+        .where(
+            Candle.market_feed_id == feed.id,
+            Candle.timeframe == "M1",
+            Candle.is_complete.is_(True),
+        )
         .order_by(desc(Candle.opened_at))
     )
     earliest_candle_at = db.scalar(
-        select(func.min(Candle.opened_at)).where(Candle.market_feed_id == feed.id)
+        select(func.min(Candle.opened_at)).where(
+            Candle.market_feed_id == feed.id,
+            Candle.timeframe == "M1",
+            Candle.is_complete.is_(True),
+        )
     )
     bots = db.scalar(select(func.count(Bot.id)).where(Bot.market_feed_id == feed.id)) or 0
     lag = None
@@ -276,7 +284,11 @@ def overview(
                 func.min(Candle.opened_at).label("earliest_opened_at"),
                 func.max(Candle.opened_at).label("opened_at"),
             )
-            .where(Candle.market_feed_id.in_(feed_ids))
+            .where(
+                Candle.market_feed_id.in_(feed_ids),
+                Candle.timeframe == "M1",
+                Candle.is_complete.is_(True),
+            )
             .group_by(Candle.market_feed_id)
             .subquery()
         )

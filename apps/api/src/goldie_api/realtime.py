@@ -11,7 +11,7 @@ from .settings import get_settings
 from .websocket import manager
 
 EVENT_CHANNEL = "goldie:events"
-OVERVIEW_CACHE_KEY = "collector:overview:v1"
+OVERVIEW_CACHE_KEY = "collector:overview:v2"
 logger = logging.getLogger(__name__)
 
 
