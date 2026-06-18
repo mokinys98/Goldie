@@ -58,3 +58,4 @@ data/*
 Thumbs.db
 Desktop.ini
 exports/Backtests/
+.benchmark-optuna-worker.db

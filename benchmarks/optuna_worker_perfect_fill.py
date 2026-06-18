@@ -185,7 +185,7 @@ def main() -> None:
     parser.add_argument("--provider-symbol", default="EUR_USD")
     parser.add_argument("--days", type=int, default=349)
     parser.add_argument("--trials", type=int, default=100)
-    parser.add_argument("--max-seconds", type=float, default=300)
+    parser.add_argument("--max-seconds", type=float, default=120)
     parser.add_argument("--batch-size", type=int, default=10000)
     args = parser.parse_args()
 

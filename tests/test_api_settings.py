@@ -19,3 +19,10 @@ def test_existing_sqlalchemy_database_url_is_unchanged() -> None:
     url = "postgresql+psycopg://user:password@localhost/db"
 
     assert Settings(database_url=url).database_url == url
+
+
+def test_database_pool_settings_are_configurable() -> None:
+    settings = Settings(db_pool_size=3, db_max_overflow=1)
+
+    assert settings.db_pool_size == 3
+    assert settings.db_max_overflow == 1

@@ -34,7 +34,7 @@ export default function NewOptimizationPage() {
   const [configId, setConfigId] = useState("");
   const [dateFrom, setDateFrom] = useState(profileDate("2023-01-01"));
   const [dateTo, setDateTo] = useState(profileDate("2025-01-01"));
-  const [trialCount, setTrialCount] = useState("500");
+  const [trialCount, setTrialCount] = useState("100");
   const [initialCapital, setInitialCapital] = useState("10000");
   const [fillMode, setFillMode] = useState<"perfect" | "simulated">("simulated");
   const [feeMaker, setFeeMaker] = useState("0.0002");

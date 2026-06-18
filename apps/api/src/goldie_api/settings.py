@@ -20,6 +20,8 @@ class Settings(BaseSettings):
     agent_offline_after_seconds: int = 20
     quote_retention_days: int = 30
     shadow_notional_balance: Decimal = Decimal("10000")
+    db_pool_size: int = 5
+    db_max_overflow: int = 5
 
     @field_validator("database_url", mode="before")
     @classmethod

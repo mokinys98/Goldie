@@ -202,8 +202,17 @@ def test_prepared_strategies_match_legacy_backtest_results() -> None:
             costs=costs,
             initial_capital=Decimal("10000"),
         )
+        fast = BacktestEngine().run(
+            candles=candles,
+            config=config,
+            instrument=instrument,
+            costs=costs,
+            initial_capital=Decimal("10000"),
+            use_fast_strategy=True,
+        )
 
         assert optimized == legacy
+        assert fast == legacy
 
 
 def test_prepared_combo_strategy_matches_legacy_backtest_result() -> None:

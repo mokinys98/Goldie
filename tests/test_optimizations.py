@@ -14,10 +14,15 @@ from goldie_api.db import Base, SessionLocal, engine
 from goldie_api.main import app
 from goldie_api.models import OptimizationRun, OptimizationTrial
 from goldie_api.optimizations import (
+    OPTIMIZATION_COMMIT_INTERVAL,
     compute_balanced_score,
     execute_optimization,
     sample_parameters,
 )
+
+
+def test_optimization_progress_is_committed_after_every_trial() -> None:
+    assert OPTIMIZATION_COMMIT_INTERVAL == 1
 
 
 def login(client: TestClient) -> dict[str, str]:

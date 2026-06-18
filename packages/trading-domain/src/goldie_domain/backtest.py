@@ -127,6 +127,7 @@ class BacktestEngine:
         initial_capital: Decimal,
         progress_callback: Callable[[int, int], bool] | None = None,
         use_prepared_strategy: bool = True,
+        use_fast_strategy: bool = False,
         collect_reason_counts: bool = True,
     ) -> BacktestResult:
         ordered = sorted(
@@ -142,6 +143,7 @@ class BacktestEngine:
             initial_capital=initial_capital,
             progress_callback=progress_callback,
             use_prepared_strategy=use_prepared_strategy,
+            use_fast_strategy=use_fast_strategy,
             collect_reason_counts=collect_reason_counts,
         )
 
@@ -156,6 +158,7 @@ class BacktestEngine:
         initial_capital: Decimal,
         progress_callback: Callable[[int, int], bool] | None = None,
         use_prepared_strategy: bool = True,
+        use_fast_strategy: bool = False,
         collect_reason_counts: bool = True,
     ) -> BacktestResult:
         reasons: Counter[str] = Counter()
@@ -165,7 +168,11 @@ class BacktestEngine:
         balance = initial_capital
         expected_step = timedelta(minutes=1)
         strategy = self.strategy or get_strategy(config.strategy.name)
-        evaluator_factory = getattr(strategy, "create_backtest_evaluator", None)
+        evaluator_factory = (
+            getattr(strategy, "create_fast_backtest_evaluator", None)
+            if use_fast_strategy
+            else getattr(strategy, "create_backtest_evaluator", None)
+        )
         prepared = (
             evaluator_factory(
                 config,

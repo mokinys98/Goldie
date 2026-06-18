@@ -29,8 +29,8 @@ from .models import (
 
 MIN_BALANCED_TRADES = 5
 NO_TRADES_SCORE = Decimal("-99999")
-OPTIMIZATION_COMMIT_INTERVAL = 10
-OPTIMIZATION_CANCEL_CHECK_INTERVAL = 5
+OPTIMIZATION_COMMIT_INTERVAL = 1
+OPTIMIZATION_CANCEL_CHECK_INTERVAL = 1
 
 
 def _catalog_entry(name: str) -> dict[str, Any]:
@@ -373,7 +373,6 @@ def execute_optimization(db: Session, optimization_id: uuid.UUID) -> None:
                 started_at=utc_now(),
             )
             db.add(trial_row)
-            db.flush()
 
             try:
                 trial_config = copy.deepcopy(optimization.config_snapshot)
@@ -385,6 +384,7 @@ def execute_optimization(db: Session, optimization_id: uuid.UUID) -> None:
                     instrument=instrument,
                     costs=costs,
                     initial_capital=optimization.initial_capital,
+                    use_fast_strategy=True,
                     collect_reason_counts=False,
                 )
                 score = compute_balanced_score(result.summary)

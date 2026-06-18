@@ -30,6 +30,6 @@ describe("optimizationProfiles", () => {
     expect(oneMinuteCandles(349)).toBe(502560);
     expect(profile?.trials).toBe("100");
     expect(profile?.datasetEstimate).toContain("502,560");
-    expect(profile?.runtimeEstimate).toContain("5 minutes or faster");
+    expect(profile?.runtimeEstimate).toContain("2 minutes or faster");
   });
 });
