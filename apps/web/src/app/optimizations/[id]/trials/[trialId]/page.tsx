@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
+import { useState } from "react";
 import { api } from "@/lib/api";
 import { normalizeBotConfig } from "@/lib/config";
 import type { OptimizationRun, OptimizationTrial } from "@/lib/types";
@@ -10,6 +11,9 @@ import { StatusPill } from "@/components/status-pill";
 
 export default function OptimizationTrialDetailPage() {
   const { id, trialId } = useParams<{ id: string; trialId: string }>();
+  const [applyBusy, setApplyBusy] = useState(false);
+  const [applyError, setApplyError] = useState<string | null>(null);
+  const [appliedConfigId, setAppliedConfigId] = useState<string | null>(null);
   const run = useQuery({
     queryKey: ["optimization", id],
     queryFn: () => api<OptimizationRun>(`/api/v1/optimizations/${id}`),
@@ -30,6 +34,43 @@ export default function OptimizationTrialDetailPage() {
   }
 
   const configSnapshot = normalizeBotConfig(run.data.config_snapshot);
+  const canApplyTrialConfig = Boolean(
+    !applyBusy
+    && Object.keys(trial.data.sampled_parameters ?? {}).length,
+  );
+
+  async function applyTrialAsNewConfig() {
+    if (!canApplyTrialConfig || !run.data || !trial.data) return;
+    if (!window.confirm("Create and activate a new config from this trial?")) {
+      return;
+    }
+    setApplyBusy(true);
+    setApplyError(null);
+    setAppliedConfigId(null);
+    try {
+      const nextConfig = {
+        ...configSnapshot,
+        strategy: {
+          ...configSnapshot.strategy,
+          parameters: {
+            ...configSnapshot.strategy.parameters,
+            ...(trial.data.sampled_parameters ?? {}),
+          },
+        },
+      };
+      const created = await api<{ id: string }>(`/api/v1/bots/${run.data.bot_id}/config-versions`, {
+        method: "POST",
+        body: JSON.stringify({ config: nextConfig }),
+      });
+      await api(`/api/v1/config-versions/${created.id}/validate`, { method: "POST" });
+      await api(`/api/v1/config-versions/${created.id}/activate`, { method: "POST" });
+      setAppliedConfigId(created.id);
+    } catch (reason) {
+      setApplyError(reason instanceof Error ? reason.message : "Could not apply trial config");
+    } finally {
+      setApplyBusy(false);
+    }
+  }
 
   return (
     <section>
@@ -43,6 +84,13 @@ export default function OptimizationTrialDetailPage() {
         </div>
         <div className="button-row">
           <StatusPill value={trial.data.status} />
+          <button
+            className="button button-primary"
+            disabled={!canApplyTrialConfig}
+            onClick={() => void applyTrialAsNewConfig()}
+          >
+            {applyBusy ? "Applying..." : "Apply config to strategy"}
+          </button>
           <Link className="button button-secondary" href={`/optimizations/${id}`}>
             Back to run
           </Link>
@@ -50,6 +98,16 @@ export default function OptimizationTrialDetailPage() {
       </header>
 
       {trial.data.error && <div className="error-box">{trial.data.error}</div>}
+      {applyError && <div className="error-box">{applyError}</div>}
+      {appliedConfigId && (
+        <div className="panel">
+          New config created and activated.
+          {" "}
+          <Link className="table-link" href={`/bots/${run.data.bot_id}`}>
+            Open bot
+          </Link>
+        </div>
+      )}
 
       <div className="dashboard-grid collector-section">
         <Metric label="Score" value={trial.data.score ?? "--"} />
