@@ -17,6 +17,8 @@ export type OptimizationProfile = {
   limitFillTimeout: string;
   minQtyThreshold: string;
   minQtyCheck: boolean;
+  datasetEstimate?: string;
+  runtimeEstimate?: string;
 };
 
 export const optimizationProfiles: OptimizationProfile[] = [
@@ -37,6 +39,8 @@ export const optimizationProfiles: OptimizationProfile[] = [
     limitFillTimeout: "1",
     minQtyThreshold: "0",
     minQtyCheck: false,
+    datasetEstimate: "349 days / about 502,560 1m candles",
+    runtimeEstimate: "One EUR/USD group with 100 trials should finish in about 5 minutes or faster.",
   },
   {
     key: "realistic",

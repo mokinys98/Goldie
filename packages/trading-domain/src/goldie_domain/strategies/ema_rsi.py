@@ -175,6 +175,93 @@ def _rsi_tail(
     return Decimal("100") - Decimal("100") / (Decimal("1") + strength)
 
 
+class _RollingWindowEma:
+    def __init__(self, *, period: int, window_size: int) -> None:
+        self.period = period
+        self.window_size = window_size
+        self.period_decimal = Decimal(period)
+        self.alpha = Decimal("2") / Decimal(period + 1)
+        self.beta = Decimal("1") - self.alpha
+        self.tail_length = window_size - period
+        self.beta_tail = self.beta**self.tail_length
+        self.values: deque[Decimal] = deque(maxlen=window_size)
+        self.seed_sum = Decimal("0")
+        self.tail_weighted = Decimal("0")
+        self.current: Decimal | None = None
+
+    def update(self, value: Decimal) -> tuple[Decimal | None, Decimal | None]:
+        if len(self.values) < self.window_size:
+            self.values.append(value)
+            if len(self.values) == self.window_size:
+                self._initialize()
+            return self.current, self.previous_in_window(value)
+
+        old_first = self.values[0]
+        if self.tail_length == 0:
+            self.seed_sum += value - old_first
+        else:
+            old_tail_first = self.values[self.period]
+            self.seed_sum += old_tail_first - old_first
+            self.tail_weighted = (
+                self.beta * self.tail_weighted
+                - self.alpha * self.beta_tail * old_tail_first
+                + self.alpha * value
+            )
+        self.values.append(value)
+        self.current = self.beta_tail * self.seed_sum / self.period_decimal + self.tail_weighted
+        return self.current, self.previous_in_window(value)
+
+    def _initialize(self) -> None:
+        values = list(self.values)
+        self.seed_sum = sum(values[: self.period], Decimal("0"))
+        self.tail_weighted = Decimal("0")
+        for index, item in enumerate(values[self.period :]):
+            exponent = self.tail_length - 1 - index
+            self.tail_weighted += self.alpha * (self.beta**exponent) * item
+        self.current = self.beta_tail * self.seed_sum / self.period_decimal + self.tail_weighted
+
+    def previous_in_window(self, last_value: Decimal) -> Decimal | None:
+        if self.current is None or self.tail_length == 0:
+            return None
+        return (self.current - self.alpha * last_value) / self.beta
+
+
+class _RollingRsi:
+    def __init__(self, *, period: int) -> None:
+        self.period = period
+        self.period_decimal = Decimal(period)
+        self.previous: Decimal | None = None
+        self.changes: deque[Decimal] = deque(maxlen=period)
+        self.gain = Decimal("0")
+        self.loss = Decimal("0")
+
+    def update(self, value: Decimal) -> Decimal | None:
+        if self.previous is None:
+            self.previous = value
+            return None
+        change = value - self.previous
+        self.previous = value
+        if len(self.changes) == self.period:
+            removed = self.changes[0]
+            if removed > 0:
+                self.gain -= removed
+            elif removed < 0:
+                self.loss += removed
+        self.changes.append(change)
+        if change > 0:
+            self.gain += change
+        elif change < 0:
+            self.loss -= change
+        if len(self.changes) < self.period:
+            return None
+        average_gain = self.gain / self.period_decimal
+        average_loss = self.loss / self.period_decimal
+        if average_loss == 0:
+            return Decimal("100") if average_gain > 0 else Decimal("50")
+        strength = average_gain / average_loss
+        return Decimal("100") - Decimal("100") / (Decimal("1") + strength)
+
+
 class _EmaRsiBacktestEvaluator:
     def __init__(
         self,
@@ -192,43 +279,39 @@ class _EmaRsiBacktestEvaluator:
         self.fast_multiplier = Decimal("2") / Decimal(parameters.fast_ema_period + 1)
         self.slow_multiplier = Decimal("2") / Decimal(parameters.slow_ema_period + 1)
         crossover_extra = 1 if parameters.require_crossover else 0
-        required = max(
+        self.required = max(
             parameters.slow_ema_period + crossover_extra,
             parameters.rsi_period + 1,
         )
-        self.closes: deque[Decimal] = deque(maxlen=required)
+        self.count = 0
+        self.fast_ema = _RollingWindowEma(
+            period=parameters.fast_ema_period,
+            window_size=self.required,
+        )
+        self.slow_ema = _RollingWindowEma(
+            period=parameters.slow_ema_period,
+            window_size=self.required,
+        )
+        self.rsi = _RollingRsi(period=parameters.rsi_period)
 
     def evaluate(
         self,
         candle: CandleInput,
         observed_at: datetime,
     ) -> tuple[SignalType, str]:
-        self.closes.append(candle.close)
+        self.count += 1
+        fast, previous_fast = self.fast_ema.update(candle.close)
+        slow, previous_slow = self.slow_ema.update(candle.close)
+        rsi_value = self.rsi.update(candle.close)
         rejection = self.guards.rejection_reason(observed_at)
         if rejection:
             return SignalType.NO_TRADE, rejection
-        if len(self.closes) < self.closes.maxlen:
+        if self.count < self.required:
             return (
                 SignalType.NO_TRADE,
                 "INSUFFICIENT_COMPLETED_CANDLES",
             )
-        fast, previous_fast = _ema_tail(
-            self.closes,
-            self.parameters.fast_ema_period,
-            self.fast_period_decimal,
-            self.fast_multiplier,
-        )
-        slow, previous_slow = _ema_tail(
-            self.closes,
-            self.parameters.slow_ema_period,
-            self.slow_period_decimal,
-            self.slow_multiplier,
-        )
-        rsi_value = _rsi_tail(
-            self.closes,
-            self.parameters.rsi_period,
-            self.rsi_period_decimal,
-        )
+        assert fast is not None and slow is not None and rsi_value is not None
         trend_points = (fast - slow) / self.point
         crossed_up = crossed_down = True
         if self.parameters.require_crossover:

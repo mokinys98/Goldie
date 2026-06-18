@@ -29,6 +29,8 @@ from .models import (
 
 MIN_BALANCED_TRADES = 5
 NO_TRADES_SCORE = Decimal("-99999")
+OPTIMIZATION_COMMIT_INTERVAL = 10
+OPTIMIZATION_CANCEL_CHECK_INTERVAL = 5
 
 
 def _catalog_entry(name: str) -> dict[str, Any]:
@@ -298,6 +300,7 @@ def execute_optimization(db: Session, optimization_id: uuid.UUID) -> None:
             .order_by(Candle.opened_at)
             .execution_options(stream_results=True, yield_per=2000)
         )
+        candles = list(stream_candles(db, statement))
         instrument = BacktestInstrument(
             point=spec.point,
             tick_size=spec.point,
@@ -328,8 +331,11 @@ def execute_optimization(db: Session, optimization_id: uuid.UUID) -> None:
         best_payload: dict[str, Any] = optimization.best_candidate or {}
         started = monotonic()
 
-        for _ in range(optimization.n_trials):
-            if _should_cancel(db, optimization.id):
+        for trial_index in range(optimization.n_trials):
+            if (
+                trial_index % OPTIMIZATION_CANCEL_CHECK_INTERVAL == 0
+                and _should_cancel(db, optimization.id)
+            ):
                 optimization = db.get(OptimizationRun, optimization.id)
                 if optimization:
                     optimization.status = "CANCELLED"
@@ -367,19 +373,19 @@ def execute_optimization(db: Session, optimization_id: uuid.UUID) -> None:
                 started_at=utc_now(),
             )
             db.add(trial_row)
-            db.commit()
-            db.refresh(trial_row)
+            db.flush()
 
             try:
                 trial_config = copy.deepcopy(optimization.config_snapshot)
                 trial_config["strategy"]["parameters"] = sampled_parameters
                 result = BacktestEngine().run_stream(
-                    candles=stream_candles(db, statement),
+                    candles=iter(candles),
                     total_candles=total_candles,
                     config=BotConfiguration.model_validate(trial_config),
                     instrument=instrument,
                     costs=costs,
                     initial_capital=optimization.initial_capital,
+                    collect_reason_counts=False,
                 )
                 score = compute_balanced_score(result.summary)
                 metrics = jsonable_encoder(
@@ -423,7 +429,14 @@ def execute_optimization(db: Session, optimization_id: uuid.UUID) -> None:
                 "total_trials": optimization.n_trials,
             }
             optimization.best_candidate = best_payload
-            db.commit()
+            completed = succeeded + failed
+            if (
+                completed % OPTIMIZATION_COMMIT_INTERVAL == 0
+                or completed == optimization.n_trials
+            ):
+                db.commit()
+            else:
+                db.flush()
 
         optimization.status = "SUCCEEDED"
         optimization.completed_at = utc_now()

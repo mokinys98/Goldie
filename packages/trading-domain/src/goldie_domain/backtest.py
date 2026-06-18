@@ -127,6 +127,7 @@ class BacktestEngine:
         initial_capital: Decimal,
         progress_callback: Callable[[int, int], bool] | None = None,
         use_prepared_strategy: bool = True,
+        collect_reason_counts: bool = True,
     ) -> BacktestResult:
         ordered = sorted(
             (item for item in candles if item.is_complete),
@@ -141,6 +142,7 @@ class BacktestEngine:
             initial_capital=initial_capital,
             progress_callback=progress_callback,
             use_prepared_strategy=use_prepared_strategy,
+            collect_reason_counts=collect_reason_counts,
         )
 
     def run_stream(
@@ -154,6 +156,7 @@ class BacktestEngine:
         initial_capital: Decimal,
         progress_callback: Callable[[int, int], bool] | None = None,
         use_prepared_strategy: bool = True,
+        collect_reason_counts: bool = True,
     ) -> BacktestResult:
         reasons: Counter[str] = Counter()
         trades: list[BacktestTrade] = []
@@ -201,13 +204,15 @@ class BacktestEngine:
                     balance += trade.net_pnl
                     position = None
                 pending = None
-                reasons["DATA_GAP"] += 1
+                if collect_reason_counts:
+                    reasons["DATA_GAP"] += 1
 
             if position is None and pending is not None:
                 direction, signal_at = pending
                 fill_age = candle.opened_at - signal_at
                 if fill_age.total_seconds() > costs.limit_fill_timeout_s:
-                    reasons["LIMIT_FILL_TIMEOUT"] += 1
+                    if collect_reason_counts:
+                        reasons["LIMIT_FILL_TIMEOUT"] += 1
                 else:
                     position = self._open(
                         direction=direction,
@@ -219,7 +224,8 @@ class BacktestEngine:
                         balance=balance,
                     )
                     if position is None:
-                        reasons["INVALID_POSITION_SIZE"] += 1
+                        if collect_reason_counts:
+                            reasons["INVALID_POSITION_SIZE"] += 1
                 pending = None
 
             if position is not None:
@@ -255,11 +261,13 @@ class BacktestEngine:
                 )
                 decision_signal = decision.signal
                 reason_code = decision.reason_code
-            reasons[reason_code] += 1
+            if collect_reason_counts:
+                reasons[reason_code] += 1
             if position is None and pending is None and decision_signal != SignalType.NO_TRADE:
                 pending = (decision_signal.value, observed_at)
             elif decision_signal != SignalType.NO_TRADE:
-                reasons["OPEN_POSITION_EXISTS"] += 1
+                if collect_reason_counts:
+                    reasons["OPEN_POSITION_EXISTS"] += 1
             previous = candle
             last = candle
             processed += 1
