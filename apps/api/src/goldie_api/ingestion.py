@@ -2,7 +2,7 @@ import uuid
 from datetime import UTC, datetime
 
 from fastapi import HTTPException
-from sqlalchemy import desc, select
+from sqlalchemy import desc, select, update
 from sqlalchemy.dialects.postgresql import insert as postgresql_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import Session
@@ -36,7 +36,7 @@ def _existing_result(db: Session, event_id: uuid.UUID) -> dict | None:
     return {**event.result, "duplicate_event": True}
 
 
-def _record_event(
+def _claim_event(
     db: Session,
     *,
     event_id: uuid.UUID,
@@ -45,18 +45,31 @@ def _record_event(
     agent_id: uuid.UUID,
     collector_id: uuid.UUID | None,
     sent_at: datetime,
-    result: dict,
-) -> None:
-    db.add(
-        IngestionEvent(
+) -> bool:
+    dialect = db.get_bind().dialect.name
+    insert = postgresql_insert if dialect == "postgresql" else sqlite_insert
+    statement = (
+        insert(IngestionEvent)
+        .values(
             event_id=event_id,
             event_type=event_type,
             market_feed_id=feed_id,
             agent_id=agent_id,
             collector_id=collector_id,
             sent_at=sent_at,
-            result=result,
+            result={},
         )
+        .on_conflict_do_nothing(index_elements=[IngestionEvent.event_id])
+        .returning(IngestionEvent.event_id)
+    )
+    return db.scalar(statement) is not None
+
+
+def _complete_event(db: Session, event_id: uuid.UUID, result: dict) -> None:
+    db.execute(
+        update(IngestionEvent)
+        .where(IngestionEvent.event_id == event_id)
+        .values(result=result)
     )
 
 
@@ -70,6 +83,18 @@ def ingest_quote_batch(
     if existing is not None:
         return existing, {}
     feed, _ = _feed_and_agent(db, feed_id, payload.agent_id)
+    sent_at = (payload.sent_at or datetime.now(UTC)).astimezone(UTC)
+    claimed = _claim_event(
+        db,
+        event_id=event_id,
+        event_type="quote_batch",
+        feed_id=feed.id,
+        agent_id=payload.agent_id,
+        collector_id=payload.collector_id,
+        sent_at=sent_at,
+    )
+    if not claimed:
+        return _existing_result(db, event_id) or {"duplicate_event": True}, {}
     bots = list(db.scalars(select(Bot).where(Bot.market_feed_id == feed.id)))
     for quote in payload.quotes:
         if quote.ask < quote.bid:
@@ -93,16 +118,7 @@ def ingest_quote_batch(
         "count": len(payload.quotes),
         "event_id": str(event_id),
     }
-    _record_event(
-        db,
-        event_id=event_id,
-        event_type="quote_batch",
-        feed_id=feed.id,
-        agent_id=payload.agent_id,
-        collector_id=payload.collector_id,
-        sent_at=(payload.sent_at or datetime.now(UTC)).astimezone(UTC),
-        result=result,
-    )
+    _complete_event(db, event_id, result)
     latest = payload.quotes[-1]
     event = {
         "event_type": "market.quote",
@@ -129,6 +145,18 @@ def ingest_candle_batch(
     if existing is not None:
         return existing, {}
     feed, _ = _feed_and_agent(db, feed_id, payload.agent_id)
+    sent_at = (payload.sent_at or datetime.now(UTC)).astimezone(UTC)
+    claimed = _claim_event(
+        db,
+        event_id=event_id,
+        event_type="candle_batch",
+        feed_id=feed.id,
+        agent_id=payload.agent_id,
+        collector_id=payload.collector_id,
+        sent_at=sent_at,
+    )
+    if not claimed:
+        return _existing_result(db, event_id) or {"duplicate_event": True}, {}
     complete_candles = [candle for candle in payload.candles if candle.complete]
     values_by_opened_at: dict[datetime, dict] = {}
     received_at = datetime.now(UTC)
@@ -199,16 +227,7 @@ def ingest_candle_batch(
         "signal_ids": signal_ids,
         "event_id": str(event_id),
     }
-    _record_event(
-        db,
-        event_id=event_id,
-        event_type="candle_batch",
-        feed_id=feed.id,
-        agent_id=payload.agent_id,
-        collector_id=payload.collector_id,
-        sent_at=(payload.sent_at or datetime.now(UTC)).astimezone(UTC),
-        result=result,
-    )
+    _complete_event(db, event_id, result)
     event = {
         "event_type": "market.candle",
         "occurred_at": datetime.now(UTC).isoformat(),
