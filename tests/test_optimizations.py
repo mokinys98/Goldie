@@ -142,6 +142,19 @@ def test_sample_parameters_respects_dependent_strategy_bounds() -> None:
     )
 
 
+def test_sample_parameters_respects_atr_bounds_regardless_of_catalog_order() -> None:
+    sampled = sample_parameters(
+        BoundaryTrial(),
+        search_space=[
+            {"name": "max_atr_points", "type": "number", "minimum": 1, "maximum": 100000},
+            {"name": "min_atr_points", "type": "number", "minimum": 0, "maximum": 10000},
+        ],
+        defaults={"min_atr_points": "5", "max_atr_points": "500"},
+    )
+
+    assert sampled["min_atr_points"] <= sampled["max_atr_points"]
+
+
 def test_optimization_api_and_execution_flow() -> None:
     Base.metadata.drop_all(engine)
     Base.metadata.create_all(engine)

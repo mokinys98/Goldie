@@ -97,7 +97,29 @@ def sample_parameters(
     defaults: dict[str, Any],
 ) -> dict[str, Any]:
     sampled = copy.deepcopy(defaults)
-    for parameter in search_space:
+    dependencies = {
+        "medium_ema_period": "fast_ema_period",
+        "slow_ema_period": "medium_ema_period",
+        "sell_rsi_min": "buy_rsi_max",
+        "sell_rsi_max": "buy_rsi_min",
+        "max_atr_points": "min_atr_points",
+    }
+    positions = {parameter["name"]: index for index, parameter in enumerate(search_space)}
+
+    def dependency_order(parameter: dict[str, Any]) -> tuple[int, int]:
+        depth = 0
+        name = parameter["name"]
+        seen: set[str] = set()
+        while name in dependencies and name not in seen:
+            seen.add(name)
+            name = dependencies[name]
+            depth += 1
+        return depth, positions[parameter["name"]]
+
+    # Catalog property order is not an API guarantee. Sample constrained lower/upper
+    # values before the parameters whose ranges depend on them.
+    ordered_search_space = sorted(search_space, key=dependency_order)
+    for parameter in ordered_search_space:
         name = parameter["name"]
         if "choices" in parameter:
             sampled[name] = trial.suggest_categorical(name, parameter["choices"])
