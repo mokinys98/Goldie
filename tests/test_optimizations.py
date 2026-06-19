@@ -14,15 +14,29 @@ from goldie_api.db import Base, SessionLocal, engine
 from goldie_api.main import app
 from goldie_api.models import OptimizationRun, OptimizationTrial
 from goldie_api.optimizations import (
+    OPTIMIZATION_CANCEL_CHECK_INTERVAL,
     OPTIMIZATION_COMMIT_INTERVAL,
+    _is_cancellation_checkpoint,
+    _is_commit_checkpoint,
     compute_balanced_score,
     execute_optimization,
     sample_parameters,
 )
 
 
-def test_optimization_progress_is_committed_after_every_trial() -> None:
-    assert OPTIMIZATION_COMMIT_INTERVAL == 1
+def test_optimization_progress_and_cancellation_use_five_trial_batches() -> None:
+    assert OPTIMIZATION_COMMIT_INTERVAL == 5
+    assert OPTIMIZATION_CANCEL_CHECK_INTERVAL == 5
+    cancellation_checks = [
+        index for index in range(12) if _is_cancellation_checkpoint(index)
+    ]
+    commit_checks = [
+        completed
+        for completed in range(1, 13)
+        if _is_commit_checkpoint(completed, 12)
+    ]
+    assert cancellation_checks == [0, 5, 10]
+    assert commit_checks == [5, 10]
 
 
 def login(client: TestClient) -> dict[str, str]:
@@ -155,7 +169,7 @@ def test_sample_parameters_respects_atr_bounds_regardless_of_catalog_order() -> 
     assert sampled["min_atr_points"] <= sampled["max_atr_points"]
 
 
-def test_optimization_api_and_execution_flow() -> None:
+def test_optimization_api_and_execution_flow(monkeypatch) -> None:
     Base.metadata.drop_all(engine)
     Base.metadata.create_all(engine)
     with TestClient(app) as client:
@@ -180,7 +194,7 @@ def test_optimization_api_and_execution_flow() -> None:
                 "market_feed_id": feed_id,
                 "date_from": "2026-01-01T00:00:00Z",
                 "date_to": "2026-01-01T06:40:00Z",
-                "n_trials": 3,
+                "n_trials": 12,
                 "objective": "BALANCED",
                 "initial_capital": "10000",
                 "fill_mode": "simulated",
@@ -205,6 +219,32 @@ def test_optimization_api_and_execution_flow() -> None:
         assert Decimal(str(created_body["min_qty_threshold"])) == Decimal("0.01")
         optimization_id = UUID(created.json()["id"])
 
+        import goldie_api.optimizations as optimization_module
+
+        committed_progress = []
+        real_commit_timed = optimization_module._commit_timed
+
+        def record_commit(db, timings) -> None:
+            real_commit_timed(db, timings)
+            stored = db.get(OptimizationRun, optimization_id)
+            committed_progress.append((stored.progress or {}).get("completed_trials", 0))
+
+        monkeypatch.setattr(optimization_module, "_commit_timed", record_commit)
+        real_run_stream = optimization_module.BacktestEngine.run_stream
+        backtest_calls = 0
+
+        def fail_first_backtest(engine, *args, **kwargs):
+            nonlocal backtest_calls
+            backtest_calls += 1
+            if backtest_calls == 1:
+                raise RuntimeError("intentional trial failure")
+            return real_run_stream(engine, *args, **kwargs)
+
+        monkeypatch.setattr(
+            optimization_module.BacktestEngine,
+            "run_stream",
+            fail_first_backtest,
+        )
         with SessionLocal() as db:
             optimization = db.get(OptimizationRun, optimization_id)
             optimization.status = "RUNNING"
@@ -217,8 +257,19 @@ def test_optimization_api_and_execution_flow() -> None:
         assert detail.json()["status"] == "SUCCEEDED"
         assert detail.json()["best_candidate"]["sampled_parameters"]
         assert detail.json()["summary"]["execution_model"]["fill_mode"] == "simulated"
+        timings = detail.json()["summary"]["timings"]
+        assert set(timings) == {
+            "candle_load_seconds",
+            "optuna_sampling_seconds",
+            "backtest_seconds",
+            "database_commit_seconds",
+            "total_seconds",
+        }
+        assert all(value >= 0 for value in timings.values())
+        assert detail.json()["summary"]["failed_trials"] == 1
+        assert committed_progress == [0, 5, 10, 12]
         assert trials.status_code == 200
-        assert trials.json()["total"] == 3
+        assert trials.json()["total"] == 12
         trial_id = trials.json()["items"][0]["id"]
         trial_detail = client.get(
             f"/api/v1/optimizations/{optimization_id}/trials/{trial_id}",
@@ -226,15 +277,22 @@ def test_optimization_api_and_execution_flow() -> None:
         )
         assert trial_detail.status_code == 200
         assert trial_detail.json()["sampled_parameters"]
+        trial_timings = trial_detail.json()["metrics"]["timings"]
+        assert set(trial_timings) == {"sampling_seconds", "backtest_seconds"}
+        assert all(value >= 0 for value in trial_timings.values())
         assert "fill_mode" not in trial_detail.json()["sampled_parameters"]
         assert "taker_slippage" not in trial_detail.json()["sampled_parameters"]
         assert "medium_impact" not in trial_detail.json()["sampled_parameters"]
         assert trial_detail.json()["optimization_run_id"] == str(optimization_id)
+        failed_trial = next(
+            item for item in trials.json()["items"] if item["status"] == "FAILED"
+        )
+        assert failed_trial["metrics"]["timings"]["backtest_seconds"] >= 0
         with SessionLocal() as db:
             stored_trials = db.query(OptimizationTrial).filter_by(
                 optimization_run_id=optimization_id
             ).count()
-            assert stored_trials == 3
+            assert stored_trials == 12
 
 
 def test_queued_optimization_can_be_cancelled() -> None:

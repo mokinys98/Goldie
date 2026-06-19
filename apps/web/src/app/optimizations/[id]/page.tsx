@@ -42,6 +42,7 @@ export default function OptimizationDetailPage() {
     !applyBusy
     && Object.keys(data.best_candidate.sampled_parameters ?? {}).length,
   );
+  const timings = data.summary.timings;
 
   async function cancel() {
     if (!window.confirm("Cancel this optimization?")) return;
@@ -145,6 +146,16 @@ export default function OptimizationDetailPage() {
           value={data.summary.failed_trials ?? data.progress.failed_trials ?? 0}
         />
       </div>
+      <div className="panel collector-section">
+        <h2>Performance timings</h2>
+        <div className="key-values">
+          <div><dt>Candle load</dt><dd>{formatSeconds(timings?.candle_load_seconds)}</dd></div>
+          <div><dt>Optuna sampling</dt><dd>{formatSeconds(timings?.optuna_sampling_seconds)}</dd></div>
+          <div><dt>Backtests</dt><dd>{formatSeconds(timings?.backtest_seconds)}</dd></div>
+          <div><dt>Database commits</dt><dd>{formatSeconds(timings?.database_commit_seconds)}</dd></div>
+          <div><dt>Total</dt><dd>{formatSeconds(timings?.total_seconds)}</dd></div>
+        </div>
+      </div>
       <div className="split-layout collector-section">
         <div className="panel">
           <h2>Best parameters</h2>
@@ -164,9 +175,11 @@ export default function OptimizationDetailPage() {
             <p className="muted">No metrics yet.</p>
           ) : (
             <div className="key-values">
-              {Object.entries(data.best_candidate.metrics ?? {}).map(([key, value]) => (
-                <div key={key}><dt>{key}</dt><dd>{String(value)}</dd></div>
-              ))}
+              {Object.entries(data.best_candidate.metrics ?? {})
+                .filter(([key]) => key !== "timings")
+                .map(([key, value]) => (
+                  <div key={key}><dt>{key}</dt><dd>{String(value)}</dd></div>
+                ))}
             </div>
           )}
         </div>
@@ -227,6 +240,7 @@ export default function OptimizationDetailPage() {
                   <th>Net P&amp;L</th>
                   <th>Drawdown</th>
                   <th>Trades</th>
+                  <th>Backtest</th>
                 </tr>
               </thead>
               <tbody>{trials.data.items.map((trial) => (
@@ -242,6 +256,7 @@ export default function OptimizationDetailPage() {
                   <td>{String(trial.metrics.net_pnl ?? "--")}</td>
                   <td>{String(trial.metrics.max_drawdown ?? "--")}</td>
                   <td>{String(trial.metrics.total_trades ?? "--")}</td>
+                  <td>{formatSeconds(trial.metrics.timings?.backtest_seconds)}</td>
                 </tr>
               ))}</tbody>
             </table>
@@ -254,4 +269,8 @@ export default function OptimizationDetailPage() {
 
 function Metric({ label, value }: { label: string; value: string | number }) {
   return <div className="metric-card"><span>{label}</span><strong>{value}</strong></div>;
+}
+
+function formatSeconds(value: number | undefined): string {
+  return value === undefined ? "--" : `${value.toFixed(6)} s`;
 }

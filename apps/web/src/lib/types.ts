@@ -423,6 +423,19 @@ export type BatchBacktestResult = {
   error: string | null;
 };
 
+export type OptimizationRunTimings = {
+  candle_load_seconds: number;
+  optuna_sampling_seconds: number;
+  backtest_seconds: number;
+  database_commit_seconds: number;
+  total_seconds: number;
+};
+
+export type OptimizationTrialTimings = {
+  sampling_seconds: number;
+  backtest_seconds: number;
+};
+
 export type OptimizationRun = {
   id: string;
   bot_id: string;
@@ -458,13 +471,14 @@ export type OptimizationRun = {
     trial_number?: number;
     sampled_parameters?: Record<string, string | number | boolean>;
     score?: string | number;
-    metrics?: Record<string, string | number>;
+    metrics?: Record<string, unknown>;
     summary?: Record<string, unknown>;
   };
   summary: {
     completed_trials?: number;
     failed_trials?: number;
     duration_seconds?: number;
+    timings?: OptimizationRunTimings;
     search_space?: Array<{
       name: string;
       type?: string;
@@ -477,7 +491,7 @@ export type OptimizationRun = {
       trial_number: number;
       sampled_parameters: Record<string, string | number | boolean>;
       score: string | number;
-      metrics: Record<string, string | number>;
+      metrics: Record<string, unknown>;
       summary: Record<string, unknown>;
     }>;
   };
@@ -495,7 +509,9 @@ export type OptimizationTrial = {
   status: "RUNNING" | "SUCCEEDED" | "FAILED";
   sampled_parameters: Record<string, string | number | boolean>;
   score: string | number | null;
-  metrics: Record<string, string | number>;
+  metrics: Record<string, unknown> & {
+    timings?: OptimizationTrialTimings;
+  };
   summary: Record<string, unknown>;
   error: string | null;
   started_at: string | null;

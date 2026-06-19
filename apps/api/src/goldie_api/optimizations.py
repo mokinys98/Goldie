@@ -1,4 +1,5 @@
 import copy
+import logging
 import uuid
 from collections.abc import Sequence
 from decimal import Decimal
@@ -29,8 +30,32 @@ from .models import (
 
 MIN_BALANCED_TRADES = 5
 NO_TRADES_SCORE = Decimal("-99999")
-OPTIMIZATION_COMMIT_INTERVAL = 1
-OPTIMIZATION_CANCEL_CHECK_INTERVAL = 1
+OPTIMIZATION_COMMIT_INTERVAL = 5
+OPTIMIZATION_CANCEL_CHECK_INTERVAL = 5
+
+logger = logging.getLogger(__name__)
+
+
+def _seconds(value: float) -> float:
+    return round(value, 6)
+
+
+def _timings_payload(timings: dict[str, float], started: float) -> dict[str, float]:
+    return {
+        "candle_load_seconds": _seconds(timings["candle_load_seconds"]),
+        "optuna_sampling_seconds": _seconds(timings["optuna_sampling_seconds"]),
+        "backtest_seconds": _seconds(timings["backtest_seconds"]),
+        "database_commit_seconds": _seconds(timings["database_commit_seconds"]),
+        "total_seconds": _seconds(monotonic() - started),
+    }
+
+
+def _is_commit_checkpoint(completed: int, total: int) -> bool:
+    return completed % OPTIMIZATION_COMMIT_INTERVAL == 0 and completed < total
+
+
+def _is_cancellation_checkpoint(trial_index: int) -> bool:
+    return trial_index % OPTIMIZATION_CANCEL_CHECK_INTERVAL == 0
 
 
 def _catalog_entry(name: str) -> dict[str, Any]:
@@ -263,7 +288,64 @@ def _top_candidates(
     ]
 
 
+def _commit_timed(db: Session, timings: dict[str, float]) -> None:
+    started = monotonic()
+    db.commit()
+    timings["database_commit_seconds"] += monotonic() - started
+
+
+def _persist_terminal_timings(
+    db: Session,
+    optimization: OptimizationRun,
+    *,
+    timings: dict[str, float],
+    started: float,
+    succeeded: int,
+    failed: int,
+) -> None:
+    """Commit terminal state, then persist timing for that commit separately."""
+    optimization_id = optimization.id
+    terminal_status = optimization.status
+    summary = dict(optimization.summary or {})
+    _commit_timed(db, timings)
+    summary["timings"] = _timings_payload(timings, started)
+    optimization.summary = summary
+    try:
+        db.commit()
+    except Exception:
+        db.rollback()
+        logger.exception(
+            "optimization_timing_persist_failed optimization_id=%s",
+            optimization_id,
+        )
+    timing_values = summary["timings"]
+    logger.info(
+        "optimization_terminal optimization_id=%s status=%s succeeded=%s failed=%s "
+        "candle_load_seconds=%.6f optuna_sampling_seconds=%.6f "
+        "backtest_seconds=%.6f database_commit_seconds=%.6f total_seconds=%.6f",
+        optimization_id,
+        terminal_status,
+        succeeded,
+        failed,
+        timing_values["candle_load_seconds"],
+        timing_values["optuna_sampling_seconds"],
+        timing_values["backtest_seconds"],
+        timing_values["database_commit_seconds"],
+        timing_values["total_seconds"],
+    )
+
+
 def execute_optimization(db: Session, optimization_id: uuid.UUID) -> None:
+    started = monotonic()
+    timings = {
+        "candle_load_seconds": 0.0,
+        "optuna_sampling_seconds": 0.0,
+        "backtest_seconds": 0.0,
+        "database_commit_seconds": 0.0,
+    }
+    succeeded = 0
+    failed = 0
+    search_space: list[dict[str, Any]] = []
     optimization = db.get(OptimizationRun, optimization_id)
     if optimization is None:
         return
@@ -288,7 +370,7 @@ def execute_optimization(db: Session, optimization_id: uuid.UUID) -> None:
             "failed_trials": 0,
             "total_trials": optimization.n_trials,
         }
-        db.commit()
+        _commit_timed(db, timings)
         candle_filter = (
             Candle.market_feed_id == optimization.market_feed_id,
             Candle.timeframe == "M1",
@@ -296,7 +378,9 @@ def execute_optimization(db: Session, optimization_id: uuid.UUID) -> None:
             Candle.opened_at >= optimization.date_from,
             Candle.opened_at < optimization.date_to,
         )
+        candle_load_started = monotonic()
         total_candles = db.scalar(select(func.count(Candle.id)).where(*candle_filter)) or 0
+        timings["candle_load_seconds"] += monotonic() - candle_load_started
         config = BotConfiguration.model_validate(optimization.config_snapshot)
         strategy = get_strategy(config.strategy.name)
         parameters_model = strategy.parameters_model.model_validate(
@@ -322,7 +406,9 @@ def execute_optimization(db: Session, optimization_id: uuid.UUID) -> None:
             .order_by(Candle.opened_at)
             .execution_options(stream_results=True, yield_per=2000)
         )
+        candle_load_started = monotonic()
         candles = list(stream_candles(db, statement))
+        timings["candle_load_seconds"] += monotonic() - candle_load_started
         instrument = BacktestInstrument(
             point=spec.point,
             tick_size=spec.point,
@@ -348,14 +434,11 @@ def execute_optimization(db: Session, optimization_id: uuid.UUID) -> None:
             min_qty_check=optimization.min_qty_check,
         )
         study = optuna.create_study(direction="maximize")
-        succeeded = 0
-        failed = 0
         best_payload: dict[str, Any] = optimization.best_candidate or {}
-        started = monotonic()
 
         for trial_index in range(optimization.n_trials):
             if (
-                trial_index % OPTIMIZATION_CANCEL_CHECK_INTERVAL == 0
+                _is_cancellation_checkpoint(trial_index)
                 and _should_cancel(db, optimization.id)
             ):
                 optimization = db.get(OptimizationRun, optimization.id)
@@ -376,26 +459,42 @@ def execute_optimization(db: Session, optimization_id: uuid.UUID) -> None:
                     if run:
                         run.status = "CANCELLED"
                         run.ended_at = optimization.completed_at
-                    db.commit()
+                    _persist_terminal_timings(
+                        db,
+                        optimization,
+                        timings=timings,
+                        started=started,
+                        succeeded=succeeded,
+                        failed=failed,
+                    )
                 return
 
+            sampling_started = monotonic()
             optuna_trial = study.ask()
             sampled_parameters = sample_parameters(
                 optuna_trial,
                 search_space=search_space,
                 defaults=config.strategy.parameters,
             )
+            sampling_seconds = monotonic() - sampling_started
+            timings["optuna_sampling_seconds"] += sampling_seconds
             trial_row = OptimizationTrial(
                 optimization_run_id=optimization.id,
                 trial_number=optuna_trial.number,
                 status="RUNNING",
                 sampled_parameters=jsonable_encoder(sampled_parameters),
-                metrics={},
+                metrics={
+                    "timings": {
+                        "sampling_seconds": _seconds(sampling_seconds),
+                        "backtest_seconds": 0.0,
+                    }
+                },
                 summary={},
                 started_at=utc_now(),
             )
             db.add(trial_row)
 
+            backtest_started = monotonic()
             try:
                 trial_config = copy.deepcopy(optimization.config_snapshot)
                 trial_config["strategy"]["parameters"] = sampled_parameters
@@ -409,12 +508,18 @@ def execute_optimization(db: Session, optimization_id: uuid.UUID) -> None:
                     use_fast_strategy=True,
                     collect_reason_counts=False,
                 )
+                backtest_seconds = monotonic() - backtest_started
+                timings["backtest_seconds"] += backtest_seconds
                 score = compute_balanced_score(result.summary)
                 metrics = jsonable_encoder(
                     {
                         "net_pnl": result.summary.get("net_pnl"),
                         "max_drawdown": result.summary.get("max_drawdown"),
                         "total_trades": result.summary.get("total_trades"),
+                        "timings": {
+                            "sampling_seconds": _seconds(sampling_seconds),
+                            "backtest_seconds": _seconds(backtest_seconds),
+                        },
                     }
                 )
                 trial_row.status = "SUCCEEDED"
@@ -438,8 +543,16 @@ def execute_optimization(db: Session, optimization_id: uuid.UUID) -> None:
                     best_payload = candidate
                     optimization.best_candidate = candidate
             except Exception as exc:
+                backtest_seconds = monotonic() - backtest_started
+                timings["backtest_seconds"] += backtest_seconds
                 failed += 1
                 trial_row.status = "FAILED"
+                trial_row.metrics = {
+                    "timings": {
+                        "sampling_seconds": _seconds(sampling_seconds),
+                        "backtest_seconds": _seconds(backtest_seconds),
+                    }
+                }
                 trial_row.error = str(exc)[:4000]
                 trial_row.completed_at = utc_now()
                 study.tell(optuna_trial, state=optuna.trial.TrialState.FAIL)
@@ -452,13 +565,8 @@ def execute_optimization(db: Session, optimization_id: uuid.UUID) -> None:
             }
             optimization.best_candidate = best_payload
             completed = succeeded + failed
-            if (
-                completed % OPTIMIZATION_COMMIT_INTERVAL == 0
-                or completed == optimization.n_trials
-            ):
-                db.commit()
-            else:
-                db.flush()
+            if _is_commit_checkpoint(completed, optimization.n_trials):
+                _commit_timed(db, timings)
 
         optimization.status = "SUCCEEDED"
         optimization.completed_at = utc_now()
@@ -467,6 +575,7 @@ def execute_optimization(db: Session, optimization_id: uuid.UUID) -> None:
                 "completed_trials": succeeded,
                 "failed_trials": failed,
                 "duration_seconds": int(monotonic() - started),
+                "timings": _timings_payload(timings, started),
                 "search_space": search_space,
                 "execution_model": _execution_model_payload(optimization),
                 "top_candidates": _top_candidates(db, optimization.id),
@@ -476,7 +585,14 @@ def execute_optimization(db: Session, optimization_id: uuid.UUID) -> None:
         if run:
             run.status = "COMPLETED"
             run.ended_at = optimization.completed_at
-        db.commit()
+        _persist_terminal_timings(
+            db,
+            optimization,
+            timings=timings,
+            started=started,
+            succeeded=succeeded,
+            failed=failed,
+        )
     except Exception as exc:
         db.rollback()
         optimization = db.get(OptimizationRun, optimization_id)
@@ -484,11 +600,35 @@ def execute_optimization(db: Session, optimization_id: uuid.UUID) -> None:
             optimization.status = "FAILED"
             optimization.error = str(exc)[:4000]
             optimization.completed_at = utc_now()
+            optimization.summary = jsonable_encoder(
+                {
+                    "completed_trials": succeeded,
+                    "failed_trials": failed,
+                    "duration_seconds": int(monotonic() - started),
+                    "search_space": search_space,
+                    "execution_model": _execution_model_payload(optimization),
+                    "timings": _timings_payload(timings, started),
+                }
+            )
             run = db.get(Run, optimization.run_id)
             if run:
                 run.status = "FAILED"
                 run.ended_at = optimization.completed_at
-            db.commit()
+            try:
+                _persist_terminal_timings(
+                    db,
+                    optimization,
+                    timings=timings,
+                    started=started,
+                    succeeded=succeeded,
+                    failed=failed,
+                )
+            except Exception:
+                db.rollback()
+                logger.exception(
+                    "optimization_failure_persist_failed optimization_id=%s",
+                    optimization_id,
+                )
 
 
 def stream_candles(db: Session, statement):

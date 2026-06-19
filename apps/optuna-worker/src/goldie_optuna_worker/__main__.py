@@ -1,3 +1,4 @@
+import logging
 import os
 import time
 
@@ -22,6 +23,10 @@ def validate_database_configuration() -> None:
 
 
 def main() -> None:
+    logging.basicConfig(
+        level=getattr(logging, os.getenv("LOG_LEVEL", "INFO").upper(), logging.INFO),
+        format="%(asctime)s %(levelname)s %(name)s %(message)s",
+    )
     validate_database_configuration()
 
     from goldie_api.db import SessionLocal

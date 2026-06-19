@@ -148,7 +148,7 @@ export default function OptimizationTrialDetailPage() {
           ) : (
             <dl className="key-values">
               {Object.entries(trial.data.metrics).map(([key, value]) => (
-                <div key={key}><dt>{key}</dt><dd>{String(value)}</dd></div>
+                <div key={key}><dt>{key}</dt><dd>{renderValue(value)}</dd></div>
               ))}
             </dl>
           )}
