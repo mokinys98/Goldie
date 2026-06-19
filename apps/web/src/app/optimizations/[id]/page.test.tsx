@@ -34,11 +34,32 @@ const optimization = {
   date_from: "2026-01-01T00:00:00Z",
   date_to: "2026-01-02T00:00:00Z",
   n_trials: 12,
-  progress: { completed_trials: 12, total_trials: 12 },
-  best_candidate: { sampled_parameters: {}, metrics: {} },
+  progress: {
+    completed_trials: 57,
+    total_trials: 57,
+    strategy_trials_completed: 12,
+    strategy_trials_total: 12,
+    validation_trials_completed: 45,
+    validation_trials_total: 45,
+  },
+  best_candidate: {
+    sampled_parameters: { fast_ema_period: 8 },
+    metrics: {},
+    fixed_config_overrides: {
+      theoretical_trade: { stop_loss_points: 15, take_profit_points: 37.5 },
+    },
+  },
   summary: {
     completed_trials: 11,
     failed_trials: 1,
+    search_period: {
+      date_from: "2026-01-01T00:00:00Z",
+      date_to: "2026-01-01T19:12:00Z",
+    },
+    validation_period: {
+      date_from: "2026-01-01T19:12:00Z",
+      date_to: "2026-01-02T00:00:00Z",
+    },
     timings: {
       candle_load_seconds: 0.123456,
       optuna_sampling_seconds: 0.234567,
@@ -68,5 +89,14 @@ describe("OptimizationDetailPage", () => {
     expect(screen.getByText("1.345678 s")).toBeInTheDocument();
     expect(screen.getByText("0.045678 s")).toBeInTheDocument();
     expect(screen.getByText("1.789012 s")).toBeInTheDocument();
+  });
+
+  it("renders phase progress and the winning fixed config", () => {
+    render(<OptimizationDetailPage />);
+
+    expect(screen.getAllByText("12 / 12 trials").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("45 / 45 trials").length).toBeGreaterThan(0);
+    expect(screen.getAllByRole("heading", { name: "Best fixed config" }).length).toBeGreaterThan(0);
+    expect(screen.getAllByText("37.5").length).toBeGreaterThan(0);
   });
 });

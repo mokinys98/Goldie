@@ -459,6 +459,8 @@ class OptimizationTrialRead(OrmModel):
     id: uuid.UUID
     optimization_run_id: uuid.UUID
     trial_number: int
+    phase: str = "STRATEGY_SEARCH"
+    config_overrides: dict = Field(default_factory=dict)
     status: str
     sampled_parameters: dict
     score: Decimal | None

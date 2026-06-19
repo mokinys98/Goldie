@@ -536,6 +536,10 @@ class OptimizationTrial(Base, TimestampMixin):
         ForeignKey("optimization_runs.id"), index=True
     )
     trial_number: Mapped[int] = mapped_column(Integer)
+    phase: Mapped[str] = mapped_column(
+        String(32), default="STRATEGY_SEARCH", index=True
+    )
+    config_overrides: Mapped[dict] = mapped_column(JSON, default=dict)
     status: Mapped[str] = mapped_column(String(24), default="RUNNING", index=True)
     sampled_parameters: Mapped[dict] = mapped_column(JSON, default=dict)
     score: Mapped[Decimal | None] = mapped_column(Numeric(20, 8), nullable=True)

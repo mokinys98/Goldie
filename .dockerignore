@@ -1,4 +1,7 @@
 .git
+.benchmark-optuna*.db
+.tmp_goldie_db_diagnostic.py
+name
 .venv
 **/__pycache__
 **/*.pyc
@@ -7,4 +10,3 @@
 .pytest_cache
 .pytest-*
 *.md
-

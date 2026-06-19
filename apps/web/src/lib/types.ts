@@ -462,10 +462,15 @@ export type OptimizationRun = {
   min_qty_check: boolean;
   config_snapshot: BotConfig;
   progress: {
+    phase?: "STRATEGY_SEARCH" | "FIXED_CONFIG_VALIDATION";
     completed_trials?: number;
     successful_trials?: number;
     failed_trials?: number;
     total_trials?: number;
+    strategy_trials_completed?: number;
+    strategy_trials_total?: number;
+    validation_trials_completed?: number;
+    validation_trials_total?: number;
   };
   best_candidate: {
     trial_number?: number;
@@ -473,6 +478,16 @@ export type OptimizationRun = {
     score?: string | number;
     metrics?: Record<string, unknown>;
     summary?: Record<string, unknown>;
+    fixed_config_overrides?: {
+      theoretical_trade?: {
+        stop_loss_points?: string | number;
+        take_profit_points?: string | number;
+      };
+    };
+    search_score?: string | number;
+    search_metrics?: Record<string, unknown>;
+    validation_score?: string | number;
+    validation_metrics?: Record<string, unknown>;
   };
   summary: {
     completed_trials?: number;
@@ -494,6 +509,21 @@ export type OptimizationRun = {
       metrics: Record<string, unknown>;
       summary: Record<string, unknown>;
     }>;
+    validation_candidates?: Array<{
+      trial_number: number;
+      phase: string;
+      sampled_parameters: Record<string, string | number | boolean>;
+      config_overrides: Record<string, unknown>;
+      score: string | number;
+      metrics: Record<string, unknown>;
+      summary: Record<string, unknown>;
+    }>;
+    search_period?: { date_from: string; date_to: string };
+    validation_period?: { date_from: string; date_to: string };
+    strategy_completed_trials?: number;
+    strategy_failed_trials?: number;
+    validation_completed_trials?: number;
+    validation_failed_trials?: number;
   };
   error: string | null;
   started_at: string | null;
@@ -506,6 +536,13 @@ export type OptimizationTrial = {
   id: string;
   optimization_run_id: string;
   trial_number: number;
+  phase: "STRATEGY_SEARCH" | "FIXED_CONFIG_VALIDATION";
+  config_overrides: {
+    theoretical_trade?: {
+      stop_loss_points?: string | number;
+      take_profit_points?: string | number;
+    };
+  };
   status: "RUNNING" | "SUCCEEDED" | "FAILED";
   sampled_parameters: Record<string, string | number | boolean>;
   score: string | number | null;

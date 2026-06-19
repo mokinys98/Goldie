@@ -160,19 +160,22 @@ def list_optimization_trials(
     optimization_id: uuid.UUID,
     offset: int = Query(default=0, ge=0),
     limit: int = Query(default=100, ge=1, le=500),
+    phase: str | None = Query(
+        default=None,
+        pattern="^(STRATEGY_SEARCH|FIXED_CONFIG_VALIDATION)$",
+    ),
     db: Session = Depends(get_db),
     _: User = Depends(get_current_user),
 ) -> dict:
     get_optimization(db, optimization_id)
-    total = db.scalar(
-        select(func.count(OptimizationTrial.id)).where(
-            OptimizationTrial.optimization_run_id == optimization_id
-        )
-    )
+    filters = [OptimizationTrial.optimization_run_id == optimization_id]
+    if phase is not None:
+        filters.append(OptimizationTrial.phase == phase)
+    total = db.scalar(select(func.count(OptimizationTrial.id)).where(*filters))
     items = list(
         db.scalars(
             select(OptimizationTrial)
-            .where(OptimizationTrial.optimization_run_id == optimization_id)
+            .where(*filters)
             .order_by(
                 OptimizationTrial.score.desc().nullslast(),
                 OptimizationTrial.trial_number.asc(),

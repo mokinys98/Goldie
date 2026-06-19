@@ -57,6 +57,10 @@ export default function OptimizationTrialDetailPage() {
             ...(trial.data.sampled_parameters ?? {}),
           },
         },
+        theoretical_trade: {
+          ...configSnapshot.theoretical_trade,
+          ...(trial.data.config_overrides?.theoretical_trade ?? {}),
+        },
       };
       const created = await api<{ id: string }>(`/api/v1/bots/${run.data.bot_id}/config-versions`, {
         method: "POST",
@@ -79,7 +83,7 @@ export default function OptimizationTrialDetailPage() {
           <span className="eyebrow">OPTIMIZATION TRIAL</span>
           <h1>Trial #{trial.data.trial_number}</h1>
           <p>
-            ID {trial.data.id} | {configSnapshot.strategy.name} | {configSnapshot.market.symbol}
+            ID {trial.data.id} | {trial.data.phase ?? "STRATEGY_SEARCH"} | {configSnapshot.strategy.name} | {configSnapshot.market.symbol}
           </p>
         </div>
         <div className="button-row">
@@ -138,6 +142,16 @@ export default function OptimizationTrialDetailPage() {
             ))}
           </dl>
         </div>
+        {trial.data.config_overrides?.theoretical_trade && (
+          <div className="panel">
+            <h2>Fixed config overrides</h2>
+            <dl className="key-values">
+              {Object.entries(trial.data.config_overrides.theoretical_trade).map(([key, value]) => (
+                <div key={key}><dt>{key}</dt><dd>{String(value)}</dd></div>
+              ))}
+            </dl>
+          </div>
+        )}
       </div>
 
       <div className="split-layout collector-section">

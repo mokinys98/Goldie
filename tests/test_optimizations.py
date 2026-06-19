@@ -18,10 +18,12 @@ from goldie_api.optimizations import (
     OPTIMIZATION_COMMIT_INTERVAL,
     _is_cancellation_checkpoint,
     _is_commit_checkpoint,
+    build_fixed_config_pairs,
     build_search_space,
     compute_balanced_score,
     execute_optimization,
     sample_parameters,
+    split_optimization_period,
 )
 
 
@@ -65,6 +67,33 @@ def test_search_space_includes_exclusive_minimum_parameters() -> None:
 
     assert "max_atr_points" in names
     assert "atr_stop_multiplier" in names
+
+
+def test_optimization_period_is_split_without_overlap() -> None:
+    date_from = datetime(2026, 1, 1, tzinfo=UTC)
+    date_to = date_from + timedelta(days=10)
+
+    search_period, validation_period = split_optimization_period(date_from, date_to)
+
+    assert search_period == (date_from, date_from + timedelta(days=8))
+    assert validation_period == (search_period[1], date_to)
+
+
+def test_fixed_config_grid_contains_nine_unique_pairs() -> None:
+    from goldie_domain import BotConfiguration
+
+    pairs = build_fixed_config_pairs(BotConfiguration())
+    values = {
+        (
+            pair["theoretical_trade"]["stop_loss_points"],
+            pair["theoretical_trade"]["take_profit_points"],
+        )
+        for pair in pairs
+    }
+
+    assert len(pairs) == 9
+    assert len(values) == 9
+    assert (Decimal("70.0"), Decimal("100.0")) in values
 
 
 def login(client: TestClient) -> dict[str, str]:
@@ -261,17 +290,17 @@ def test_optimization_api_and_execution_flow(monkeypatch) -> None:
         real_run_stream = optimization_module.BacktestEngine.run_stream
         backtest_calls = 0
 
-        def fail_first_backtest(engine, *args, **kwargs):
+        def fail_selected_backtests(engine, *args, **kwargs):
             nonlocal backtest_calls
             backtest_calls += 1
-            if backtest_calls == 1:
+            if backtest_calls in {1, 13}:
                 raise RuntimeError("intentional trial failure")
             return real_run_stream(engine, *args, **kwargs)
 
         monkeypatch.setattr(
             optimization_module.BacktestEngine,
             "run_stream",
-            fail_first_backtest,
+            fail_selected_backtests,
         )
         with SessionLocal() as db:
             optimization = db.get(OptimizationRun, optimization_id)
@@ -294,10 +323,32 @@ def test_optimization_api_and_execution_flow(monkeypatch) -> None:
             "total_seconds",
         }
         assert all(value >= 0 for value in timings.values())
-        assert detail.json()["summary"]["failed_trials"] == 1
-        assert committed_progress == [0, 5, 10, 12]
+        assert detail.json()["summary"]["failed_trials"] == 2
+        assert detail.json()["summary"]["validation_failed_trials"] == 1
+        assert committed_progress == [
+            0, 5, 10, 12, 15, 20, 25, 30, 35, 40, 45, 50, 55, 57
+        ]
         assert trials.status_code == 200
-        assert trials.json()["total"] == 12
+        assert trials.json()["total"] == 57
+        strategy_trials = client.get(
+            f"/api/v1/optimizations/{optimization_id}/trials?phase=STRATEGY_SEARCH",
+            headers=headers,
+        )
+        validation_trials = client.get(
+            f"/api/v1/optimizations/{optimization_id}/trials?phase=FIXED_CONFIG_VALIDATION",
+            headers=headers,
+        )
+        assert strategy_trials.json()["total"] == 12
+        assert validation_trials.json()["total"] == 45
+        assert all(
+            item["config_overrides"]["theoretical_trade"]
+            for item in validation_trials.json()["items"]
+        )
+        assert detail.json()["best_candidate"]["fixed_config_overrides"]
+        assert detail.json()["best_candidate"]["validation_score"]
+        assert detail.json()["summary"]["search_period"]["date_to"] == (
+            detail.json()["summary"]["validation_period"]["date_from"]
+        )
         trial_id = trials.json()["items"][0]["id"]
         trial_detail = client.get(
             f"/api/v1/optimizations/{optimization_id}/trials/{trial_id}",
@@ -320,7 +371,7 @@ def test_optimization_api_and_execution_flow(monkeypatch) -> None:
             stored_trials = db.query(OptimizationTrial).filter_by(
                 optimization_run_id=optimization_id
             ).count()
-            assert stored_trials == 12
+            assert stored_trials == 57
 
 
 def test_queued_optimization_can_be_cancelled() -> None:
@@ -355,3 +406,77 @@ def test_queued_optimization_can_be_cancelled() -> None:
         )
         assert cancelled.status_code == 200
         assert cancelled.json()["status"] == "CANCELLED"
+
+
+def test_optimization_fails_when_all_validation_trials_fail(monkeypatch) -> None:
+    Base.metadata.drop_all(engine)
+    Base.metadata.create_all(engine)
+    with TestClient(app) as client:
+        registration = register_feed(client, "XAUUSD", "XAU_USD")
+        feed_id = registration["feed"]["id"]
+        agent_id = registration["agent"]["id"]
+        headers = login(client)
+        bot = client.post(
+            "/api/v1/bots",
+            headers=headers,
+            json={
+                "name": "Failed validation bot",
+                "mode": "SHADOW",
+                "market_feed_id": feed_id,
+            },
+        ).json()
+        config = activate_first_config(client, bot["id"], headers)
+        seed_market_data(client, feed_id, agent_id)
+        created = client.post(
+            "/api/v1/optimizations",
+            headers=headers,
+            json={
+                "bot_id": bot["id"],
+                "config_version_id": config["id"],
+                "market_feed_id": feed_id,
+                "date_from": "2026-01-01T00:00:00Z",
+                "date_to": "2026-01-01T06:40:00Z",
+                "n_trials": 1,
+            },
+        )
+        optimization_id = UUID(created.json()["id"])
+
+        import goldie_api.optimizations as optimization_module
+
+        real_run_stream = optimization_module.BacktestEngine.run_stream
+        calls = 0
+
+        def fail_validation(engine, *args, **kwargs):
+            nonlocal calls
+            calls += 1
+            if calls > 1:
+                raise RuntimeError("intentional validation failure")
+            return real_run_stream(engine, *args, **kwargs)
+
+        monkeypatch.setattr(
+            optimization_module,
+            "build_fixed_config_pairs",
+            lambda bot_config: [
+                {
+                    "theoretical_trade": {
+                        "stop_loss_points": bot_config.theoretical_trade.stop_loss_points,
+                        "take_profit_points": bot_config.theoretical_trade.take_profit_points,
+                    }
+                }
+            ],
+        )
+        monkeypatch.setattr(
+            optimization_module.BacktestEngine,
+            "run_stream",
+            fail_validation,
+        )
+        with SessionLocal() as db:
+            optimization = db.get(OptimizationRun, optimization_id)
+            optimization.status = "RUNNING"
+            db.commit()
+            execute_optimization(db, optimization_id)
+
+        detail = client.get(f"/api/v1/optimizations/{optimization_id}", headers=headers)
+        assert detail.json()["status"] == "FAILED"
+        assert detail.json()["summary"]["validation_failed_trials"] == 1
+        assert "No successful fixed config validation trials" in detail.json()["error"]

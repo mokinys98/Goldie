@@ -88,7 +88,13 @@ def report() -> None:
                 o.progress,
                 o.summary,
                 o.config_snapshot,
-                mf.canonical_symbol
+                mf.canonical_symbol,
+                (
+                    select t.error
+                    from optimization_trials t
+                    where t.optimization_run_id = o.id and t.status = 'FAILED'
+                    limit 1
+                )
             from optimization_runs o
             join market_feeds mf on mf.id = o.market_feed_id
             order by o.created_at desc
@@ -102,17 +108,38 @@ def report() -> None:
                 "n_trials": row[2],
                 "started_at": row[3],
                 "completed_at": row[4],
+                "wall_seconds": (
+                    (row[4] - row[3]).total_seconds()
+                    if row[3] is not None and row[4] is not None
+                    else None
+                ),
                 "progress": row[5],
                 "duration_seconds": (row[6] or {}).get("duration_seconds"),
                 "strategy": row[7]["strategy"]["name"],
                 "symbol": row[8],
+                "first_failed_error": row[9],
             }
             for row in cursor.fetchall()
         ]
     print(json.dumps(rows, default=str))
 
 
-def enqueue() -> None:
+def errors(optimization_id: str) -> None:
+    with connect() as connection, connection.cursor() as cursor:
+        cursor.execute(
+            """
+            select error
+            from optimization_trials
+            where optimization_run_id = %s and status = 'FAILED'
+            limit 5
+            """,
+            (optimization_id,),
+        )
+        rows = [{"error": row[0]} for row in cursor.fetchall()]
+    print(json.dumps(rows, default=str))
+
+
+def enqueue(*, symbols: list[str] | None = None, strategy_names: list[str] | None = None) -> None:
     database_url = os.getenv("DATABASE_PUBLIC_URL") or os.getenv("DATABASE_URL")
     if not database_url:
         raise SystemExit("DATABASE_PUBLIC_URL or DATABASE_URL is required")
@@ -130,11 +157,15 @@ def enqueue() -> None:
     from goldie_domain import get_strategy, strategy_catalog
     from sqlalchemy import func, select
 
-    matrix = {
-        "EURUSD": [entry["name"] for entry in strategy_catalog()],
-        "USDJPY": ["bb_ema_rsi_mean_reversion"],
-        "USDCHF": ["bb_ema_rsi_mean_reversion"],
-    }
+    matrix = (
+        {symbol: strategy_names for symbol in (symbols or ["EURUSD"])}
+        if strategy_names
+        else {
+            "EURUSD": [entry["name"] for entry in strategy_catalog()],
+            "USDJPY": ["bb_ema_rsi_mean_reversion"],
+            "USDCHF": ["bb_ema_rsi_mean_reversion"],
+        }
+    )
     created = []
     with SessionLocal() as db:
         active = db.scalar(
@@ -173,7 +204,17 @@ def enqueue() -> None:
                 )
             )
             if not configs:
-                raise SystemExit(f"No active bot configuration for {symbol}")
+                configs = list(
+                    db.execute(
+                        select(Bot, ConfigVersion)
+                        .join(ConfigVersion, ConfigVersion.bot_id == Bot.id)
+                        .where(ConfigVersion.status == "ACTIVE")
+                        .order_by(ConfigVersion.created_at.desc())
+                        .limit(1)
+                    )
+                )
+            if not configs:
+                raise SystemExit("No active bot configuration is available as a template")
 
             for strategy_name in strategy_names:
                 matching = next(
@@ -247,12 +288,19 @@ def enqueue() -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("command", choices=("inventory", "enqueue", "report"))
+    parser.add_argument("command", choices=("errors", "inventory", "enqueue", "report"))
+    parser.add_argument("--optimization-id")
+    parser.add_argument("--strategy", action="append", dest="strategy_names")
+    parser.add_argument("--symbol", action="append", dest="symbols")
     args = parser.parse_args()
-    if args.command == "inventory":
+    if args.command == "errors":
+        if not args.optimization_id:
+            parser.error("--optimization-id is required for errors")
+        errors(args.optimization_id)
+    elif args.command == "inventory":
         inventory()
     elif args.command == "enqueue":
-        enqueue()
+        enqueue(symbols=args.symbols, strategy_names=args.strategy_names)
     else:
         report()
 

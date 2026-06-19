@@ -58,4 +58,5 @@ data/*
 Thumbs.db
 Desktop.ini
 exports/Backtests/
-.benchmark-optuna-worker.db
+.benchmark-optuna*.db
+.tmp_goldie_db_diagnostic.py

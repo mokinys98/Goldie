@@ -23,9 +23,21 @@ export default function OptimizationDetailPage() {
         ? 2000
         : false,
   });
-  const trials = useQuery({
-    queryKey: ["optimization-trials", id],
-    queryFn: () => api<OptimizationTrialPage>(`/api/v1/optimizations/${id}/trials?limit=100`),
+  const strategyTrialQuery = useQuery({
+    queryKey: ["optimization-trials", id, "STRATEGY_SEARCH"],
+    queryFn: () => api<OptimizationTrialPage>(
+      `/api/v1/optimizations/${id}/trials?limit=500&phase=STRATEGY_SEARCH`,
+    ),
+    refetchInterval:
+      run.data && ["PENDING", "RUNNING", "CANCEL_REQUESTED"].includes(run.data.status)
+        ? 3000
+        : false,
+  });
+  const validationTrialQuery = useQuery({
+    queryKey: ["optimization-trials", id, "FIXED_CONFIG_VALIDATION"],
+    queryFn: () => api<OptimizationTrialPage>(
+      `/api/v1/optimizations/${id}/trials?limit=500&phase=FIXED_CONFIG_VALIDATION`,
+    ),
     refetchInterval:
       run.data && ["PENDING", "RUNNING", "CANCEL_REQUESTED"].includes(run.data.status)
         ? 3000
@@ -43,6 +55,9 @@ export default function OptimizationDetailPage() {
     && Object.keys(data.best_candidate.sampled_parameters ?? {}).length,
   );
   const timings = data.summary.timings;
+  const strategyTrials = strategyTrialQuery.data?.items ?? [];
+  const validationTrials = validationTrialQuery.data?.items ?? [];
+  const fixedTradeOverrides = data.best_candidate.fixed_config_overrides?.theoretical_trade;
 
   async function cancel() {
     if (!window.confirm("Cancel this optimization?")) return;
@@ -68,6 +83,10 @@ export default function OptimizationDetailPage() {
             ...configSnapshot.strategy.parameters,
             ...(current.best_candidate.sampled_parameters ?? {}),
           },
+        },
+        theoretical_trade: {
+          ...configSnapshot.theoretical_trade,
+          ...(current.best_candidate.fixed_config_overrides?.theoretical_trade ?? {}),
         },
       };
       const created = await api<{ id: string }>(`/api/v1/bots/${current.bot_id}/config-versions`, {
@@ -146,6 +165,33 @@ export default function OptimizationDetailPage() {
           value={data.summary.failed_trials ?? data.progress.failed_trials ?? 0}
         />
       </div>
+      {data.progress.strategy_trials_total !== undefined && (
+        <div className="split-layout collector-section">
+          <PhaseProgress
+            label="Strategy search"
+            completed={data.progress.strategy_trials_completed ?? 0}
+            total={data.progress.strategy_trials_total}
+          />
+          <PhaseProgress
+            label="Fixed config validation"
+            completed={data.progress.validation_trials_completed ?? 0}
+            total={data.progress.validation_trials_total ?? 0}
+          />
+        </div>
+      )}
+      {(data.summary.search_period || data.summary.validation_period) && (
+        <div className="panel collector-section">
+          <h2>Optimization periods</h2>
+          <div className="key-values">
+            {data.summary.search_period && (
+              <div><dt>Strategy search</dt><dd>{formatPeriod(data.summary.search_period)}</dd></div>
+            )}
+            {data.summary.validation_period && (
+              <div><dt>Fixed config validation</dt><dd>{formatPeriod(data.summary.validation_period)}</dd></div>
+            )}
+          </div>
+        </div>
+      )}
       <div className="panel collector-section">
         <h2>Performance timings</h2>
         <div className="key-values">
@@ -184,16 +230,16 @@ export default function OptimizationDetailPage() {
           )}
         </div>
         <div className="panel">
-          <h2>Fixed config outside search</h2>
+          <h2>{fixedTradeOverrides ? "Best fixed config" : "Fixed config outside search"}</h2>
           <div className="key-values">
             <div><dt>session</dt><dd>{configSnapshot.session.timezone}</dd></div>
             <div>
               <dt>stop_loss_points</dt>
-              <dd>{String(configSnapshot.theoretical_trade.stop_loss_points)}</dd>
+              <dd>{String(fixedTradeOverrides?.stop_loss_points ?? configSnapshot.theoretical_trade.stop_loss_points)}</dd>
             </div>
             <div>
               <dt>take_profit_points</dt>
-              <dd>{String(configSnapshot.theoretical_trade.take_profit_points)}</dd>
+              <dd>{String(fixedTradeOverrides?.take_profit_points ?? configSnapshot.theoretical_trade.take_profit_points)}</dd>
             </div>
             <div>
               <dt>risk_per_trade_pct</dt>
@@ -227,8 +273,8 @@ export default function OptimizationDetailPage() {
         </div>
       </div>
       <div className="panel collector-section">
-        <h2>Top trials ({trials.data?.total ?? 0})</h2>
-        {!trials.data?.items.length ? <p className="muted">No trials stored yet.</p> : (
+        <h2>Strategy trials ({strategyTrials.length})</h2>
+        {!strategyTrials.length ? <p className="muted">No trials stored yet.</p> : (
           <div className="table-wrap borderless">
             <table>
               <thead>
@@ -243,7 +289,7 @@ export default function OptimizationDetailPage() {
                   <th>Backtest</th>
                 </tr>
               </thead>
-              <tbody>{trials.data.items.map((trial) => (
+              <tbody>{strategyTrials.map((trial) => (
                 <tr key={trial.id}>
                   <td>
                     <Link className="table-link" href={`/optimizations/${id}/trials/${trial.id}`}>
@@ -263,6 +309,28 @@ export default function OptimizationDetailPage() {
           </div>
         )}
       </div>
+      {validationTrials.length > 0 && (
+        <div className="panel collector-section">
+          <h2>Fixed config validation ({validationTrials.length})</h2>
+          <div className="table-wrap borderless">
+            <table>
+              <thead><tr><th>Trial</th><th>Stop loss</th><th>Take profit</th><th>Status</th><th>Score</th><th>Net P&amp;L</th><th>Drawdown</th><th>Trades</th></tr></thead>
+              <tbody>{validationTrials.map((trial) => (
+                <tr key={trial.id}>
+                  <td><Link className="table-link" href={`/optimizations/${id}/trials/${trial.id}`}>{trial.trial_number}</Link></td>
+                  <td>{String(trial.config_overrides?.theoretical_trade?.stop_loss_points ?? "--")}</td>
+                  <td>{String(trial.config_overrides?.theoretical_trade?.take_profit_points ?? "--")}</td>
+                  <td><StatusPill value={trial.status} /></td>
+                  <td>{trial.score ?? "--"}</td>
+                  <td>{String(trial.metrics.net_pnl ?? "--")}</td>
+                  <td>{String(trial.metrics.max_drawdown ?? "--")}</td>
+                  <td>{String(trial.metrics.total_trades ?? "--")}</td>
+                </tr>
+              ))}</tbody>
+            </table>
+          </div>
+        </div>
+      )}
     </section>
   );
 }
@@ -273,4 +341,18 @@ function Metric({ label, value }: { label: string; value: string | number }) {
 
 function formatSeconds(value: number | undefined): string {
   return value === undefined ? "--" : `${value.toFixed(6)} s`;
+}
+
+function PhaseProgress({ label, completed, total }: { label: string; completed: number; total: number }) {
+  return (
+    <div className="panel backtest-progress">
+      <strong>{label}</strong>
+      <progress max={Math.max(total, 1)} value={completed} />
+      <span>{completed} / {total} trials</span>
+    </div>
+  );
+}
+
+function formatPeriod(period: { date_from: string; date_to: string }): string {
+  return `${new Date(period.date_from).toLocaleString()} - ${new Date(period.date_to).toLocaleString()}`;
 }
