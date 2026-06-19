@@ -16,20 +16,35 @@ def configure_database(path: Path) -> None:
     os.environ["DATABASE_URL"] = f"sqlite:///{path.as_posix()}"
 
 
-def config_snapshot(symbol: str) -> dict:
+def config_snapshot(symbol: str, strategy_name: str) -> dict:
+    strategy_parameters = {
+        "fast_ema_period": 9,
+        "slow_ema_period": 21,
+        "rsi_period": 14,
+        "buy_rsi_max": "70",
+        "sell_rsi_min": "30",
+        "min_trend_points": "2",
+        "require_crossover": False,
+    }
+    if strategy_name == "bb_ema_rsi_mean_reversion":
+        strategy_parameters = {
+            "bollinger_period": 20,
+            "bollinger_deviations": "2",
+            "rsi_period": 14,
+            "buy_rsi_max": "45",
+            "sell_rsi_min": "55",
+            "atr_period": 14,
+            "atr_stop_multiplier": "1.5",
+            "require_touch_band": True,
+            "fast_ema_period": 9,
+            "slow_ema_period": 21,
+            "max_trend_points": "30",
+        }
     return {
         "market": {"symbol": symbol, "timeframe": "M1"},
         "strategy": {
-            "name": "ema_rsi",
-            "parameters": {
-                "fast_ema_period": 9,
-                "slow_ema_period": 21,
-                "rsi_period": 14,
-                "buy_rsi_max": "70",
-                "sell_rsi_min": "30",
-                "min_trend_points": "2",
-                "require_crossover": False,
-            },
+            "name": strategy_name,
+            "parameters": strategy_parameters,
         },
         "filters": {"max_spread_points": "30", "stale_after_seconds": 15},
         "session": {
@@ -53,6 +68,7 @@ def seed_database(
     models,
     symbol: str,
     provider_symbol: str,
+    strategy_name: str,
     days: int,
     trials: int,
     batch_size: int,
@@ -64,7 +80,7 @@ def seed_database(
     optimization_id = uuid.uuid4()
     start = datetime(2025, 7, 1, tzinfo=UTC)
     total_candles = days * 24 * 60
-    snapshot = config_snapshot(symbol)
+    snapshot = config_snapshot(symbol, strategy_name)
 
     db.add_all(
         [
@@ -183,6 +199,11 @@ def main() -> None:
     parser.add_argument("--reset", action="store_true")
     parser.add_argument("--symbol", default="EURUSD")
     parser.add_argument("--provider-symbol", default="EUR_USD")
+    parser.add_argument(
+        "--strategy",
+        choices=("ema_rsi", "bb_ema_rsi_mean_reversion"),
+        default="ema_rsi",
+    )
     parser.add_argument("--days", type=int, default=349)
     parser.add_argument("--trials", type=int, default=100)
     parser.add_argument("--max-seconds", type=float, default=120)
@@ -209,6 +230,7 @@ def main() -> None:
             models=models,
             symbol=args.symbol,
             provider_symbol=args.provider_symbol,
+            strategy_name=args.strategy,
             days=args.days,
             trials=args.trials,
             batch_size=args.batch_size,
@@ -219,6 +241,7 @@ def main() -> None:
         optimization = db.get(models.OptimizationRun, optimization_id)
         payload = {
             "symbol": args.symbol,
+            "strategy": args.strategy,
             "days": args.days,
             "candles": args.days * 24 * 60,
             "trials": args.trials,

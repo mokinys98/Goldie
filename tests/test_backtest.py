@@ -8,6 +8,7 @@ from goldie_domain import (
     BacktestInstrument,
     BotConfiguration,
     CandleInput,
+    get_strategy,
 )
 
 
@@ -215,7 +216,7 @@ def test_prepared_strategies_match_legacy_backtest_results() -> None:
         assert fast == legacy
 
 
-def test_prepared_combo_strategy_matches_legacy_backtest_result() -> None:
+def test_fast_combo_strategies_match_prepared_backtest_results() -> None:
     _, instrument, costs = settings()
     start = datetime(2026, 1, 5, 10, 0, tzinfo=UTC)
     candles = [
@@ -228,21 +229,21 @@ def test_prepared_combo_strategy_matches_legacy_backtest_result() -> None:
         )
         for index in range(80)
     ]
-    config = BotConfiguration.model_validate(
-        {
+    strategy_names = (
+        "bb_rsi_mean_reversion",
+        "ema_momentum_breakout",
+        "ema_atr_trend",
+        "bb_momentum_breakout",
+        "bb_ema_rsi_mean_reversion",
+        "range_break_scalper",
+    )
+    for strategy_name in strategy_names:
+        strategy = get_strategy(strategy_name)
+        config = BotConfiguration.model_validate({
             "market": {"symbol": "XAUUSD", "timeframe": "M1"},
             "strategy": {
-                "name": "bb_rsi_mean_reversion",
-                "parameters": {
-                    "bollinger_period": 10,
-                    "bollinger_deviations": "1.5",
-                    "rsi_period": 7,
-                    "buy_rsi_max": "45",
-                    "sell_rsi_min": "55",
-                    "atr_period": 7,
-                    "atr_stop_multiplier": "1.5",
-                    "require_touch_band": True,
-                },
+                "name": strategy_name,
+                "parameters": strategy.parameters_model().model_dump(mode="json"),
             },
             "filters": {"max_spread_points": "20", "stale_after_seconds": 15},
             "session": {
@@ -257,26 +258,25 @@ def test_prepared_combo_strategy_matches_legacy_backtest_result() -> None:
                 "max_trade_duration_minutes": 5,
                 "max_open_shadow_positions": 1,
             },
-        }
-    )
+        })
 
-    legacy = BacktestEngine().run(
-        candles=candles,
-        config=config,
-        instrument=instrument,
-        costs=costs,
-        initial_capital=Decimal("10000"),
-        use_prepared_strategy=False,
-    )
-    prepared = BacktestEngine().run(
-        candles=candles,
-        config=config,
-        instrument=instrument,
-        costs=costs,
-        initial_capital=Decimal("10000"),
-    )
+        prepared = BacktestEngine().run(
+            candles=candles,
+            config=config,
+            instrument=instrument,
+            costs=costs,
+            initial_capital=Decimal("10000"),
+        )
+        fast = BacktestEngine().run(
+            candles=candles,
+            config=config,
+            instrument=instrument,
+            costs=costs,
+            initial_capital=Decimal("10000"),
+            use_fast_strategy=True,
+        )
 
-    assert prepared == legacy
+        assert fast == prepared, strategy_name
 
 
 def test_run_stream_consumes_generator_and_reports_final_progress() -> None:

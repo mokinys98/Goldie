@@ -168,11 +168,11 @@ class BacktestEngine:
         balance = initial_capital
         expected_step = timedelta(minutes=1)
         strategy = self.strategy or get_strategy(config.strategy.name)
-        evaluator_factory = (
-            getattr(strategy, "create_fast_backtest_evaluator", None)
-            if use_fast_strategy
-            else getattr(strategy, "create_backtest_evaluator", None)
-        )
+        evaluator_factory = None
+        if use_fast_strategy:
+            evaluator_factory = getattr(strategy, "create_fast_backtest_evaluator", None)
+        if evaluator_factory is None:
+            evaluator_factory = getattr(strategy, "create_backtest_evaluator", None)
         prepared = (
             evaluator_factory(
                 config,
