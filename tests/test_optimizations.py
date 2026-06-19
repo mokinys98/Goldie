@@ -18,6 +18,7 @@ from goldie_api.optimizations import (
     OPTIMIZATION_COMMIT_INTERVAL,
     _is_cancellation_checkpoint,
     _is_commit_checkpoint,
+    build_search_space,
     compute_balanced_score,
     execute_optimization,
     sample_parameters,
@@ -37,6 +38,33 @@ def test_optimization_progress_and_cancellation_use_five_trial_batches() -> None
     ]
     assert cancellation_checks == [0, 5, 10]
     assert commit_checks == [5, 10]
+
+
+def test_search_space_includes_exclusive_minimum_parameters() -> None:
+    from goldie_domain import BotConfiguration
+
+    config = BotConfiguration.model_validate(
+        {
+            "strategy": {
+                "name": "ema_atr_trend",
+                "parameters": {
+                    "fast_ema_period": 9,
+                    "slow_ema_period": 21,
+                    "atr_period": 14,
+                    "min_atr_points": "5",
+                    "max_atr_points": "500",
+                    "min_trend_points": "0",
+                    "atr_stop_multiplier": "1.5",
+                    "require_crossover": False,
+                },
+            }
+        }
+    )
+
+    names = {parameter["name"] for parameter in build_search_space(config)}
+
+    assert "max_atr_points" in names
+    assert "atr_stop_multiplier" in names
 
 
 def login(client: TestClient) -> dict[str, str]:

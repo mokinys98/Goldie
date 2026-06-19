@@ -98,7 +98,7 @@ def build_search_space(config: BotConfiguration) -> list[dict[str, Any]]:
             parameter["choices"] = [True, False]
             search_space.append(parameter)
             continue
-        minimum = field.get("minimum")
+        minimum = field.get("minimum", field.get("exclusiveMinimum"))
         maximum = field.get("maximum")
         if (
             field.get("type") in {"integer", "number"}
