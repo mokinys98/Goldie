@@ -2,16 +2,19 @@
 
 import Link from "next/link";
 import { useMemo, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import type { StrategyProfile } from "@/lib/types";
 import { StatusPill } from "@/components/status-pill";
 
 export default function StrategiesPage() {
+  const client = useQueryClient();
   const [search, setSearch] = useState("");
   const [algorithmFilter, setAlgorithmFilter] = useState("");
   const [statusFilter, setStatusFilter] = useState("");
   const [botUsageFilter, setBotUsageFilter] = useState("");
+  const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [deleteError, setDeleteError] = useState("");
   const query = useQuery({
     queryKey: ["strategy-profiles"],
     queryFn: () => api<StrategyProfile[]>("/api/v1/strategy-profiles"),
@@ -44,6 +47,22 @@ export default function StrategiesPage() {
     setBotUsageFilter("");
   }
 
+  async function deleteStrategy(profile: StrategyProfile) {
+    const linkedBots = profile.bot_count === 1 ? "1 linked bot" : `${profile.bot_count} linked bots`;
+    if (!window.confirm(`Archive ${profile.name}? ${linkedBots} and historical results will remain.`)) return;
+
+    setDeletingId(profile.id);
+    setDeleteError("");
+    try {
+      await api(`/api/v1/strategy-profiles/${profile.id}`, { method: "DELETE" });
+      await client.invalidateQueries({ queryKey: ["strategy-profiles"] });
+    } catch (error) {
+      setDeleteError(error instanceof Error ? error.message : "Strategy could not be deleted.");
+    } finally {
+      setDeletingId(null);
+    }
+  }
+
   return (
     <section>
       <header className="page-header">
@@ -61,6 +80,7 @@ export default function StrategiesPage() {
       </header>
       {query.isLoading && <div className="panel">Loading strategies...</div>}
       {query.error && <div className="error-box">{query.error.message}</div>}
+      {deleteError && <div className="error-box" role="alert">{deleteError}</div>}
       {query.data?.length === 0 && <div className="empty-state">No global strategies yet.</div>}
       {!!query.data?.length && (
         <>
@@ -110,7 +130,7 @@ export default function StrategiesPage() {
           ) : (
             <div className="table-wrap">
               <table>
-                <thead><tr><th>Name</th><th>Algorithm</th><th>Bots</th><th>Status</th><th>Updated</th></tr></thead>
+                <thead><tr><th>Name</th><th>Algorithm</th><th>Bots</th><th>Status</th><th>Updated</th><th>Actions</th></tr></thead>
                 <tbody>
                   {filteredStrategies.map((profile) => (
                     <tr key={profile.id}>
@@ -119,6 +139,16 @@ export default function StrategiesPage() {
                       <td>{profile.bot_count}</td>
                       <td><StatusPill value={profile.status} /></td>
                       <td>{new Date(profile.updated_at).toLocaleString()}</td>
+                      <td>
+                        <button
+                          className="button button-danger"
+                          disabled={deletingId !== null}
+                          type="button"
+                          onClick={() => deleteStrategy(profile)}
+                        >
+                          {deletingId === profile.id ? "Deleting..." : "Delete"}
+                        </button>
+                      </td>
                     </tr>
                   ))}
                 </tbody>
