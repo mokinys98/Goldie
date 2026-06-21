@@ -6,7 +6,11 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { api } from "@/lib/api";
 import { normalizeBotConfig } from "@/lib/config";
-import type { OptimizationRun, OptimizationTrialPage } from "@/lib/types";
+import type {
+  OptimizationResultsExport,
+  OptimizationRun,
+  OptimizationTrialPage,
+} from "@/lib/types";
 import { StatusPill } from "@/components/status-pill";
 
 export default function OptimizationDetailPage() {
@@ -15,6 +19,9 @@ export default function OptimizationDetailPage() {
   const [applyBusy, setApplyBusy] = useState(false);
   const [applyError, setApplyError] = useState<string | null>(null);
   const [appliedConfigId, setAppliedConfigId] = useState<string | null>(null);
+  const [exportBusy, setExportBusy] = useState(false);
+  const [exportMessage, setExportMessage] = useState<string | null>(null);
+  const [exportError, setExportError] = useState<string | null>(null);
   const run = useQuery({
     queryKey: ["optimization", id],
     queryFn: () => api<OptimizationRun>(`/api/v1/optimizations/${id}`),
@@ -103,6 +110,49 @@ export default function OptimizationDetailPage() {
     }
   }
 
+  async function loadExport(): Promise<OptimizationResultsExport> {
+    setExportBusy(true);
+    setExportMessage(null);
+    setExportError(null);
+    try {
+      return await api<OptimizationResultsExport>(`/api/v1/optimizations/${id}/export`);
+    } catch (reason) {
+      const message = reason instanceof Error ? reason.message : "Could not export results";
+      setExportError(message);
+      throw reason;
+    } finally {
+      setExportBusy(false);
+    }
+  }
+
+  async function exportResultsToJson() {
+    try {
+      const payload = await loadExport();
+      const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = exportFilename(configSnapshot.strategy.name, configSnapshot.market.symbol, id);
+      anchor.click();
+      URL.revokeObjectURL(url);
+      setExportMessage(`Exported ${payload.trials.length} trials to JSON.`);
+    } catch {
+      // loadExport exposes the actionable error in the page.
+    }
+  }
+
+  async function copyResultsToClipboard() {
+    try {
+      const payload = await loadExport();
+      await navigator.clipboard.writeText(JSON.stringify(payload, null, 2));
+      setExportMessage(`Copied ${payload.trials.length} trials to clipboard.`);
+    } catch (reason) {
+      if (!exportError) {
+        setExportError(reason instanceof Error ? reason.message : "Could not copy results");
+      }
+    }
+  }
+
   return (
     <section>
       <header className="page-header">
@@ -116,6 +166,20 @@ export default function OptimizationDetailPage() {
         </div>
         <div className="button-row">
           <StatusPill value={data.status} />
+          <button
+            className="button button-secondary"
+            disabled={exportBusy}
+            onClick={() => void exportResultsToJson()}
+          >
+            {exportBusy ? "Preparing results..." : "Export Results to JSON"}
+          </button>
+          <button
+            className="button button-secondary"
+            disabled={exportBusy}
+            onClick={() => void copyResultsToClipboard()}
+          >
+            Copy results in clipboard
+          </button>
           <button
             className="button button-primary"
             disabled={!canApplyBest}
@@ -132,6 +196,8 @@ export default function OptimizationDetailPage() {
       </header>
       {data.error && <div className="error-box">{data.error}</div>}
       {applyError && <div className="error-box">{applyError}</div>}
+      {exportError && <div className="error-box">{exportError}</div>}
+      {exportMessage && <div className="panel">{exportMessage}</div>}
       {appliedConfigId && (
         <div className="panel">
           New config created and activated.
@@ -355,4 +421,9 @@ function PhaseProgress({ label, completed, total }: { label: string; completed: 
 
 function formatPeriod(period: { date_from: string; date_to: string }): string {
   return `${new Date(period.date_from).toLocaleString()} - ${new Date(period.date_to).toLocaleString()}`;
+}
+
+function exportFilename(strategy: string, symbol: string, optimizationId: string): string {
+  const safe = `${strategy}-${symbol}`.replace(/[^a-zA-Z0-9_-]+/g, "-").toLowerCase();
+  return `${safe}-optimization-${optimizationId.slice(0, 8)}.json`;
 }

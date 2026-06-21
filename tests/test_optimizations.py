@@ -401,6 +401,26 @@ def test_optimization_api_and_execution_flow(monkeypatch) -> None:
         assert trial_detail.json()["optimization_run_id"] == str(optimization_id)
         failed_trial = next(item for item in trials.json()["items"] if item["status"] == "FAILED")
         assert failed_trial["metrics"]["timings"]["backtest_seconds"] >= 0
+        exported = client.get(
+            f"/api/v1/optimizations/{optimization_id}/export",
+            headers=headers,
+        )
+        assert exported.status_code == 200
+        export_body = exported.json()
+        assert export_body["schema_version"] == "goldie.optimization-results.v1"
+        assert export_body["optimization"]["id"] == str(optimization_id)
+        assert len(export_body["trials"]) == 57
+        assert export_body["analysis"]["phases"]["STRATEGY_SEARCH"]["trial_count"] == 12
+        assert export_body["analysis"]["phases"]["FIXED_CONFIG_VALIDATION"][
+            "trial_count"
+        ] == 45
+        assert export_body["analysis"]["parameter_distributions"]
+        assert export_body["analysis"]["candidate_validation"]
+        successful_export_trial = next(
+            item for item in export_body["trials"] if item["status"] == "SUCCEEDED"
+        )
+        assert "expectancy" in successful_export_trial["summary"]
+        assert "direction_breakdown" in successful_export_trial["summary"]
         with SessionLocal() as db:
             stored_trials = (
                 db.query(OptimizationTrial).filter_by(optimization_run_id=optimization_id).count()

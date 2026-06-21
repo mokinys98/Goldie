@@ -561,3 +561,19 @@ export type OptimizationTrialPage = {
   items: OptimizationTrial[];
   total: number;
 };
+
+export type OptimizationResultsExport = {
+  schema_version: "goldie.optimization-results.v1";
+  exported_at: string;
+  optimization: Record<string, unknown> & {
+    id: string;
+    status: string;
+    config_snapshot: BotConfig;
+  };
+  analysis: {
+    phases: Record<string, unknown>;
+    parameter_distributions: Record<string, unknown>;
+    candidate_validation: Array<Record<string, unknown>>;
+  };
+  trials: Array<Record<string, unknown>>;
+};

@@ -99,4 +99,15 @@ describe("OptimizationDetailPage", () => {
     expect(screen.getAllByRole("heading", { name: "Best fixed config" }).length).toBeGreaterThan(0);
     expect(screen.getAllByText("37.5").length).toBeGreaterThan(0);
   });
+
+  it("offers JSON export and clipboard actions", () => {
+    render(<OptimizationDetailPage />);
+
+    expect(
+      screen.getAllByRole("button", { name: "Export Results to JSON" }).at(-1),
+    ).toBeEnabled();
+    expect(
+      screen.getAllByRole("button", { name: "Copy results in clipboard" }).at(-1),
+    ).toBeEnabled();
+  });
 });

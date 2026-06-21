@@ -16,6 +16,7 @@ from ..models import (
     Run,
     User,
 )
+from ..optimization_analysis import build_optimization_export
 from ..schemas import (
     OptimizationCreate,
     OptimizationRunRead,
@@ -153,6 +154,16 @@ def read_optimization(
     _: User = Depends(get_current_user),
 ) -> OptimizationRun:
     return get_optimization(db, optimization_id)
+
+
+@router.get("/{optimization_id}/export")
+def export_optimization_results(
+    optimization_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    _: User = Depends(get_current_user),
+) -> dict:
+    optimization = get_optimization(db, optimization_id)
+    return build_optimization_export(db, optimization)
 
 
 @router.get("/{optimization_id}/trials", response_model=OptimizationTrialPage)

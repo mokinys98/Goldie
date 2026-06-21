@@ -470,10 +470,35 @@ class BacktestEngine:
         losses = [trade for trade in trades if trade.net_pnl < 0]
         gross_profit = sum((trade.net_pnl for trade in wins), Decimal("0"))
         gross_loss = abs(sum((trade.net_pnl for trade in losses), Decimal("0")))
+        total_r = sum((trade.r_multiple for trade in trades), Decimal("0"))
+        average_r = total_r / len(trades) if trades else None
+        r_deviation = (
+            (
+                sum(
+                    ((trade.r_multiple - average_r) ** 2 for trade in trades),
+                    Decimal("0"),
+                )
+                / len(trades)
+            ).sqrt()
+            if trades and average_r is not None
+            else None
+        )
+        downside_deviation = (
+            (
+                sum(
+                    (min(trade.r_multiple, Decimal("0")) ** 2 for trade in trades),
+                    Decimal("0"),
+                )
+                / len(trades)
+            ).sqrt()
+            if trades
+            else None
+        )
         cumulative = Decimal("0")
         peak = Decimal("0")
         max_drawdown = Decimal("0")
         max_losses = current_losses = 0
+        max_wins = current_wins = 0
         equity_curve = []
         for trade in trades:
             cumulative += trade.net_pnl
@@ -483,7 +508,9 @@ class BacktestEngine:
                 {"time": trade.closed_at, "value": initial_capital + cumulative}
             )
             current_losses = current_losses + 1 if trade.net_pnl < 0 else 0
+            current_wins = current_wins + 1 if trade.net_pnl > 0 else 0
             max_losses = max(max_losses, current_losses)
+            max_wins = max(max_wins, current_wins)
 
         def average(values: list[Decimal]) -> Decimal | None:
             return sum(values, Decimal("0")) / len(values) if values else None
@@ -496,12 +523,73 @@ class BacktestEngine:
             "average_win": average([trade.net_pnl for trade in wins]),
             "average_loss": average([trade.net_pnl for trade in losses]),
             "profit_factor": gross_profit / gross_loss if gross_loss else None,
+            "expectancy": average([trade.net_pnl for trade in trades]),
+            "expectancy_r": average([trade.r_multiple for trade in trades]),
+            "total_r": total_r,
+            "trade_sharpe": average_r / r_deviation if r_deviation else None,
+            "trade_sortino": average_r / downside_deviation if downside_deviation else None,
+            "gross_profit": gross_profit,
+            "gross_loss": gross_loss,
             "gross_pnl": sum((trade.gross_pnl for trade in trades), Decimal("0")),
             "commission": sum((trade.commission for trade in trades), Decimal("0")),
             "net_pnl": cumulative,
+            "return_pct": cumulative * Decimal("100") / initial_capital,
             "final_equity": initial_capital + cumulative,
             "max_drawdown": max_drawdown,
+            "max_drawdown_pct": max_drawdown * Decimal("100") / initial_capital,
+            "max_consecutive_wins": max_wins,
             "max_consecutive_losses": max_losses,
+            "average_duration_seconds": average(
+                [Decimal(trade.duration_seconds) for trade in trades]
+            ),
+            "direction_breakdown": {
+                direction: {
+                    "trades": len(direction_trades),
+                    "net_pnl": sum(
+                        (trade.net_pnl for trade in direction_trades), Decimal("0")
+                    ),
+                    "win_rate": (
+                        Decimal(
+                            sum(1 for trade in direction_trades if trade.net_pnl > 0) * 100
+                        )
+                        / len(direction_trades)
+                        if direction_trades
+                        else None
+                    ),
+                }
+                for direction in ("BUY", "SELL")
+                if (direction_trades := [
+                    trade for trade in trades if trade.direction == direction
+                ])
+            },
+            "close_reason_counts": {
+                reason: sum(1 for trade in trades if trade.close_reason == reason)
+                for reason in sorted({trade.close_reason for trade in trades})
+            },
+            "year_breakdown": {
+                year: {
+                    "trades": len(period_trades),
+                    "net_pnl": sum(
+                        (trade.net_pnl for trade in period_trades), Decimal("0")
+                    ),
+                }
+                for year in sorted({trade.closed_at.strftime("%Y") for trade in trades})
+                if (period_trades := [
+                    trade for trade in trades if trade.closed_at.strftime("%Y") == year
+                ])
+            },
+            "month_breakdown": {
+                month: {
+                    "trades": len(period_trades),
+                    "net_pnl": sum(
+                        (trade.net_pnl for trade in period_trades), Decimal("0")
+                    ),
+                }
+                for month in sorted({trade.closed_at.strftime("%Y-%m") for trade in trades})
+                if (period_trades := [
+                    trade for trade in trades if trade.closed_at.strftime("%Y-%m") == month
+                ])
+            },
             "equity_curve": equity_curve,
         }
 
