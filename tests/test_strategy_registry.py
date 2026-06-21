@@ -10,6 +10,7 @@ from goldie_domain import (
     register_strategy,
     strategy_catalog,
 )
+from goldie_domain.strategies import PineBollingerRsiStochParameters
 from pydantic import ValidationError
 
 
@@ -73,6 +74,7 @@ def test_registry_catalog_and_duplicate_protection() -> None:
         "bb_momentum_breakout",
         "bb_ema_rsi_mean_reversion",
         "range_break_scalper",
+        "pine_bb_rsi_stoch",
     ]
     momentum = catalog[0]["parameters"]["min_momentum_points"]
     assert momentum["type"] == "number"
@@ -128,6 +130,91 @@ def test_ema_rsi_no_trade_when_thresholds_do_not_match() -> None:
     )
     assert decision.signal == "NO_TRADE"
     assert decision.reason_code == "EMA_RSI_CONDITIONS_NOT_MET"
+
+
+def pine_config() -> BotConfiguration:
+    return BotConfiguration.model_validate(
+        {
+            "market": {"symbol": "XAUUSD", "timeframe": "M1"},
+            "strategy": {
+                "name": "pine_bb_rsi_stoch",
+                "parameters": {
+                    "bollinger_period": 3,
+                    "bollinger_deviations": "1",
+                    "rsi_period": 2,
+                    "rsi_overbought": "70",
+                    "rsi_oversold": "30",
+                    "stochastic_period": 2,
+                    "stochastic_overbought": "80",
+                    "stochastic_oversold": "20",
+                    "smooth_k": 1,
+                    "smooth_d": 1,
+                },
+            },
+            "filters": {"max_spread_points": 100, "stale_after_seconds": 15},
+            "session": {
+                "timezone": "UTC",
+                "start_time": "00:00:00",
+                "end_time": "23:59:59",
+            },
+        }
+    )
+
+
+def test_pine_port_generates_band_cross_signals() -> None:
+    strategy = get_strategy("pine_bb_rsi_stoch")
+
+    buy = strategy.evaluate(market(["10", "10", "10", "0"]), pine_config())
+    sell = strategy.evaluate(market(["10", "10", "10", "20"]), pine_config())
+    no_trade = strategy.evaluate(market(["10", "10", "10", "10"]), pine_config())
+
+    assert buy.signal == "BUY"
+    assert buy.reason_code == "PINE_BB_RSI_STOCH_BUY"
+    assert sell.signal == "SELL"
+    assert sell.reason_code == "PINE_BB_RSI_STOCH_SELL"
+    assert no_trade.signal == "NO_TRADE"
+
+
+def test_pine_parameters_defaults_bounds_and_required_candles() -> None:
+    strategy = get_strategy("pine_bb_rsi_stoch")
+    defaults = PineBollingerRsiStochParameters()
+
+    assert strategy.required_candles(defaults) == 21
+    assert (
+        strategy.required_candles(
+            PineBollingerRsiStochParameters(
+                bollinger_period=500,
+                rsi_period=200,
+                stochastic_period=200,
+                smooth_k=20,
+                smooth_d=20,
+            )
+        )
+        == 501
+    )
+    with pytest.raises(ValidationError):
+        PineBollingerRsiStochParameters(bollinger_deviations=0)
+    with pytest.raises(ValidationError, match="rsi_oversold"):
+        PineBollingerRsiStochParameters(rsi_oversold=70, rsi_overbought=60)
+    with pytest.raises(ValidationError, match="stochastic_oversold"):
+        PineBollingerRsiStochParameters(stochastic_oversold=90, stochastic_overbought=80)
+
+
+def test_pine_strategy_guards_and_fast_factory() -> None:
+    strategy = get_strategy("pine_bb_rsi_stoch")
+    insufficient = strategy.evaluate(market(["10", "11", "12"]), pine_config())
+    high_spread_market = market(["10", "10", "10", "20"])
+    high_spread_market.ask = Decimal("30")
+    spread = strategy.evaluate(high_spread_market, pine_config())
+    outside_config = pine_config()
+    outside_config.session.start_time = datetime.strptime("11:00", "%H:%M").time()
+    outside_config.session.end_time = datetime.strptime("12:00", "%H:%M").time()
+    outside = strategy.evaluate(market(["10", "10", "10", "20"]), outside_config)
+
+    assert insufficient.reason_code == "INSUFFICIENT_COMPLETED_CANDLES"
+    assert spread.reason_code == "SPREAD_TOO_HIGH"
+    assert outside.reason_code == "OUTSIDE_TRADING_SESSION"
+    assert callable(strategy.create_fast_backtest_evaluator)
 
 
 @pytest.mark.parametrize(

@@ -10,6 +10,7 @@ from .strategies import (
     EmaAtrTrendStrategy,
     EmaMomentumBreakoutStrategy,
     EmaRsiStrategy,
+    PineBollingerRsiStochStrategy,
     RangeBreakScalperStrategy,
 )
 from .strategy import Strategy
@@ -100,3 +101,4 @@ register_strategy(EmaAtrTrendStrategy())
 register_strategy(BollingerMomentumBreakoutStrategy())
 register_strategy(BollingerEmaRsiMeanReversionStrategy())
 register_strategy(RangeBreakScalperStrategy())
+register_strategy(PineBollingerRsiStochStrategy())

@@ -236,29 +236,32 @@ def test_fast_combo_strategies_match_prepared_backtest_results() -> None:
         "bb_momentum_breakout",
         "bb_ema_rsi_mean_reversion",
         "range_break_scalper",
+        "pine_bb_rsi_stoch",
     )
     for strategy_name in strategy_names:
         strategy = get_strategy(strategy_name)
-        config = BotConfiguration.model_validate({
-            "market": {"symbol": "XAUUSD", "timeframe": "M1"},
-            "strategy": {
-                "name": strategy_name,
-                "parameters": strategy.parameters_model().model_dump(mode="json"),
-            },
-            "filters": {"max_spread_points": "20", "stale_after_seconds": 15},
-            "session": {
-                "timezone": "UTC",
-                "start_time": "00:00:00",
-                "end_time": "23:59:59",
-            },
-            "theoretical_trade": {
-                "stop_loss_points": "5",
-                "take_profit_points": "8",
-                "risk_per_trade_pct": "1",
-                "max_trade_duration_minutes": 5,
-                "max_open_shadow_positions": 1,
-            },
-        })
+        config = BotConfiguration.model_validate(
+            {
+                "market": {"symbol": "XAUUSD", "timeframe": "M1"},
+                "strategy": {
+                    "name": strategy_name,
+                    "parameters": strategy.parameters_model().model_dump(mode="json"),
+                },
+                "filters": {"max_spread_points": "20", "stale_after_seconds": 15},
+                "session": {
+                    "timezone": "UTC",
+                    "start_time": "00:00:00",
+                    "end_time": "23:59:59",
+                },
+                "theoretical_trade": {
+                    "stop_loss_points": "5",
+                    "take_profit_points": "8",
+                    "risk_per_trade_pct": "1",
+                    "max_trade_duration_minutes": 5,
+                    "max_open_shadow_positions": 1,
+                },
+            }
+        )
 
         prepared = BacktestEngine().run(
             candles=candles,
@@ -279,6 +282,160 @@ def test_fast_combo_strategies_match_prepared_backtest_results() -> None:
         assert fast == prepared, strategy_name
 
 
+def pine_backtest_config(parameters: dict | None = None) -> BotConfiguration:
+    strategy = get_strategy("pine_bb_rsi_stoch")
+    return BotConfiguration.model_validate(
+        {
+            "market": {"symbol": "XAUUSD", "timeframe": "M1"},
+            "strategy": {
+                "name": "pine_bb_rsi_stoch",
+                "parameters": parameters or strategy.parameters_model().model_dump(mode="json"),
+            },
+            "filters": {"max_spread_points": "20", "stale_after_seconds": 15},
+            "session": {
+                "timezone": "UTC",
+                "start_time": "00:00:00",
+                "end_time": "23:59:59",
+            },
+            "theoretical_trade": {
+                "stop_loss_points": "50",
+                "take_profit_points": "80",
+                "risk_per_trade_pct": "1",
+                "max_trade_duration_minutes": 60,
+                "max_open_shadow_positions": 1,
+            },
+        }
+    )
+
+
+def pine_candles(*, count: int, scale: Decimal, point: Decimal) -> list[CandleInput]:
+    start = datetime(2026, 1, 5, tzinfo=UTC)
+    result = []
+    for index in range(count):
+        wave = Decimal((index * 17) % 31 - 15) * point
+        trend = Decimal(index % 97) * point / Decimal("10")
+        close = scale + wave + trend
+        open_price = close - Decimal((index % 5) - 2) * point
+        result.append(
+            CandleInput(
+                opened_at=start + timedelta(minutes=index),
+                open=open_price,
+                high=max(open_price, close) + point * 3,
+                low=min(open_price, close) - point * 3,
+                close=close,
+            )
+        )
+    return result
+
+
+def test_pine_prepared_and_fast_parity_matrix() -> None:
+    _, base_instrument, costs = settings()
+    parameter_sets = [
+        None,
+        {
+            "bollinger_period": 2,
+            "bollinger_deviations": "0.1",
+            "rsi_period": 2,
+            "rsi_overbought": "100",
+            "rsi_oversold": "0",
+            "stochastic_period": 1,
+            "stochastic_overbought": "100",
+            "stochastic_oversold": "0",
+            "smooth_k": 1,
+            "smooth_d": 1,
+        },
+        {
+            "bollinger_period": 500,
+            "bollinger_deviations": "10",
+            "rsi_period": 200,
+            "rsi_overbought": "100",
+            "rsi_oversold": "0",
+            "stochastic_period": 200,
+            "stochastic_overbought": "100",
+            "stochastic_oversold": "0",
+            "smooth_k": 20,
+            "smooth_d": 20,
+        },
+    ]
+    markets = [
+        (Decimal("1.08"), Decimal("0.00001")),
+        (Decimal("155"), Decimal("0.001")),
+        (Decimal("2350"), Decimal("0.01")),
+    ]
+    for parameters in parameter_sets:
+        for scale, point in markets:
+            instrument = BacktestInstrument(
+                point=point,
+                tick_size=point,
+                tick_value=base_instrument.tick_value,
+                volume_min=base_instrument.volume_min,
+                volume_max=base_instrument.volume_max,
+                volume_step=base_instrument.volume_step,
+            )
+            candles = pine_candles(count=650, scale=scale, point=point)
+            reference = BacktestEngine().run(
+                candles=candles,
+                config=pine_backtest_config(parameters),
+                instrument=instrument,
+                costs=costs,
+                initial_capital=Decimal("10000"),
+                use_prepared_strategy=False,
+            )
+            prepared = BacktestEngine().run(
+                candles=candles,
+                config=pine_backtest_config(parameters),
+                instrument=instrument,
+                costs=costs,
+                initial_capital=Decimal("10000"),
+            )
+            fast = BacktestEngine().run(
+                candles=candles,
+                config=pine_backtest_config(parameters),
+                instrument=instrument,
+                costs=costs,
+                initial_capital=Decimal("10000"),
+                use_fast_strategy=True,
+            )
+            assert prepared == reference, (parameters, scale, "prepared")
+            assert fast == reference, (parameters, scale, "fast")
+
+
+def test_pine_parity_across_price_patterns() -> None:
+    _, instrument, costs = settings()
+    start = datetime(2026, 1, 5, tzinfo=UTC)
+    patterns = {
+        "rising": [Decimal(index) for index in range(120)],
+        "falling": [Decimal(120 - index) for index in range(120)],
+        "flat": [Decimal("50") for _ in range(120)],
+        "noisy": [Decimal((index * 19) % 37) for index in range(120)],
+    }
+    for name, values in patterns.items():
+        candles = [
+            CandleInput(
+                opened_at=start + timedelta(minutes=index),
+                open=Decimal("100") + value / Decimal("10"),
+                high=Decimal("100.3") + value / Decimal("10"),
+                low=Decimal("99.7") + value / Decimal("10"),
+                close=Decimal("100") + value / Decimal("10"),
+            )
+            for index, value in enumerate(values)
+        ]
+        results = [
+            BacktestEngine().run(
+                candles=candles,
+                config=pine_backtest_config(),
+                instrument=instrument,
+                costs=costs,
+                initial_capital=Decimal("10000"),
+                use_prepared_strategy=prepared,
+                use_fast_strategy=fast,
+            )
+            for prepared, fast in ((False, False), (True, False), (True, True))
+        ]
+        assert results[1] == results[0], (name, "prepared")
+        assert results[2] == results[0], (name, "fast")
+
+
 def test_run_stream_consumes_generator_and_reports_final_progress() -> None:
     config, instrument, costs = settings()
     candles = [
@@ -296,9 +453,7 @@ def test_run_stream_consumes_generator_and_reports_final_progress() -> None:
         instrument=instrument,
         costs=costs,
         initial_capital=Decimal("10000"),
-        progress_callback=lambda processed, total: (
-            progress.append((processed, total)) or True
-        ),
+        progress_callback=lambda processed, total: progress.append((processed, total)) or True,
     )
 
     assert result.trades
@@ -422,7 +577,4 @@ def test_model_sqrt_limit_caps_impact() -> None:
         model_sqrt_limit=Decimal("0.7"),
     )
 
-    assert (
-        BacktestEngine._slippage_amount(costs, instrument, Decimal("1000000"))
-        == Decimal("0.07")
-    )
+    assert BacktestEngine._slippage_amount(costs, instrument, Decimal("1000000")) == Decimal("0.07")

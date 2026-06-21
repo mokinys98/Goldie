@@ -163,6 +163,8 @@ def sample_parameters(
         "sell_rsi_min": "buy_rsi_max",
         "sell_rsi_max": "buy_rsi_min",
         "max_atr_points": "min_atr_points",
+        "rsi_overbought": "rsi_oversold",
+        "stochastic_overbought": "stochastic_oversold",
     }
     positions = {parameter["name"]: index for index, parameter in enumerate(search_space)}
 
@@ -204,6 +206,10 @@ def sample_parameters(
             upper = min(upper, sampled["buy_rsi_min"])
         elif name == "max_atr_points" and "min_atr_points" in sampled:
             lower = max(lower, sampled["min_atr_points"])
+        elif name == "rsi_overbought" and "rsi_oversold" in sampled:
+            lower = max(lower, sampled["rsi_oversold"])
+        elif name == "stochastic_overbought" and "stochastic_oversold" in sampled:
+            lower = max(lower, sampled["stochastic_oversold"])
         if parameter["type"] == "integer":
             sampled[name] = trial.suggest_int(name, int(lower), int(upper))
         else:
@@ -287,9 +293,7 @@ def claim_next_optimization(db: Session) -> uuid.UUID | None:
 
 
 def _should_cancel(db: Session, optimization_id: uuid.UUID) -> bool:
-    status = db.scalar(
-        select(OptimizationRun.status).where(OptimizationRun.id == optimization_id)
-    )
+    status = db.scalar(select(OptimizationRun.status).where(OptimizationRun.id == optimization_id))
     return status == "CANCEL_REQUESTED"
 
 
@@ -448,9 +452,7 @@ def execute_optimization(db: Session, optimization_id: uuid.UUID) -> None:
         timings["candle_load_seconds"] += monotonic() - candle_load_started
         config = BotConfiguration.model_validate(optimization.config_snapshot)
         strategy = get_strategy(config.strategy.name)
-        parameters_model = strategy.parameters_model.model_validate(
-            config.strategy.parameters
-        )
+        parameters_model = strategy.parameters_model.model_validate(config.strategy.parameters)
         minimum = strategy.required_candles(parameters_model) + 1
         if search_total_candles < minimum or validation_total_candles < minimum:
             raise ValueError(
@@ -479,9 +481,7 @@ def execute_optimization(db: Session, optimization_id: uuid.UUID) -> None:
 
         candle_load_started = monotonic()
         search_candles = list(stream_candles(db, candle_statement(search_candle_filter)))
-        validation_candles = list(
-            stream_candles(db, candle_statement(validation_candle_filter))
-        )
+        validation_candles = list(stream_candles(db, candle_statement(validation_candle_filter)))
         timings["candle_load_seconds"] += monotonic() - candle_load_started
         instrument = BacktestInstrument(
             point=spec.point,
@@ -511,10 +511,7 @@ def execute_optimization(db: Session, optimization_id: uuid.UUID) -> None:
         best_payload: dict[str, Any] = optimization.best_candidate or {}
 
         for trial_index in range(optimization.n_trials):
-            if (
-                _is_cancellation_checkpoint(trial_index)
-                and _should_cancel(db, optimization.id)
-            ):
+            if _is_cancellation_checkpoint(trial_index) and _should_cancel(db, optimization.id):
                 optimization = db.get(OptimizationRun, optimization.id)
                 if optimization:
                     optimization.status = "CANCELLED"
@@ -629,10 +626,7 @@ def execute_optimization(db: Session, optimization_id: uuid.UUID) -> None:
                     trial_row.metrics,
                     trial_row.summary,
                 )
-                if (
-                    not best_payload
-                    or float(candidate["score"]) > float(best_payload["score"])
-                ):
+                if not best_payload or float(candidate["score"]) > float(best_payload["score"]):
                     best_payload = candidate
                     optimization.best_candidate = candidate
             except Exception as exc:
@@ -704,9 +698,8 @@ def execute_optimization(db: Session, optimization_id: uuid.UUID) -> None:
         validation_index = 0
         for search_candidate in search_candidates:
             for fixed_config_overrides in fixed_config_pairs:
-                if (
-                    _is_cancellation_checkpoint(validation_index)
-                    and _should_cancel(db, optimization.id)
+                if _is_cancellation_checkpoint(validation_index) and _should_cancel(
+                    db, optimization.id
                 ):
                     optimization = db.get(OptimizationRun, optimization.id)
                     if optimization:
@@ -777,9 +770,7 @@ def execute_optimization(db: Session, optimization_id: uuid.UUID) -> None:
                 backtest_started = monotonic()
                 try:
                     trial_config = copy.deepcopy(optimization.config_snapshot)
-                    trial_config["strategy"]["parameters"] = (
-                        search_candidate.sampled_parameters
-                    )
+                    trial_config["strategy"]["parameters"] = search_candidate.sampled_parameters
                     trial_config["theoretical_trade"].update(
                         fixed_config_overrides["theoretical_trade"]
                     )
@@ -827,9 +818,8 @@ def execute_optimization(db: Session, optimization_id: uuid.UUID) -> None:
                             "validation_metrics": metrics,
                         }
                     )
-                    if (
-                        not validation_best
-                        or float(candidate["score"]) > float(validation_best["score"])
+                    if not validation_best or float(candidate["score"]) > float(
+                        validation_best["score"]
                     ):
                         validation_best = candidate
                         optimization.best_candidate = candidate
@@ -888,9 +878,7 @@ def execute_optimization(db: Session, optimization_id: uuid.UUID) -> None:
                 },
                 "search_space": search_space,
                 "execution_model": _execution_model_payload(optimization),
-                "top_candidates": _top_candidates(
-                    db, optimization.id, phase=STRATEGY_SEARCH_PHASE
-                ),
+                "top_candidates": _top_candidates(db, optimization.id, phase=STRATEGY_SEARCH_PHASE),
                 "validation_candidates": _top_candidates(
                     db,
                     optimization.id,

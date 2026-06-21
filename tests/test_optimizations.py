@@ -30,13 +30,9 @@ from goldie_api.optimizations import (
 def test_optimization_progress_and_cancellation_use_five_trial_batches() -> None:
     assert OPTIMIZATION_COMMIT_INTERVAL == 5
     assert OPTIMIZATION_CANCEL_CHECK_INTERVAL == 5
-    cancellation_checks = [
-        index for index in range(12) if _is_cancellation_checkpoint(index)
-    ]
+    cancellation_checks = [index for index in range(12) if _is_cancellation_checkpoint(index)]
     commit_checks = [
-        completed
-        for completed in range(1, 13)
-        if _is_commit_checkpoint(completed, 12)
+        completed for completed in range(1, 13) if _is_commit_checkpoint(completed, 12)
     ]
     assert cancellation_checks == [0, 5, 10]
     assert commit_checks == [5, 10]
@@ -124,14 +120,20 @@ def register_feed(client: TestClient, symbol: str, provider_symbol: str) -> dict
 def activate_first_config(client: TestClient, bot_id: str, headers: dict[str, str]) -> dict:
     versions = client.get(f"/api/v1/bots/{bot_id}/config-versions", headers=headers).json()
     if versions[0]["status"] != "ACTIVE":
-        assert client.post(
-            f"/api/v1/config-versions/{versions[0]['id']}/validate",
-            headers=headers,
-        ).status_code == 200
-        assert client.post(
-            f"/api/v1/config-versions/{versions[0]['id']}/activate",
-            headers=headers,
-        ).status_code == 200
+        assert (
+            client.post(
+                f"/api/v1/config-versions/{versions[0]['id']}/validate",
+                headers=headers,
+            ).status_code
+            == 200
+        )
+        assert (
+            client.post(
+                f"/api/v1/config-versions/{versions[0]['id']}/activate",
+                headers=headers,
+            ).status_code
+            == 200
+        )
         versions = client.get(f"/api/v1/bots/{bot_id}/config-versions", headers=headers).json()
     return versions[0]
 
@@ -206,11 +208,7 @@ def test_sample_parameters_respects_dependent_strategy_bounds() -> None:
     )
 
     assert sampled["buy_rsi_max"] <= sampled["sell_rsi_min"]
-    assert (
-        sampled["fast_ema_period"]
-        < sampled["medium_ema_period"]
-        < sampled["slow_ema_period"]
-    )
+    assert sampled["fast_ema_period"] < sampled["medium_ema_period"] < sampled["slow_ema_period"]
 
 
 def test_sample_parameters_respects_atr_bounds_regardless_of_catalog_order() -> None:
@@ -224,6 +222,45 @@ def test_sample_parameters_respects_atr_bounds_regardless_of_catalog_order() -> 
     )
 
     assert sampled["min_atr_points"] <= sampled["max_atr_points"]
+
+
+class FractionTrial:
+    def __init__(self, fraction: float) -> None:
+        self.fraction = fraction
+
+    def suggest_float(self, name: str, lower: float, upper: float) -> float:
+        return lower + (upper - lower) * self.fraction
+
+    def suggest_int(self, name: str, lower: int, upper: int) -> int:
+        return lower + round((upper - lower) * self.fraction)
+
+    def suggest_categorical(self, name: str, choices: list):
+        return choices[round((len(choices) - 1) * self.fraction)]
+
+
+def test_pine_search_space_and_samples_are_always_valid() -> None:
+    from goldie_domain import BotConfiguration, get_strategy
+
+    strategy = get_strategy("pine_bb_rsi_stoch")
+    defaults = strategy.parameters_model().model_dump(mode="json")
+    config = BotConfiguration.model_validate(
+        {
+            "strategy": {
+                "name": "pine_bb_rsi_stoch",
+                "parameters": defaults,
+            }
+        }
+    )
+    search_space = build_search_space(config)
+
+    assert {item["name"] for item in search_space} == set(defaults)
+    for index in range(101):
+        sampled = sample_parameters(
+            FractionTrial(index / 100),
+            search_space=search_space,
+            defaults=defaults,
+        )
+        strategy.parameters_model.model_validate(sampled)
 
 
 def test_optimization_api_and_execution_flow(monkeypatch) -> None:
@@ -325,9 +362,7 @@ def test_optimization_api_and_execution_flow(monkeypatch) -> None:
         assert all(value >= 0 for value in timings.values())
         assert detail.json()["summary"]["failed_trials"] == 2
         assert detail.json()["summary"]["validation_failed_trials"] == 1
-        assert committed_progress == [
-            0, 5, 10, 12, 15, 20, 25, 30, 35, 40, 45, 50, 55, 57
-        ]
+        assert committed_progress == [0, 5, 10, 12, 15, 20, 25, 30, 35, 40, 45, 50, 55, 57]
         assert trials.status_code == 200
         assert trials.json()["total"] == 57
         strategy_trials = client.get(
@@ -346,8 +381,9 @@ def test_optimization_api_and_execution_flow(monkeypatch) -> None:
         )
         assert detail.json()["best_candidate"]["fixed_config_overrides"]
         assert detail.json()["best_candidate"]["validation_score"]
-        assert detail.json()["summary"]["search_period"]["date_to"] == (
-            detail.json()["summary"]["validation_period"]["date_from"]
+        assert (
+            detail.json()["summary"]["search_period"]["date_to"]
+            == (detail.json()["summary"]["validation_period"]["date_from"])
         )
         trial_id = trials.json()["items"][0]["id"]
         trial_detail = client.get(
@@ -363,14 +399,12 @@ def test_optimization_api_and_execution_flow(monkeypatch) -> None:
         assert "taker_slippage" not in trial_detail.json()["sampled_parameters"]
         assert "medium_impact" not in trial_detail.json()["sampled_parameters"]
         assert trial_detail.json()["optimization_run_id"] == str(optimization_id)
-        failed_trial = next(
-            item for item in trials.json()["items"] if item["status"] == "FAILED"
-        )
+        failed_trial = next(item for item in trials.json()["items"] if item["status"] == "FAILED")
         assert failed_trial["metrics"]["timings"]["backtest_seconds"] >= 0
         with SessionLocal() as db:
-            stored_trials = db.query(OptimizationTrial).filter_by(
-                optimization_run_id=optimization_id
-            ).count()
+            stored_trials = (
+                db.query(OptimizationTrial).filter_by(optimization_run_id=optimization_id).count()
+            )
             assert stored_trials == 57
 
 

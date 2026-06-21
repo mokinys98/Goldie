@@ -14,6 +14,7 @@ from .combo_algorithms import (
     RangeBreakScalperStrategy,
 )
 from .ema_rsi import EmaRsiParameters, EmaRsiStrategy
+from .pine_bb_rsi_stoch import PineBollingerRsiStochParameters, PineBollingerRsiStochStrategy
 
 __all__ = [
     "BasicMomentumParameters",
@@ -32,4 +33,6 @@ __all__ = [
     "EmaRsiStrategy",
     "RangeBreakScalperParameters",
     "RangeBreakScalperStrategy",
+    "PineBollingerRsiStochParameters",
+    "PineBollingerRsiStochStrategy",
 ]

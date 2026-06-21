@@ -104,6 +104,7 @@ def test_strategy_catalog_endpoint() -> None:
             "bb_momentum_breakout",
             "bb_ema_rsi_mean_reversion",
             "range_break_scalper",
+            "pine_bb_rsi_stoch",
         }
         assert catalog["ema_rsi"]["required_candles"] == 21
         assert "fast_ema_period" in catalog["ema_rsi"]["parameters"]

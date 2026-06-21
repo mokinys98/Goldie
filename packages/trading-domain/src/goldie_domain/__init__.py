@@ -37,6 +37,7 @@ from .strategies import (
     EmaAtrTrendStrategy,
     EmaMomentumBreakoutStrategy,
     EmaRsiStrategy,
+    PineBollingerRsiStochStrategy,
     RangeBreakScalperStrategy,
 )
 from .strategy import Strategy
@@ -62,6 +63,7 @@ __all__ = [
     "MarketContext",
     "PositionSize",
     "RangeBreakScalperStrategy",
+    "PineBollingerRsiStochStrategy",
     "ShadowCloseReason",
     "ShadowEvaluation",
     "ShadowResult",
