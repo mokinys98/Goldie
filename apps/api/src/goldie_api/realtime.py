@@ -2,6 +2,7 @@ import asyncio
 import json
 import logging
 from collections.abc import Mapping
+from functools import lru_cache
 
 from redis import Redis
 from redis.asyncio import Redis as AsyncRedis
@@ -15,6 +16,7 @@ OVERVIEW_CACHE_KEY = "collector:overview:v2"
 logger = logging.getLogger(__name__)
 
 
+@lru_cache
 def redis_client() -> Redis:
     return Redis.from_url(
         get_settings().redis_url,

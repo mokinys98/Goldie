@@ -17,6 +17,7 @@ from ..models import (
     PaperAccount,
     Run,
     Signal,
+    SignalOutcome,
     StrategyProfile,
     User,
 )
@@ -215,6 +216,15 @@ def archive_bot(
     ):
         run.status = "SUPERSEDED"
         run.ended_at = now
+    for outcome in db.scalars(
+        select(SignalOutcome).where(
+            SignalOutcome.bot_id == bot.id,
+            SignalOutcome.status == "OPEN",
+        )
+    ):
+        outcome.status = "CANCELLED"
+        outcome.close_reason = "BOT_ARCHIVED"
+        outcome.closed_at = now
     add_audit(
         db,
         actor_type="USER",

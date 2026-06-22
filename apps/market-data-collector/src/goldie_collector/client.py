@@ -28,6 +28,7 @@ class GoldieApiClient:
         self.feed_id: uuid.UUID | None = None
         self.agent_id: uuid.UUID | None = None
         self.collector_id: uuid.UUID | None = None
+        self.resume_from_at: datetime | None = None
         self.redis = Redis.from_url(
             getattr(settings, "redis_url", "redis://localhost:6379/0"),
             decode_responses=True,
@@ -91,6 +92,12 @@ class GoldieApiClient:
         )
         self.feed_id = uuid.UUID(result["feed"]["id"])
         self.agent_id = uuid.UUID(result["agent"]["id"])
+        resume_from = result["feed"].get("resume_from_at")
+        self.resume_from_at = (
+            datetime.fromisoformat(resume_from.replace("Z", "+00:00"))
+            if resume_from
+            else None
+        )
         value = result.get("latest_candle_at")
         if not value:
             return None
@@ -244,8 +251,13 @@ class GoldieApiClient:
         }
         if self.ingestion_transport == "redis":
             try:
+                stream = (
+                    "goldie:ingestion:quotes:v2"
+                    if event_type == "quote_batch"
+                    else "goldie:ingestion:candles:v2"
+                )
                 self.redis.xadd(
-                    "goldie:ingestion:v1",
+                    stream,
                     {
                         "schema_version": "1",
                         "event_id": str(event_id),

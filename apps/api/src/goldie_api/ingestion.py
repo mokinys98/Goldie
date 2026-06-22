@@ -2,16 +2,29 @@ import uuid
 from datetime import UTC, datetime
 
 from fastapi import HTTPException
-from sqlalchemy import desc, select, update
+from goldie_domain import BotConfiguration, get_strategy
+from sqlalchemy import and_, desc, select, update
 from sqlalchemy.dialects.postgresql import insert as postgresql_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import Session
 
 from .db import SessionLocal
-from .models import Agent, Bot, Candle, IngestionEvent, MarketFeed, MarketTick
+from .models import (
+    Agent,
+    Bot,
+    Candle,
+    ConfigVersion,
+    IngestionEvent,
+    InstrumentSpecification,
+    MarketFeed,
+    MarketTick,
+    Run,
+    Signal,
+    SignalOutcome,
+)
 from .realtime import invalidate_collector_overview
 from .schemas import FeedCandleBatch, FeedQuoteBatch
-from .services import evaluate_latest_signal
+from .services import as_utc, evaluate_signal_from_context
 from .shadow import create_signal_outcome, evaluate_open_outcome
 
 
@@ -73,6 +86,20 @@ def _complete_event(db: Session, event_id: uuid.UUID, result: dict) -> None:
     )
 
 
+def _paused_result(event_id: uuid.UUID, item_count: int) -> tuple[dict, dict]:
+    return (
+        {
+            "accepted": False,
+            "dropped": True,
+            "reason": "FEED_PAUSED",
+            "count": 0,
+            "dropped_count": item_count,
+            "event_id": str(event_id),
+        },
+        {},
+    )
+
+
 def ingest_quote_batch(
     db: Session,
     feed_id: uuid.UUID,
@@ -83,6 +110,8 @@ def ingest_quote_batch(
     if existing is not None:
         return existing, {}
     feed, _ = _feed_and_agent(db, feed_id, payload.agent_id)
+    if feed.status == "PAUSED" or feed.paused_at is not None:
+        return _paused_result(event_id, len(payload.quotes))
     sent_at = (payload.sent_at or datetime.now(UTC)).astimezone(UTC)
     claimed = _claim_event(
         db,
@@ -95,7 +124,27 @@ def ingest_quote_batch(
     )
     if not claimed:
         return _existing_result(db, event_id) or {"duplicate_event": True}, {}
-    bots = list(db.scalars(select(Bot).where(Bot.market_feed_id == feed.id)))
+    runtime_rows = list(
+        db.execute(
+            select(Bot, SignalOutcome, ConfigVersion)
+            .join(SignalOutcome, SignalOutcome.bot_id == Bot.id)
+            .join(Run, Run.id == SignalOutcome.run_id)
+            .join(ConfigVersion, ConfigVersion.id == SignalOutcome.config_version_id)
+            .where(
+                Bot.market_feed_id == feed.id,
+                Bot.archived_at.is_(None),
+                Bot.state == "MONITORING",
+                SignalOutcome.status == "OPEN",
+                Run.status == "ACTIVE",
+                ConfigVersion.status == "ACTIVE",
+            )
+        )
+    )
+    spec = db.scalar(
+        select(InstrumentSpecification)
+        .where(InstrumentSpecification.market_feed_id == feed.id)
+        .order_by(desc(InstrumentSpecification.updated_at))
+    )
     for quote in payload.quotes:
         if quote.ask < quote.bid:
             raise HTTPException(status_code=422, detail="Ask cannot be lower than bid")
@@ -110,9 +159,16 @@ def ingest_quote_batch(
             ask=quote.ask,
         )
         db.add(tick)
-        db.flush()
-        for bot in bots:
-            evaluate_open_outcome(db, bot, tick)
+        if spec is not None:
+            for bot, outcome, config in runtime_rows:
+                evaluate_open_outcome(
+                    db,
+                    bot,
+                    tick,
+                    loaded_outcome=outcome,
+                    loaded_config=config,
+                    loaded_spec=spec,
+                )
     result = {
         "accepted": True,
         "count": len(payload.quotes),
@@ -124,7 +180,7 @@ def ingest_quote_batch(
         "event_type": "market.quote",
         "occurred_at": datetime.now(UTC).isoformat(),
         "market_feed_id": str(feed.id),
-        "bot_instance_ids": [str(bot.id) for bot in bots],
+        "bot_instance_ids": [str(bot.id) for bot, _, _ in runtime_rows],
         "data": {
             "symbol": feed.canonical_symbol,
             "observed_at": latest.observed_at.isoformat(),
@@ -145,6 +201,8 @@ def ingest_candle_batch(
     if existing is not None:
         return existing, {}
     feed, _ = _feed_and_agent(db, feed_id, payload.agent_id)
+    if feed.status == "PAUSED" or feed.paused_at is not None:
+        return _paused_result(event_id, len(payload.candles))
     sent_at = (payload.sent_at or datetime.now(UTC)).astimezone(UTC)
     claimed = _claim_event(
         db,
@@ -202,24 +260,100 @@ def ingest_candle_batch(
         accepted = len(list(db.scalars(statement)))
     signal_ids: list[str] = []
     if accepted:
-        bots = list(db.scalars(
-            select(Bot).where(
-                Bot.market_feed_id == feed.id,
-                Bot.active_config_version_id.is_not(None),
+        runtime_rows = list(
+            db.execute(
+                select(Bot, ConfigVersion, Run)
+                .join(ConfigVersion, ConfigVersion.id == Bot.active_config_version_id)
+                .join(
+                    Run,
+                    and_(
+                        Run.bot_id == Bot.id,
+                        Run.config_version_id == ConfigVersion.id,
+                    ),
+                )
+                .where(
+                    Bot.market_feed_id == feed.id,
+                    Bot.archived_at.is_(None),
+                    Bot.state == "MONITORING",
+                    ConfigVersion.status == "ACTIVE",
+                    Run.status == "ACTIVE",
+                )
             )
-        ))
-        for bot in bots:
-            signal, created = evaluate_latest_signal(db, bot)
+        )
+        tick = db.scalar(
+            select(MarketTick)
+            .where(MarketTick.market_feed_id == feed.id)
+            .order_by(desc(MarketTick.observed_at))
+        )
+        spec = db.scalar(
+            select(InstrumentSpecification)
+            .where(InstrumentSpecification.market_feed_id == feed.id)
+            .order_by(desc(InstrumentSpecification.updated_at))
+        )
+        prepared: list[tuple[Bot, ConfigVersion, Run, str, int]] = []
+        max_required: dict[str, int] = {}
+        for bot, config_row, run in runtime_rows:
+            config = BotConfiguration.model_validate(config_row.config)
+            strategy = get_strategy(config.strategy.name)
+            required = strategy.required_candles(
+                strategy.parameters_model.model_validate(config.strategy.parameters)
+            )
+            timeframe = config.market.timeframe
+            prepared.append((bot, config_row, run, timeframe, required))
+            max_required[timeframe] = max(max_required.get(timeframe, 0), required)
+        candles_by_timeframe = {
+            timeframe: list(
+                db.scalars(
+                    select(Candle)
+                    .where(
+                        Candle.market_feed_id == feed.id,
+                        Candle.symbol == feed.canonical_symbol,
+                        Candle.timeframe == timeframe,
+                        Candle.is_complete.is_(True),
+                    )
+                    .order_by(desc(Candle.opened_at))
+                    .limit(required)
+                )
+            )
+            for timeframe, required in max_required.items()
+        }
+        latest_times = {
+            max(as_utc(row.opened_at) for row in rows)
+            for rows in candles_by_timeframe.values()
+            if rows
+        }
+        bot_ids = [bot.id for bot, _, _, _, _ in prepared]
+        duplicates = {
+            (signal.bot_id, signal.run_id, as_utc(signal.observed_at)): signal
+            for signal in db.scalars(
+                select(Signal).where(
+                    Signal.bot_id.in_(bot_ids),
+                    Signal.observed_at.in_(latest_times),
+                )
+            )
+        } if bot_ids and latest_times else {}
+        bots = [bot for bot, _, _, _, _ in prepared]
+        for bot, config_row, run, timeframe, required in prepared:
+            rows = candles_by_timeframe.get(timeframe, [])[:required]
+            if not rows or tick is None or spec is None:
+                continue
+            latest_at = max(as_utc(row.opened_at) for row in rows)
+            signal = duplicates.get((bot.id, run.id, latest_at))
+            created = False
+            if signal is None:
+                signal, created = evaluate_signal_from_context(
+                    db,
+                    bot=bot,
+                    config_row=config_row,
+                    active_run=run,
+                    tick=tick,
+                    spec=spec,
+                    rows=rows,
+                )
             if signal is not None:
                 signal_ids.append(str(signal.id))
             if created and signal is not None:
-                tick = db.scalar(
-                    select(MarketTick)
-                    .where(MarketTick.market_feed_id == feed.id)
-                    .order_by(desc(MarketTick.observed_at))
-                )
-                if tick is not None:
-                    create_signal_outcome(db, signal, tick)
+                create_signal_outcome(db, signal, tick)
     result = {
         "accepted": True,
         "count": accepted,

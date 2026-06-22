@@ -8,11 +8,10 @@ os.environ["LOCAL_ADMIN_EMAIL"] = "admin@test.local"
 os.environ["LOCAL_ADMIN_PASSWORD"] = "test-password"
 os.environ["AGENT_SERVICE_TOKEN"] = "test-agent-token"
 
-from goldie_api.db import Base, engine
-from goldie_api.ingestion import process_quote_batch
-from goldie_api.models import Agent, IngestionEvent, MarketFeed, MarketTick
-from goldie_api.schemas import FeedQuoteBatch
-from goldie_api.db import SessionLocal
+from goldie_api.db import Base, SessionLocal, engine
+from goldie_api.ingestion import process_candle_batch, process_quote_batch
+from goldie_api.models import Agent, Candle, IngestionEvent, MarketFeed, MarketTick
+from goldie_api.schemas import FeedCandleBatch, FeedQuoteBatch
 from sqlalchemy import func, select
 
 
@@ -66,3 +65,54 @@ def test_quote_event_is_idempotent() -> None:
     with SessionLocal() as db:
         assert db.scalar(select(func.count(MarketTick.id))) == 1
         assert db.scalar(select(func.count(IngestionEvent.event_id))) == 1
+
+
+def test_paused_feed_drops_quotes_and_candles_without_persistence() -> None:
+    feed_id, agent_id = registered_feed()
+    now = datetime.now(UTC).replace(second=0, microsecond=0)
+    with SessionLocal() as db:
+        feed = db.get(MarketFeed, feed_id)
+        feed.status = "PAUSED"
+        feed.paused_at = now
+        db.commit()
+
+    quote_result, quote_event = process_quote_batch(
+        feed_id,
+        FeedQuoteBatch.model_validate(
+            {
+                "event_id": uuid.uuid4(),
+                "agent_id": agent_id,
+                "sent_at": now,
+                "quotes": [{"observed_at": now, "bid": "1.08", "ask": "1.081"}],
+            }
+        ),
+    )
+    candle_result, candle_event = process_candle_batch(
+        feed_id,
+        FeedCandleBatch.model_validate(
+            {
+                "event_id": uuid.uuid4(),
+                "agent_id": agent_id,
+                "sent_at": now,
+                "candles": [
+                    {
+                        "opened_at": now,
+                        "open": "1.08",
+                        "high": "1.09",
+                        "low": "1.07",
+                        "close": "1.085",
+                        "volume": 10,
+                        "complete": True,
+                    }
+                ],
+            }
+        ),
+    )
+
+    assert quote_result["reason"] == "FEED_PAUSED"
+    assert candle_result["reason"] == "FEED_PAUSED"
+    assert quote_event == candle_event == {}
+    with SessionLocal() as db:
+        assert db.scalar(select(func.count(MarketTick.id))) == 0
+        assert db.scalar(select(func.count(Candle.id))) == 0
+        assert db.scalar(select(func.count(IngestionEvent.event_id))) == 0
