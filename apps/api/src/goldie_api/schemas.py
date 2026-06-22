@@ -277,7 +277,7 @@ class CollectorSettingsValues(BaseModel):
     candle_poll_seconds: Decimal = Field(default=15, ge=5, le=300)
     heartbeat_seconds: Decimal = Field(default=10, ge=5, le=300)
     backfill_days: int = Field(default=30, ge=1, le=365)
-    backfill_batch_size: int = Field(default=250, ge=50, le=1000)
+    backfill_batch_size: int = Field(default=50, ge=50, le=1000)
     configuration_retry_seconds: Decimal = Field(default=900, ge=60, le=86400)
 
 

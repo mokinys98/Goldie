@@ -12,6 +12,8 @@ from redis.exceptions import RedisError
 from .models import Candle, Instrument, Quote
 from .settings import CollectorSettings
 
+MAX_HTTP_CANDLE_BATCH_SIZE = 50
+
 
 class GoldieApiClient:
     def __init__(self, settings: CollectorSettings) -> None:
@@ -37,12 +39,19 @@ class GoldieApiClient:
         self.collector_id = uuid.UUID(str(collector_id)) if collector_id else None
 
     def post(self, path: str, payload: dict[str, Any]) -> dict:
-        response = requests.post(
-            f"{self.base_url}{path}",
-            json=payload,
-            headers=self.headers,
-            timeout=self.timeout,
-        )
+        try:
+            response = requests.post(
+                f"{self.base_url}{path}",
+                json=payload,
+                headers=self.headers,
+                timeout=self.timeout,
+            )
+        except requests.Timeout as exc:
+            raise TimeoutError(
+                f"Goldie API request timed out after {self.timeout}s for {path}"
+            ) from exc
+        except requests.RequestException as exc:
+            raise RuntimeError(f"Goldie API request failed for {path}: {exc}") from exc
         try:
             response.raise_for_status()
         except requests.HTTPError as exc:
@@ -206,14 +215,19 @@ class GoldieApiClient:
         if not candles:
             return {"accepted": True, "count": 0, "duplicates": 0}
         accepted = 0
-        for index in range(0, len(candles), self.candle_batch_size):
-            batch = candles[index : index + self.candle_batch_size]
+        duplicates = 0
+        batch_size = self.candle_batch_size
+        if self.ingestion_transport == "http":
+            batch_size = min(batch_size, MAX_HTTP_CANDLE_BATCH_SIZE)
+        for index in range(0, len(candles), batch_size):
+            batch = candles[index : index + batch_size]
             result = self._send_batch("candle_batch", batch)
             accepted += int(result.get("count", len(batch)))
+            duplicates += int(result.get("duplicates", 0))
         return {
             "accepted": True,
             "count": accepted,
-            "duplicates": max(0, len(candles) - accepted),
+            "duplicates": duplicates or max(0, len(candles) - accepted),
         }
 
     def _send_batch(self, event_type: str, items: list[Quote] | list[Candle]) -> dict:
@@ -250,4 +264,13 @@ class GoldieApiClient:
                     exc_info=True,
                 )
         path = "quotes" if event_type == "quote_batch" else "candles"
-        return self.post(f"/api/v1/market-feeds/{feed_id}/{path}/batch", payload)
+        try:
+            return self.post(f"/api/v1/market-feeds/{feed_id}/{path}/batch", payload)
+        except Exception:
+            logging.getLogger(__name__).warning(
+                "HTTP ingestion failed for %s batch of %s items via %s transport",
+                path,
+                len(items),
+                self.ingestion_transport,
+            )
+            raise
