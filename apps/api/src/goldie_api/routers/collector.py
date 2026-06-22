@@ -182,6 +182,7 @@ def feed_summary(db: Session, feed: MarketFeed, now: datetime) -> dict:
         select(MarketTick)
         .where(MarketTick.market_feed_id == feed.id)
         .order_by(desc(MarketTick.observed_at))
+        .limit(1)
     )
     candle = db.scalar(
         select(Candle)
@@ -191,6 +192,7 @@ def feed_summary(db: Session, feed: MarketFeed, now: datetime) -> dict:
             Candle.is_complete.is_(True),
         )
         .order_by(desc(Candle.opened_at))
+        .limit(1)
     )
     earliest_candle_at = db.scalar(
         select(func.min(Candle.opened_at)).where(
@@ -570,6 +572,7 @@ def feed_detail(
         select(Agent)
         .where(Agent.market_feed_id == feed.id)
         .order_by(desc(Agent.updated_at))
+        .limit(1)
     )
     instrument = db.scalar(
         select(CollectorInstrumentConfiguration).where(
