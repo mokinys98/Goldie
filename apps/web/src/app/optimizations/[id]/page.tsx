@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { api } from "@/lib/api";
 import { normalizeBotConfig } from "@/lib/config";
 import type {
@@ -24,6 +24,7 @@ export default function OptimizationDetailPage() {
   const [exportBusy, setExportBusy] = useState(false);
   const [exportMessage, setExportMessage] = useState<string | null>(null);
   const [exportError, setExportError] = useState<string | null>(null);
+  const downloadMenuRef = useRef<HTMLDetailsElement>(null);
   const run = useQuery({
     queryKey: ["optimization", id],
     queryFn: () => api<OptimizationRun>(`/api/v1/optimizations/${id}`),
@@ -170,7 +171,7 @@ export default function OptimizationDetailPage() {
   async function copyResultsToClipboard() {
     try {
       const payload = await loadExport();
-      await navigator.clipboard.writeText(JSON.stringify(payload, null, 2));
+      await writeClipboardText(JSON.stringify(payload, null, 2));
       setExportMessage(`Copied ${payload.trials.length} trials to clipboard.`);
     } catch (reason) {
       if (!exportError) {
@@ -198,13 +199,18 @@ export default function OptimizationDetailPage() {
   async function copyLlmContextToClipboard() {
     try {
       const payload = await loadLlmContext();
-      await navigator.clipboard.writeText(JSON.stringify(payload, null, 2));
+      await writeClipboardText(JSON.stringify(payload, null, 2));
       setExportMessage(`Copied LLM context with ${payload.top_trials.length} top trials.`);
     } catch (reason) {
       if (!exportError) {
         setExportError(reason instanceof Error ? reason.message : "Could not copy LLM context");
       }
     }
+  }
+
+  function runDownloadMenuAction(action: () => Promise<void>) {
+    downloadMenuRef.current?.removeAttribute("open");
+    void action();
   }
 
   return (
@@ -220,34 +226,48 @@ export default function OptimizationDetailPage() {
         </div>
         <div className="button-row">
           <StatusPill value={data.status} />
-          <button
-            className="button button-secondary"
-            disabled={exportBusy}
-            onClick={() => void exportResultsToJson()}
-          >
-            {exportBusy ? "Preparing results..." : "Export Results to JSON"}
-          </button>
-          <button
-            className="button button-secondary"
-            disabled={exportBusy}
-            onClick={() => void copyResultsToClipboard()}
-          >
-            Copy results in clipboard
-          </button>
-          <button
-            className="button button-secondary"
-            disabled={exportBusy}
-            onClick={() => void exportLlmContextToJson()}
-          >
-            Export LLM context
-          </button>
-          <button
-            className="button button-secondary"
-            disabled={exportBusy}
-            onClick={() => void copyLlmContextToClipboard()}
-          >
-            Copy LLM context
-          </button>
+          <details className="download-menu" ref={downloadMenuRef}>
+            <summary
+              aria-label={exportBusy ? "Preparing download options" : "Download optimization data"}
+              className="button button-secondary download-menu-trigger"
+            >
+              {exportBusy ? "Preparing..." : "Download"}
+              <span aria-hidden="true">v</span>
+            </summary>
+            <div className="download-menu-panel">
+              <span className="download-menu-heading">Download as...</span>
+              <button
+                disabled={exportBusy}
+                onClick={() => runDownloadMenuAction(exportResultsToJson)}
+                type="button"
+              >
+                Results JSON
+              </button>
+              <button
+                disabled={exportBusy}
+                onClick={() => runDownloadMenuAction(exportLlmContextToJson)}
+                type="button"
+              >
+                LLM context JSON
+              </button>
+              <span className="download-menu-divider" />
+              <span className="download-menu-heading">Copy as...</span>
+              <button
+                disabled={exportBusy}
+                onClick={() => runDownloadMenuAction(copyResultsToClipboard)}
+                type="button"
+              >
+                Results JSON
+              </button>
+              <button
+                disabled={exportBusy}
+                onClick={() => runDownloadMenuAction(copyLlmContextToClipboard)}
+                type="button"
+              >
+                LLM context JSON
+              </button>
+            </div>
+          </details>
           <button
             className="button button-primary"
             disabled={!canApplyBest}
@@ -568,6 +588,32 @@ function formatEvidence(evidence: Record<string, unknown>): string {
   return Object.entries(evidence)
     .map(([key, value]) => `${formatGateName(key)}: ${String(value)}`)
     .join(", ");
+}
+
+async function writeClipboardText(value: string): Promise<void> {
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(value);
+    return;
+  }
+
+  const textarea = document.createElement("textarea");
+  textarea.value = value;
+  textarea.setAttribute("readonly", "");
+  textarea.style.position = "fixed";
+  textarea.style.left = "-9999px";
+  textarea.style.top = "0";
+  document.body.appendChild(textarea);
+  textarea.focus();
+  textarea.select();
+
+  try {
+    const copied = document.execCommand?.("copy") ?? false;
+    if (!copied) {
+      throw new Error("Clipboard is unavailable in this browser.");
+    }
+  } finally {
+    textarea.remove();
+  }
 }
 
 function exportFilename(strategy: string, symbol: string, optimizationId: string): string {

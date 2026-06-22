@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OptimizationRun } from "@/lib/types";
 import OptimizationDetailPage from "./page";
@@ -129,15 +129,50 @@ describe("OptimizationDetailPage", () => {
     expect(screen.getAllByText("37.5").length).toBeGreaterThan(0);
   });
 
-  it("offers JSON export and clipboard actions", () => {
+  it("groups JSON export and clipboard actions under the download menu", () => {
     render(<OptimizationDetailPage />);
 
+    fireEvent.click(screen.getByLabelText("Download optimization data"));
+
     expect(
-      screen.getAllByRole("button", { name: "Export Results to JSON" }).at(-1),
+      screen.getAllByRole("button", { name: "Results JSON" }).at(0),
     ).toBeEnabled();
     expect(
-      screen.getAllByRole("button", { name: "Copy results in clipboard" }).at(-1),
+      screen.getAllByRole("button", { name: "LLM context JSON" }).at(0),
     ).toBeEnabled();
+    expect(
+      screen.getAllByRole("button", { name: "Results JSON" }).at(1),
+    ).toBeEnabled();
+    expect(
+      screen.getAllByRole("button", { name: "LLM context JSON" }).at(1),
+    ).toBeEnabled();
+  });
+
+  it("copies results with the fallback clipboard path when Clipboard API is unavailable", async () => {
+    const clipboardDescriptor = Object.getOwnPropertyDescriptor(navigator, "clipboard");
+    const execCommandDescriptor = Object.getOwnPropertyDescriptor(document, "execCommand");
+    Object.defineProperty(navigator, "clipboard", { configurable: true, value: undefined });
+    Object.defineProperty(document, "execCommand", { configurable: true, value: vi.fn(() => true) });
+    const execCommand = vi.spyOn(document, "execCommand").mockReturnValue(true);
+    api.mockResolvedValueOnce({ trials: [{ id: "trial-1" }] });
+    render(<OptimizationDetailPage />);
+
+    fireEvent.click(screen.getByLabelText("Download optimization data"));
+    fireEvent.click(screen.getAllByRole("button", { name: "Results JSON" }).at(1)!);
+
+    await waitFor(() => {
+      expect(screen.getByText("Copied 1 trials to clipboard.")).toBeInTheDocument();
+    });
+    expect(execCommand).toHaveBeenCalledWith("copy");
+
+    if (clipboardDescriptor) {
+      Object.defineProperty(navigator, "clipboard", clipboardDescriptor);
+    }
+    if (execCommandDescriptor) {
+      Object.defineProperty(document, "execCommand", execCommandDescriptor);
+    } else {
+      Reflect.deleteProperty(document, "execCommand");
+    }
   });
 
   it("renders research readiness gates", () => {

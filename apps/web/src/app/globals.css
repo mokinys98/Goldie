@@ -49,6 +49,17 @@ button { cursor: pointer; }
 .button-danger { border-color: #74343b; background: #2b151a; color: #ffabb2; }
 .button-ghost { padding-left: 0; color: var(--muted); }
 .button:disabled { opacity: .55; cursor: not-allowed; }
+.download-menu { position: relative; }
+.download-menu summary { list-style: none; }
+.download-menu summary::-webkit-details-marker { display: none; }
+.download-menu-trigger { display: inline-flex; align-items: center; gap: 8px; user-select: none; }
+.download-menu-trigger span { color: var(--muted); font-size: 11px; line-height: 1; }
+.download-menu-panel { position: absolute; z-index: 50; right: 0; top: calc(100% + 8px); width: min(230px, calc(100vw - 36px)); padding: 12px 0; border: 1px solid var(--line); border-radius: 8px; background: #0f1019; box-shadow: 0 18px 50px #000b; }
+.download-menu-heading { display: block; padding: 8px 16px; color: #b4adbd; font-size: 12px; font-weight: 800; }
+.download-menu-panel button { width: 100%; min-height: 38px; padding: 9px 16px; border: 0; background: transparent; color: #d5d0dc; text-align: left; font-weight: 750; }
+.download-menu-panel button:hover:not(:disabled), .download-menu-panel button:focus-visible { background: #191621; color: var(--text); outline: none; }
+.download-menu-panel button:disabled { opacity: .55; cursor: not-allowed; }
+.download-menu-divider { display: block; height: 1px; margin: 10px 12px; background: var(--line); }
 
 .panel, .metric-card, .table-wrap, .empty-state { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; }
 .panel { padding: 22px; }

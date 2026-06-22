@@ -1,14 +1,13 @@
 const DEFAULT_API_URL = "https://goldie-api-production.up.railway.app";
 const DEFAULT_WS_URL = "wss://goldie-api-production.up.railway.app";
 
-export const API_URL = (
-  process.env.NODE_ENV === "development"
-    ? ""
-    : process.env.NEXT_PUBLIC_API_URL ?? DEFAULT_API_URL
-).replace(
-  /\/+$/,
-  "",
-);
+function publicUrl(value: string | undefined, fallback: string): string {
+  return (value?.trim() || fallback).replace(/\/+$/, "");
+}
+
+export const API_URL = process.env.NODE_ENV === "development"
+  ? ""
+  : publicUrl(process.env.NEXT_PUBLIC_API_URL, DEFAULT_API_URL);
 
 export class ApiError extends Error {
   constructor(
@@ -73,10 +72,7 @@ export function openBotStream(
   onEvent: () => void,
 ): () => void {
   const token = getToken();
-  const base = (process.env.NEXT_PUBLIC_WS_URL ?? DEFAULT_WS_URL).replace(
-    /\/+$/,
-    "",
-  );
+  const base = publicUrl(process.env.NEXT_PUBLIC_WS_URL, DEFAULT_WS_URL);
   if (!token) return () => undefined;
   const socket = new WebSocket(
     `${base}/api/v1/stream?token=${encodeURIComponent(token)}`,
@@ -112,10 +108,7 @@ export function openCollectorStream(
   onEvent: (event: CollectorStreamEvent) => void,
 ): () => void {
   const token = getToken();
-  const base = (process.env.NEXT_PUBLIC_WS_URL ?? DEFAULT_WS_URL).replace(
-    /\/+$/,
-    "",
-  );
+  const base = publicUrl(process.env.NEXT_PUBLIC_WS_URL, DEFAULT_WS_URL);
   if (!token) return () => undefined;
   const socket = new WebSocket(
     `${base}/api/v1/stream?token=${encodeURIComponent(token)}`,
