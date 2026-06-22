@@ -161,6 +161,15 @@ def pine_config() -> BotConfiguration:
     )
 
 
+def pine_config_with(**parameters) -> BotConfiguration:
+    config = pine_config()
+    config.strategy.parameters = {
+        **config.strategy.parameters,
+        **parameters,
+    }
+    return BotConfiguration.model_validate(config.model_dump(mode="json"))
+
+
 def test_pine_port_generates_band_cross_signals() -> None:
     strategy = get_strategy("pine_bb_rsi_stoch")
 
@@ -173,6 +182,24 @@ def test_pine_port_generates_band_cross_signals() -> None:
     assert sell.signal == "SELL"
     assert sell.reason_code == "PINE_BB_RSI_STOCH_SELL"
     assert no_trade.signal == "NO_TRADE"
+
+
+def test_pine_direction_filter_blocks_opposite_side() -> None:
+    strategy = get_strategy("pine_bb_rsi_stoch")
+
+    buy_disabled = strategy.evaluate(
+        market(["10", "10", "10", "0"]),
+        pine_config_with(trade_direction="SELL_ONLY"),
+    )
+    sell_disabled = strategy.evaluate(
+        market(["10", "10", "10", "20"]),
+        pine_config_with(trade_direction="BUY_ONLY"),
+    )
+
+    assert buy_disabled.signal == "NO_TRADE"
+    assert buy_disabled.reason_code == "PINE_BB_RSI_STOCH_BUY_DISABLED"
+    assert sell_disabled.signal == "NO_TRADE"
+    assert sell_disabled.reason_code == "PINE_BB_RSI_STOCH_SELL_DISABLED"
 
 
 def test_pine_parameters_defaults_bounds_and_required_candles() -> None:

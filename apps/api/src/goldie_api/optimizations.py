@@ -137,8 +137,13 @@ def build_search_space(config: BotConfiguration) -> list[dict[str, Any]]:
             parameter["choices"] = [True, False]
             search_space.append(parameter)
             continue
-        minimum = field.get("minimum", field.get("exclusiveMinimum"))
-        maximum = field.get("maximum")
+        uses_optimization_minimum = "optimization_minimum" in field
+        minimum = (
+            field["optimization_minimum"]
+            if uses_optimization_minimum
+            else field.get("minimum", field.get("exclusiveMinimum"))
+        )
+        maximum = field.get("optimization_maximum", field.get("maximum"))
         if (
             field.get("type") in {"integer", "number"}
             and minimum is not None
@@ -146,7 +151,7 @@ def build_search_space(config: BotConfiguration) -> list[dict[str, Any]]:
         ):
             parameter["minimum"] = minimum
             parameter["maximum"] = maximum
-            if "exclusiveMinimum" in field:
+            if "exclusiveMinimum" in field and not uses_optimization_minimum:
                 parameter["exclusive_minimum"] = field["exclusiveMinimum"]
             if name in defaults:
                 parameter["default"] = defaults[name]
@@ -198,6 +203,12 @@ def sample_parameters(
                 else float(parameter["exclusive_minimum"]) + 1e-9
             )
         upper = parameter["maximum"]
+        if parameter["type"] == "integer":
+            lower = int(lower)
+            upper = int(upper)
+        else:
+            lower = float(lower)
+            upper = float(upper)
         if name == "medium_ema_period" and "fast_ema_period" in sampled:
             lower = max(lower, int(sampled["fast_ema_period"]) + 1)
         elif name == "slow_ema_period":

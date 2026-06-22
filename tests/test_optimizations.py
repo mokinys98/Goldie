@@ -284,6 +284,18 @@ def test_pine_search_space_and_samples_are_always_valid() -> None:
     search_space = build_search_space(config)
 
     assert {item["name"] for item in search_space} == set(defaults)
+    by_name = {item["name"]: item for item in search_space}
+    assert by_name["bollinger_period"]["minimum"] == 20
+    assert by_name["bollinger_period"]["maximum"] == 120
+    assert by_name["rsi_oversold"]["minimum"] == "20"
+    assert by_name["rsi_oversold"]["maximum"] == "40"
+    assert by_name["rsi_overbought"]["minimum"] == "60"
+    assert by_name["rsi_overbought"]["maximum"] == "80"
+    assert by_name["stochastic_oversold"]["minimum"] == "10"
+    assert by_name["stochastic_oversold"]["maximum"] == "30"
+    assert by_name["stochastic_overbought"]["minimum"] == "70"
+    assert by_name["stochastic_overbought"]["maximum"] == "90"
+    assert by_name["trade_direction"]["choices"] == ["BOTH", "BUY_ONLY", "SELL_ONLY"]
     for index in range(101):
         sampled = sample_parameters(
             FractionTrial(index / 100),

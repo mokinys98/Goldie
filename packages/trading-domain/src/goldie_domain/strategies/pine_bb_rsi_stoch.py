@@ -2,7 +2,7 @@ from collections import deque
 from datetime import datetime
 from decimal import Decimal
 from math import sqrt
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -20,14 +20,21 @@ def _decimal_field(
     description: str,
     unit: str,
     impact: str,
+    optimization_minimum: str | int | None = None,
+    optimization_maximum: str | int | None = None,
 ) -> Any:
+    extra: dict[str, Any] = {"unit": unit, "impact": impact}
+    if optimization_minimum is not None:
+        extra["optimization_minimum"] = optimization_minimum
+    if optimization_maximum is not None:
+        extra["optimization_maximum"] = optimization_maximum
     return Field(
         default=Decimal(default),
         ge=ge,
         gt=gt,
         le=le,
         description=description,
-        json_schema_extra={"unit": unit, "impact": impact},
+        json_schema_extra=extra,
     )
 
 
@@ -42,6 +49,8 @@ class PineBollingerRsiStochParameters(BaseModel):
         json_schema_extra={
             "unit": "candles",
             "impact": "Higher values smooth and delay band changes.",
+            "optimization_minimum": 20,
+            "optimization_maximum": 120,
         },
     )
     bollinger_deviations: Decimal = _decimal_field(
@@ -51,6 +60,8 @@ class PineBollingerRsiStochParameters(BaseModel):
         description="Bollinger standard-deviation multiplier.",
         unit="standard deviations",
         impact="Higher values widen the bands and reduce crossings.",
+        optimization_minimum="1.5",
+        optimization_maximum="3.2",
     )
     rsi_period: int = Field(
         default=14,
@@ -60,6 +71,8 @@ class PineBollingerRsiStochParameters(BaseModel):
         json_schema_extra={
             "unit": "candles",
             "impact": "Higher values make RSI less responsive.",
+            "optimization_minimum": 7,
+            "optimization_maximum": 35,
         },
     )
     rsi_overbought: Decimal = _decimal_field(
@@ -69,6 +82,8 @@ class PineBollingerRsiStochParameters(BaseModel):
         description="Minimum RSI for a top signal.",
         unit="RSI",
         impact="Higher values make RSI sell confirmation stricter.",
+        optimization_minimum="60",
+        optimization_maximum="80",
     )
     rsi_oversold: Decimal = _decimal_field(
         "30",
@@ -77,6 +92,8 @@ class PineBollingerRsiStochParameters(BaseModel):
         description="Maximum RSI for a bottom signal.",
         unit="RSI",
         impact="Lower values make RSI buy confirmation stricter.",
+        optimization_minimum="20",
+        optimization_maximum="40",
     )
     stochastic_period: int = Field(
         default=14,
@@ -86,6 +103,8 @@ class PineBollingerRsiStochParameters(BaseModel):
         json_schema_extra={
             "unit": "candles",
             "impact": "Higher values compare price with a longer range.",
+            "optimization_minimum": 7,
+            "optimization_maximum": 40,
         },
     )
     stochastic_overbought: Decimal = _decimal_field(
@@ -95,6 +114,8 @@ class PineBollingerRsiStochParameters(BaseModel):
         description="Minimum smoothed %K for bearish crossover confirmation.",
         unit="stochastic",
         impact="Higher values make sell confirmation stricter.",
+        optimization_minimum="70",
+        optimization_maximum="90",
     )
     stochastic_oversold: Decimal = _decimal_field(
         "20",
@@ -103,6 +124,8 @@ class PineBollingerRsiStochParameters(BaseModel):
         description="Maximum smoothed %K for bullish crossover confirmation.",
         unit="stochastic",
         impact="Lower values make buy confirmation stricter.",
+        optimization_minimum="10",
+        optimization_maximum="30",
     )
     smooth_k: int = Field(
         default=3,
@@ -112,6 +135,8 @@ class PineBollingerRsiStochParameters(BaseModel):
         json_schema_extra={
             "unit": "candles",
             "impact": "Higher values smooth stochastic signals.",
+            "optimization_minimum": 2,
+            "optimization_maximum": 8,
         },
     )
     smooth_d: int = Field(
@@ -122,6 +147,16 @@ class PineBollingerRsiStochParameters(BaseModel):
         json_schema_extra={
             "unit": "candles",
             "impact": "Higher values delay stochastic crossovers.",
+            "optimization_minimum": 2,
+            "optimization_maximum": 8,
+        },
+    )
+    trade_direction: Literal["BOTH", "BUY_ONLY", "SELL_ONLY"] = Field(
+        default="BOTH",
+        description="Allowed signal direction for directional robustness tests.",
+        json_schema_extra={
+            "unit": "mode",
+            "impact": "Use BUY_ONLY or SELL_ONLY to isolate asymmetric edge.",
         },
     )
 
@@ -306,8 +341,12 @@ def _decision(
         or (cross_up and current_k < parameters.stochastic_oversold)
     )
     if bottom:
+        if parameters.trade_direction == "SELL_ONLY":
+            return SignalType.NO_TRADE, "PINE_BB_RSI_STOCH_BUY_DISABLED"
         return SignalType.BUY, "PINE_BB_RSI_STOCH_BUY"
     if top:
+        if parameters.trade_direction == "BUY_ONLY":
+            return SignalType.NO_TRADE, "PINE_BB_RSI_STOCH_SELL_DISABLED"
         return SignalType.SELL, "PINE_BB_RSI_STOCH_SELL"
     return SignalType.NO_TRADE, "PINE_BB_RSI_STOCH_CONDITIONS_NOT_MET"
 

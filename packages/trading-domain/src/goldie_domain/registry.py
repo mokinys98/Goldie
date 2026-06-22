@@ -51,6 +51,8 @@ def _parameter_metadata(property_schema: dict[str, Any]) -> dict[str, Any]:
             "unit",
             "impact",
             "enum",
+            "optimization_minimum",
+            "optimization_maximum",
         }
     }
     if "type" not in metadata:
