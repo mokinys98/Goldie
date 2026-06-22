@@ -7,6 +7,7 @@ import { useState } from "react";
 import { api } from "@/lib/api";
 import { normalizeBotConfig } from "@/lib/config";
 import type {
+  OptimizationLlmContext,
   OptimizationResultsExport,
   OptimizationRun,
   OptimizationTrialPage,
@@ -125,6 +126,21 @@ export default function OptimizationDetailPage() {
     }
   }
 
+  async function loadLlmContext(): Promise<OptimizationLlmContext> {
+    setExportBusy(true);
+    setExportMessage(null);
+    setExportError(null);
+    try {
+      return await api<OptimizationLlmContext>(`/api/v1/optimizations/${id}/llm-context`);
+    } catch (reason) {
+      const message = reason instanceof Error ? reason.message : "Could not export LLM context";
+      setExportError(message);
+      throw reason;
+    } finally {
+      setExportBusy(false);
+    }
+  }
+
   async function exportResultsToJson() {
     try {
       const payload = await loadExport();
@@ -149,6 +165,34 @@ export default function OptimizationDetailPage() {
     } catch (reason) {
       if (!exportError) {
         setExportError(reason instanceof Error ? reason.message : "Could not copy results");
+      }
+    }
+  }
+
+  async function exportLlmContextToJson() {
+    try {
+      const payload = await loadLlmContext();
+      const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = llmContextFilename(configSnapshot.strategy.name, configSnapshot.market.symbol, id);
+      anchor.click();
+      URL.revokeObjectURL(url);
+      setExportMessage(`Exported LLM context with ${payload.top_trials.length} top trials.`);
+    } catch {
+      // loadLlmContext exposes the actionable error in the page.
+    }
+  }
+
+  async function copyLlmContextToClipboard() {
+    try {
+      const payload = await loadLlmContext();
+      await navigator.clipboard.writeText(JSON.stringify(payload, null, 2));
+      setExportMessage(`Copied LLM context with ${payload.top_trials.length} top trials.`);
+    } catch (reason) {
+      if (!exportError) {
+        setExportError(reason instanceof Error ? reason.message : "Could not copy LLM context");
       }
     }
   }
@@ -179,6 +223,20 @@ export default function OptimizationDetailPage() {
             onClick={() => void copyResultsToClipboard()}
           >
             Copy results in clipboard
+          </button>
+          <button
+            className="button button-secondary"
+            disabled={exportBusy}
+            onClick={() => void exportLlmContextToJson()}
+          >
+            Export LLM context
+          </button>
+          <button
+            className="button button-secondary"
+            disabled={exportBusy}
+            onClick={() => void copyLlmContextToClipboard()}
+          >
+            Copy LLM context
           </button>
           <button
             className="button button-primary"
@@ -268,6 +326,19 @@ export default function OptimizationDetailPage() {
           <div><dt>Total</dt><dd>{formatSeconds(timings?.total_seconds)}</dd></div>
         </div>
       </div>
+      {(data.summary.data_profile || data.summary.robustness || data.summary.parameter_insights) && (
+        <div className="split-layout collector-section">
+          {data.summary.data_profile && (
+            <JsonPanel title="Data profile" value={data.summary.data_profile} />
+          )}
+          {data.summary.robustness && (
+            <JsonPanel title="Robustness" value={data.summary.robustness} />
+          )}
+          {data.summary.parameter_insights && (
+            <JsonPanel title="Parameter insights" value={data.summary.parameter_insights} />
+          )}
+        </div>
+      )}
       <div className="split-layout collector-section">
         <div className="panel">
           <h2>Best parameters</h2>
@@ -405,6 +476,15 @@ function Metric({ label, value }: { label: string; value: string | number }) {
   return <div className="metric-card"><span>{label}</span><strong>{value}</strong></div>;
 }
 
+function JsonPanel({ title, value }: { title: string; value: unknown }) {
+  return (
+    <div className="panel">
+      <h2>{title}</h2>
+      <pre className="code-block">{JSON.stringify(value, null, 2)}</pre>
+    </div>
+  );
+}
+
 function formatSeconds(value: number | undefined): string {
   return value === undefined ? "--" : `${value.toFixed(6)} s`;
 }
@@ -426,4 +506,9 @@ function formatPeriod(period: { date_from: string; date_to: string }): string {
 function exportFilename(strategy: string, symbol: string, optimizationId: string): string {
   const safe = `${strategy}-${symbol}`.replace(/[^a-zA-Z0-9_-]+/g, "-").toLowerCase();
   return `${safe}-optimization-${optimizationId.slice(0, 8)}.json`;
+}
+
+function llmContextFilename(strategy: string, symbol: string, optimizationId: string): string {
+  const safe = `${strategy}-${symbol}`.replace(/[^a-zA-Z0-9_-]+/g, "-").toLowerCase();
+  return `${safe}-optimization-${optimizationId.slice(0, 8)}-llm-context.json`;
 }

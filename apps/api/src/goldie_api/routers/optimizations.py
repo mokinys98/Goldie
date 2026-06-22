@@ -16,6 +16,7 @@ from ..models import (
     Run,
     User,
 )
+from ..optimization_diagnostics import build_llm_context
 from ..optimization_analysis import build_optimization_export
 from ..schemas import (
     OptimizationCreate,
@@ -164,6 +165,16 @@ def export_optimization_results(
 ) -> dict:
     optimization = get_optimization(db, optimization_id)
     return build_optimization_export(db, optimization)
+
+
+@router.get("/{optimization_id}/llm-context")
+def read_optimization_llm_context(
+    optimization_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    _: User = Depends(get_current_user),
+) -> dict:
+    optimization = get_optimization(db, optimization_id)
+    return build_llm_context(db, optimization)
 
 
 @router.get("/{optimization_id}/trials", response_model=OptimizationTrialPage)

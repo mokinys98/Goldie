@@ -524,6 +524,10 @@ export type OptimizationRun = {
     strategy_failed_trials?: number;
     validation_completed_trials?: number;
     validation_failed_trials?: number;
+    data_profile?: Record<string, unknown>;
+    robustness?: Record<string, unknown>;
+    parameter_insights?: Record<string, unknown>;
+    decision_context?: Record<string, unknown>;
   };
   error: string | null;
   started_at: string | null;
@@ -563,7 +567,7 @@ export type OptimizationTrialPage = {
 };
 
 export type OptimizationResultsExport = {
-  schema_version: "goldie.optimization-results.v1";
+  schema_version: "goldie.optimization-results.v1" | "goldie.optimization-results.v2";
   exported_at: string;
   optimization: Record<string, unknown> & {
     id: string;
@@ -576,4 +580,16 @@ export type OptimizationResultsExport = {
     candidate_validation: Array<Record<string, unknown>>;
   };
   trials: Array<Record<string, unknown>>;
+};
+
+export type OptimizationLlmContext = {
+  schema_version: "goldie.optimization-llm-context.v1";
+  optimization: Record<string, unknown>;
+  run_context: Record<string, unknown>;
+  top_trials: Array<Record<string, unknown>>;
+  worst_trials: Array<Record<string, unknown>>;
+  validation_winners: Array<Record<string, unknown>>;
+  parameter_insights: Record<string, unknown>;
+  robustness: Record<string, unknown>;
+  data_quality_notes: Record<string, unknown>;
 };

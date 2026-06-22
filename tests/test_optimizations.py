@@ -25,6 +25,7 @@ from goldie_api.optimizations import (
     sample_parameters,
     split_optimization_period,
 )
+from goldie_api.optimization_diagnostics import build_backtest_diagnostics
 
 
 def test_optimization_progress_and_cancellation_use_five_trial_batches() -> None:
@@ -184,6 +185,26 @@ def test_compute_balanced_score_penalizes_drawdown_and_low_trade_count() -> None
 def test_compute_balanced_score_rejects_candidate_without_trades() -> None:
     summary = {"net_pnl": "0", "max_drawdown": "0", "total_trades": 0}
     assert compute_balanced_score(summary) == Decimal("-99999")
+
+
+def test_backtest_diagnostics_compacts_trade_behavior() -> None:
+    diagnostics = build_backtest_diagnostics(
+        {
+            "direction_breakdown": {"BUY": {"trades": 2, "net_pnl": "10"}},
+            "close_reason_counts": {"TAKE_PROFIT": 1, "STOP_LOSS": 1},
+            "expectancy_r": "0.25",
+            "total_r": "0.5",
+            "trade_sortino": "1.2",
+            "max_drawdown_pct": "2.5",
+            "average_duration_seconds": "180",
+        },
+        {"NO_TRADE": 20, "TAKE_PROFIT": 1},
+    )
+
+    assert diagnostics["direction_breakdown"]["BUY"]["trades"] == 2
+    assert diagnostics["close_reason_counts"]["STOP_LOSS"] == 1
+    assert diagnostics["reason_counts"]["NO_TRADE"] == 20
+    assert diagnostics["trade_quality"]["expectancy_r"] == "0.25"
 
 
 class BoundaryTrial:
@@ -362,6 +383,11 @@ def test_optimization_api_and_execution_flow(monkeypatch) -> None:
         assert all(value >= 0 for value in timings.values())
         assert detail.json()["summary"]["failed_trials"] == 2
         assert detail.json()["summary"]["validation_failed_trials"] == 1
+        assert detail.json()["summary"]["data_profile"]["search_candles"] == 320
+        assert detail.json()["summary"]["data_profile"]["validation_candles"] == 80
+        assert "robustness" in detail.json()["summary"]
+        assert "parameter_insights" in detail.json()["summary"]
+        assert "decision_context" in detail.json()["summary"]
         assert committed_progress == [0, 5, 10, 12, 15, 20, 25, 30, 35, 40, 45, 50, 55, 57]
         assert trials.status_code == 200
         assert trials.json()["total"] == 57
@@ -395,6 +421,10 @@ def test_optimization_api_and_execution_flow(monkeypatch) -> None:
         trial_timings = trial_detail.json()["metrics"]["timings"]
         assert set(trial_timings) == {"sampling_seconds", "backtest_seconds"}
         assert all(value >= 0 for value in trial_timings.values())
+        assert "return_pct" in trial_detail.json()["metrics"]
+        assert "win_rate" in trial_detail.json()["metrics"]
+        assert "profit_factor" in trial_detail.json()["metrics"]
+        assert "diagnostics" in trial_detail.json()["metrics"]
         assert "fill_mode" not in trial_detail.json()["sampled_parameters"]
         assert "taker_slippage" not in trial_detail.json()["sampled_parameters"]
         assert "medium_impact" not in trial_detail.json()["sampled_parameters"]
@@ -407,7 +437,7 @@ def test_optimization_api_and_execution_flow(monkeypatch) -> None:
         )
         assert exported.status_code == 200
         export_body = exported.json()
-        assert export_body["schema_version"] == "goldie.optimization-results.v1"
+        assert export_body["schema_version"] == "goldie.optimization-results.v2"
         assert export_body["optimization"]["id"] == str(optimization_id)
         assert len(export_body["trials"]) == 57
         assert export_body["analysis"]["phases"]["STRATEGY_SEARCH"]["trial_count"] == 12
@@ -416,6 +446,21 @@ def test_optimization_api_and_execution_flow(monkeypatch) -> None:
         ] == 45
         assert export_body["analysis"]["parameter_distributions"]
         assert export_body["analysis"]["candidate_validation"]
+        assert export_body["analysis"]["parameter_insights"]
+        assert export_body["analysis"]["robustness"]
+        llm_context = client.get(
+            f"/api/v1/optimizations/{optimization_id}/llm-context",
+            headers=headers,
+        )
+        assert llm_context.status_code == 200
+        llm_body = llm_context.json()
+        assert llm_body["schema_version"] == "goldie.optimization-llm-context.v1"
+        assert llm_body["top_trials"]
+        assert llm_body["worst_trials"]
+        assert llm_body["validation_winners"]
+        assert llm_body["parameter_insights"]
+        assert llm_body["robustness"]
+        assert "equity_curve" not in str(llm_body["top_trials"])
         successful_export_trial = next(
             item for item in export_body["trials"] if item["status"] == "SUCCEEDED"
         )

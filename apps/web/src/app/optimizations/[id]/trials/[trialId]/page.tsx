@@ -34,6 +34,7 @@ export default function OptimizationTrialDetailPage() {
   }
 
   const configSnapshot = normalizeBotConfig(run.data.config_snapshot);
+  const diagnostics = trial.data.metrics.diagnostics as Record<string, unknown> | undefined;
   const canApplyTrialConfig = Boolean(
     !applyBusy
     && Object.keys(trial.data.sampled_parameters ?? {}).length,
@@ -167,6 +168,13 @@ export default function OptimizationTrialDetailPage() {
             </dl>
           )}
         </div>
+
+        {diagnostics && (
+          <div className="panel">
+            <h2>Diagnostics</h2>
+            <pre className="code-block">{JSON.stringify(diagnostics, null, 2)}</pre>
+          </div>
+        )}
 
         <div className="panel">
           <h2>Backtest summary</h2>

@@ -204,7 +204,7 @@ def build_optimization_export(
     ]
     return jsonable_encoder(
         {
-            "schema_version": "goldie.optimization-results.v1",
+            "schema_version": "goldie.optimization-results.v2",
             "exported_at": datetime.now(UTC),
             "optimization": {
                 "id": optimization.id,
@@ -249,6 +249,16 @@ def build_optimization_export(
                     phases["STRATEGY_SEARCH"]
                 ),
                 "candidate_validation": _candidate_validation_analysis(trials),
+                "parameter_insights": (optimization.summary or {}).get(
+                    "parameter_insights",
+                    {},
+                ),
+                "robustness": (optimization.summary or {}).get("robustness", {}),
+                "data_profile": (optimization.summary or {}).get("data_profile", {}),
+                "decision_context": (optimization.summary or {}).get(
+                    "decision_context",
+                    {},
+                ),
             },
             "trials": trial_payloads,
         }
