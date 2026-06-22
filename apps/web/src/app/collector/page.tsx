@@ -328,6 +328,20 @@ function CommandTable({
   commands: CollectorCommand[];
   loading: boolean;
 }) {
+  const client = useQueryClient();
+  const [error, setError] = useState("");
+
+  const deleteCommand = async (command: CollectorCommand) => {
+    if (!window.confirm(`Delete ${command.command} command?`)) return;
+    setError("");
+    try {
+      await api(`/api/v1/collector/commands/${command.id}`, { method: "DELETE" });
+      await client.invalidateQueries({ queryKey: ["collector-overview"] });
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Command could not be deleted.");
+    }
+  };
+
   return (
     <div className="panel collector-section">
       <h2>Recent commands</h2>
@@ -336,17 +350,25 @@ function CommandTable({
       ) : (
         <div className="table-wrap borderless">
           <table>
-            <thead><tr><th>Created</th><th>Command</th><th>Status</th><th>Progress</th><th>Error</th></tr></thead>
+            <thead><tr><th>Created</th><th>Command</th><th>Status</th><th>Progress</th><th>Error</th><th>Actions</th></tr></thead>
             <tbody>{commands.map((item) => (
               <tr key={item.id}>
                 <td>{date(item.created_at)}</td><td>{item.command}</td>
                 <td><StatusPill value={item.status} /></td>
                 <td>{progress(item)}</td><td className="error-text">{item.error ?? "--"}</td>
+                <td>
+                  {["PENDING", "RUNNING"].includes(item.status) ? (
+                    <button className="button button-danger" onClick={() => void deleteCommand(item)}>
+                      Delete
+                    </button>
+                  ) : "--"}
+                </td>
               </tr>
             ))}</tbody>
           </table>
         </div>
       )}
+      {error && <div className="error-box table-actions">{error}</div>}
     </div>
   );
 }

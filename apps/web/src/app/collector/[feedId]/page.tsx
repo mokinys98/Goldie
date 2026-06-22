@@ -379,17 +379,50 @@ function Settings({
 }
 
 function CommandHistory({ commands }: { commands: CollectorCommand[] }) {
+  const client = useQueryClient();
+  const { feedId } = useParams<{ feedId: string }>();
+  const [error, setError] = useState("");
+
+  const deleteCommand = async (command: CollectorCommand) => {
+    if (!window.confirm(`Delete ${command.command} command?`)) return;
+    setError("");
+    try {
+      await api(`/api/v1/collector/commands/${command.id}`, { method: "DELETE" });
+      await Promise.all([
+        client.invalidateQueries({ queryKey: ["collector-feed", feedId] }),
+        client.invalidateQueries({ queryKey: ["collector-overview"] }),
+      ]);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Command could not be deleted.");
+    }
+  };
+
   return <div className="panel">
     <h2>Command history</h2>
     {!commands.length ? <p className="muted">No commands for this feed.</p> : (
-      <Table headers={["Created", "Command", "Status", "Progress", "Error"]} rows={commands.map((item) => [
-        displayDate(item.created_at),
-        item.command,
-        item.status,
-        item.progress.processed !== undefined ? `${item.progress.processed} / ${item.progress.total ?? "?"}` : "--",
-        item.error ?? "--",
-      ])} />
+      <div className="table-wrap borderless"><table>
+        <thead>
+          <tr><th>Created</th><th>Command</th><th>Status</th><th>Progress</th><th>Error</th><th>Actions</th></tr>
+        </thead>
+        <tbody>{commands.map((item) => (
+          <tr key={item.id}>
+            <td>{displayDate(item.created_at)}</td>
+            <td>{item.command}</td>
+            <td><StatusPill value={item.status} /></td>
+            <td>{item.progress.processed !== undefined ? `${item.progress.processed} / ${item.progress.total ?? "?"}` : "--"}</td>
+            <td className="error-text">{item.error ?? "--"}</td>
+            <td>
+              {["PENDING", "RUNNING"].includes(item.status) ? (
+                <button className="button button-danger" onClick={() => void deleteCommand(item)}>
+                  Delete
+                </button>
+              ) : "--"}
+            </td>
+          </tr>
+        ))}</tbody>
+      </table></div>
     )}
+    {error && <div className="error-box table-actions">{error}</div>}
   </div>;
 }
 

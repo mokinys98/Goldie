@@ -47,7 +47,21 @@ const overview = {
     data_lag_seconds: 2,
     bot_count: 1,
   }],
-  recent_commands: [],
+  recent_commands: [{
+    id: "command-1",
+    collector_instance_id: null,
+    market_feed_id: "feed-1",
+    command: "BACKFILL",
+    status: "PENDING",
+    payload: {},
+    progress: {},
+    result: {},
+    error: null,
+    started_at: null,
+    completed_at: null,
+    created_at: "2026-06-14T12:00:00Z",
+    updated_at: "2026-06-14T12:00:00Z",
+  }],
 };
 
 const settings = {
@@ -87,6 +101,14 @@ describe("CollectorPage", () => {
           status: "PENDING",
         } as never;
       }
+      if (options?.method === "DELETE") {
+        return {
+          id: "command-1",
+          command: "BACKFILL",
+          status: "FAILED",
+          error: "Cancelled by user",
+        } as never;
+      }
       if (path === "/api/v1/collector/overview") return overview as never;
       if (path === "/api/v1/collector/settings") return settings as never;
       throw new Error(`Unexpected API path: ${path}`);
@@ -120,6 +142,18 @@ describe("CollectorPage", () => {
       expect(api).toHaveBeenCalledWith(
         "/api/v1/collector/commands",
         expect.objectContaining({ method: "POST" }),
+      );
+    });
+  });
+
+  it("deletes a pending collector command", async () => {
+    renderPage();
+    const deleteButton = await screen.findByRole("button", { name: "Delete" });
+    fireEvent.click(deleteButton);
+    await waitFor(() => {
+      expect(api).toHaveBeenCalledWith(
+        "/api/v1/collector/commands/command-1",
+        expect.objectContaining({ method: "DELETE" }),
       );
     });
   });

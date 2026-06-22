@@ -960,3 +960,44 @@ def update_command(
         }
     )
     return serialize_command(command)
+
+
+@router.delete("/commands/{command_id}")
+def delete_command(
+    command_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> dict:
+    command = db.get(CollectorCommand, command_id)
+    if command is None:
+        raise HTTPException(status_code=404, detail="Collector command not found")
+    if command.status in {"SUCCEEDED", "FAILED"}:
+        return serialize_command(command)
+    command.status = "FAILED"
+    command.error = "Cancelled by user"
+    command.completed_at = datetime.now(UTC)
+    command.progress = command.progress or {}
+    command.result = command.result or {}
+    add_audit(
+        db,
+        actor_type="USER",
+        actor_id=str(user.id),
+        action="COLLECTOR_COMMAND_CANCELLED",
+        target_type="COLLECTOR_COMMAND",
+        target_id=str(command.id),
+        details={"command": command.command, "market_feed_id": str(command.market_feed_id or "")},
+    )
+    db.commit()
+    db.refresh(command)
+    invalidate_collector_overview()
+    publish_event_sync(
+        {
+            "event_type": "collector.command",
+            "occurred_at": datetime.now(UTC).isoformat(),
+            "command_id": str(command.id),
+            "market_feed_id": str(command.market_feed_id or ""),
+            "status": command.status,
+            "progress": command.progress,
+        }
+    )
+    return serialize_command(command)

@@ -1084,3 +1084,25 @@ def test_collector_feed_data_commands_and_export() -> None:
             },
         )
         assert second.status_code == 409
+
+        deleted = client.delete(
+            f"/api/v1/collector/commands/{valid.json()['id']}",
+            headers=headers,
+        )
+        assert deleted.status_code == 200
+        assert deleted.json()["status"] == "FAILED"
+        assert deleted.json()["error"] == "Cancelled by user"
+
+        replacement = client.post(
+            "/api/v1/collector/commands",
+            headers=headers,
+            json={
+                "command": "BACKFILL",
+                "market_feed_id": feed_id,
+                "payload": {
+                    "start": (now - timedelta(days=1)).isoformat(),
+                    "end": now.isoformat(),
+                },
+            },
+        )
+        assert replacement.status_code == 201
