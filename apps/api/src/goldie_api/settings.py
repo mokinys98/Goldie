@@ -22,6 +22,7 @@ class Settings(BaseSettings):
     shadow_notional_balance: Decimal = Decimal("10000")
     db_pool_size: int = 5
     db_max_overflow: int = 5
+    ingestion_concurrency: int = 4
 
     @field_validator("database_url", mode="before")
     @classmethod

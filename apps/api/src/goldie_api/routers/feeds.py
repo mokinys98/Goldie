@@ -29,8 +29,10 @@ from ..schemas import (
 )
 from ..security import get_current_user
 from ..realtime import invalidate_collector_overview, publish_event, publish_event_sync
+from ..settings import get_settings
 
 router = APIRouter(prefix="/api/v1/market-feeds", tags=["market-feeds"])
+_ingestion_semaphore = asyncio.Semaphore(get_settings().ingestion_concurrency)
 
 
 def get_feed_or_404(db: Session, feed_id: uuid.UUID) -> MarketFeed:
@@ -220,7 +222,8 @@ async def ingest_quotes(
     payload: FeedQuoteBatch,
     _: None = Depends(require_agent_token),
 ) -> dict:
-    result, event = await asyncio.to_thread(process_quote_batch, feed_id, payload)
+    async with _ingestion_semaphore:
+        result, event = await asyncio.to_thread(process_quote_batch, feed_id, payload)
     if event:
         await publish_event(event)
     return result
@@ -232,7 +235,8 @@ async def ingest_candles(
     payload: FeedCandleBatch,
     _: None = Depends(require_agent_token),
 ) -> dict:
-    result, event = await asyncio.to_thread(process_candle_batch, feed_id, payload)
+    async with _ingestion_semaphore:
+        result, event = await asyncio.to_thread(process_candle_batch, feed_id, payload)
     if event:
         await publish_event(event)
     return result
