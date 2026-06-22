@@ -17,6 +17,9 @@ Dokumentas remiasi šiais esamais šaltiniais:
 - `xauusd_trading_bot_technologiju_architektura.md`
 - `docs/implementation/11_OPTUNA_OPTIMIZATION_WORKFLOW.md`
 - `docs/implementation/12_SHADOW_OUTCOME_EVALUATION.md`
+- `apps/api/src/goldie_api/optimization_diagnostics.py`
+- `apps/api/src/goldie_api/optimization_analysis.py`
+- `apps/web/src/app/optimizations/[id]/page.tsx`
 
 ## Dabartinė V1 būsena
 
@@ -26,25 +29,52 @@ Goldie jau turi pakankamai stiprią pirmą tyrimų bazę:
 - Optuna optimizaciją `config.strategy.parameters` laukams;
 - saugomas backtest trade eilutes ir summary;
 - saugomus optimization trial ir run artefaktus;
+- chronologinį search ir validation split optimizacijoje;
+- fiksuoto grid validaciją `stop_loss_points` ir `take_profit_points`;
+- run-level `research_quality_gates` su `PASS`, `WARN` ir `BLOCK` būsena;
+- struktūruotą `data_profile`, `robustness`, `parameter_insights` ir `decision_context`;
+- pilną optimization rezultatų eksportą ir kompaktišką LLM context eksportą;
 - shadow outcome evaluation;
 - immutable config snapshot ir `run_id`;
 - bendrą trading-domain sluoksnį, kuris jau dabar jungia backtest, optimization ir shadow logiką.
 
-To pakanka pirmajam tyrimo ciklui, bet to nepakanka brandiems strategijos kūrimo sprendimams.
-Dabartinė V1 gerai atsako į klausimą:
+Po V1.x kokybės vartų ši bazė jau atsako ne tik į klausimą:
 
 ```text
 Kuris parametru rinkinys šiame run'e gavo geriausią score?
 ```
 
-Bet dar silpnai atsako į klausimus:
+Ji taip pat pradeda atsakyti į klausimą:
+
+```text
+Ar šis optimization run pakankamai švarus ir robustiškas, kad jį verta svarstyti kaip kandidatą?
+```
+
+Tačiau ji dar tik iš dalies atsako į klausimus:
 
 ```text
 Kodėl jis veikė?
 Kur jis trapus?
-Ar tai robustiška?
+Ar tai robustiška per kelis laiko langus ir rinkos režimus?
 Ką reikia keisti toliau?
 ```
+
+## Kas įgyvendinta V1.x fazėje
+
+Šio roadmap P0 dalis jau perkelta į produktą:
+
+- optimization terminal summary turi `research_quality_gates`;
+- kiekvienas gate turi `id`, `status`, `severity`, `message` ir `evidence`;
+- bendras statusas yra `PASS`, `WARN` arba `BLOCK`;
+- gates remiasi validation trade sample, search-to-validation degradacija, data gaps, incomplete candles, failed trial rate, validation candidate coverage, drawdown ir consecutive losses;
+- `/api/v1/optimizations/{id}` grąžina gates per `summary.research_quality_gates`;
+- `/api/v1/optimizations/{id}/export` įtraukia gates į `analysis.research_quality_gates`;
+- `/api/v1/optimizations/{id}/llm-context` įtraukia gates į `research_quality_gates` ir `run_context.research_quality_gates`;
+- optimization detail UI turi `Research readiness` bloką;
+- `BLOCK` būsenoje `Apply best as new config` reikalauja papildomo override patvirtinimo.
+
+Tai nereiškia, kad sistema jau turi brandžią promotion policy.
+Tai reiškia, kad V1 kandidatas nebegali būti vertinamas vien pagal `best_candidate.score`.
 
 ## Ką tobulinčiau po V1
 
@@ -257,14 +287,23 @@ jei strategija atrodo blogai dėl sistemos kokybės, parametrų keitimas būtų 
 
 ## Duomenų rinkimo prioritetai
 
-### P0: rinkti dabar arba stabilizuoti V1.x fazėje
+### P0: jau įgyvendinta arba stabilizuota V1.x fazėje
 
-- signal context snapshot
-- accepted, rejected ir expired reason counts
 - validation prieš search degradacija
 - praplėstos trial metrics
 - data quality profile kiekvienam run
 - kompaktiškas LLM-ready export
+- run-level `research_quality_gates`
+- `PASS`, `WARN`, `BLOCK` research readiness būsena UI
+- full optimization export su `analysis.research_quality_gates`
+
+### P0: dar likę artimiausiam V1.x užbaigimui
+
+- signal context snapshot
+- accepted, rejected ir expired reason counts
+- aiškesnis signal rejection ir skipped signal breakdown backtest/shadow artefaktuose
+- dokumentuotas canonical research data contract
+- dokumentuotas quality gate threshold'ų kontraktas
 
 ### P1: kitas research ciklas
 
@@ -307,6 +346,14 @@ Paskirtis:
 - atskirti raw, derived ir diagnostic laukus.
 
 Šis dokumentas turėtų tapti pagrindiniu tiesos šaltiniu analytics API ir LLM exportams.
+Po V1.x quality gates implementacijos jis turėtų aprašyti jau atsiradusias sekcijas:
+
+- `summary.data_profile`
+- `summary.robustness`
+- `summary.parameter_insights`
+- `summary.research_quality_gates`
+- optimization full export `analysis`
+- optimization LLM context payload
 
 ### 2. Research Quality Gates
 
@@ -323,6 +370,13 @@ Paskirtis:
 - apibrėžti stop sąlygas silpniems run'ams.
 
 Šis dokumentas turėtų tiesiogiai sietis su jau esančiais `BACKTEST -> SHADOW -> DEMO` vartais funkciniuose reikalavimuose.
+V1.x jau turi pirmą implementuotą versiją, todėl dokumentas turi nebe tik siūlyti idėją, bet formalizuoti:
+
+- dabartinius threshold'us;
+- `PASS`, `WARN`, `BLOCK` semantiką;
+- kada `BLOCK` yra tik UI override perspėjimas;
+- kada `BLOCK` ateityje turėtų realiai stabdyti promotion workflow;
+- kaip gates turi būti interpretuojami LLM analizėje.
 
 ### 3. Walk-Forward Orchestration Spec
 
@@ -398,35 +452,39 @@ Kitoje fazėje klaida būtų:
 - leisti UI laukams netyčia tapti pagrindiniu research contract;
 - duoti LLM eksportus be dokumentuotos laukų semantikos.
 
-## Rekomenduojama seka po dabartinės V1
+## Rekomenduojama seka po dabartinės V1.x
 
-1. Stabilizuoti research data contract signalams, trial, run ir exportams.
-2. Sustiprinti signal-context ir rejection-reason saugojimą.
-3. Įvesti run-level kokybės vartus ir sample-quality perspėjimus.
+1. Formalizuoti research data contract signalams, trial, run, export ir LLM context payload'ams.
+2. Formalizuoti V1.x `research_quality_gates` threshold'us dokumente `16_RESEARCH_QUALITY_GATES.md`.
+3. Sustiprinti signal-context ir rejection-reason saugojimą.
 4. Įgyvendinti walk-forward orchestration.
 5. Įvesti regime labeling ir regime-based reporting.
 6. Įvesti paper/demo execution parity metrikas.
 7. Įvesti promotion policy ir incident-aware operational gates.
 
-## Galutinė pozicija
+## Galutinė pozicija po V1.x
 
-Dabartinė V1 jau pakanka:
+Dabartinė V1.x jau pakanka:
 
 - deterministiniam backtest research;
 - pirmajam strategy parameter search ciklui;
 - pakankamam artefaktų kaupimui kandidatų palyginimui;
 - pirmajam praktiškai naudingam LLM context export.
+- pirmajam run-level research readiness vertinimui;
+- aiškiam perspėjimui, kai optimization rezultatas yra per silpnas promotion sprendimui;
+- žmogui ir LLM tinkamam `PASS`, `WARN`, `BLOCK` kontekstui.
 
-Dabartinė V1 dar nepakanka:
+Dabartinė V1.x dar nepakanka:
 
 - stipriems teiginiams apie tikrą edge;
 - brandžiam anti-overfitting sprendimų priėmimui;
 - paper, demo ar live promotion sprendimams be papildomų vartų;
 - aukšto pasitikėjimo regime-aware strategijos tobulinimui.
 
-Todėl po V1 prioritetas turėtų būti ne agresyvesnė optimizacija, o:
+Todėl po V1.x prioritetas turėtų būti ne agresyvesnė optimizacija, o:
 
-- research data contract kokybė;
+- research data contract formalizavimas;
+- quality gate threshold'ų dokumentavimas ir kalibravimas;
 - robustumo ir walk-forward įrodymai;
 - signal-level kontekstas ir atmetimo analizė;
 - execution-mode parity;

@@ -254,6 +254,10 @@ def build_optimization_export(
                     {},
                 ),
                 "robustness": (optimization.summary or {}).get("robustness", {}),
+                "research_quality_gates": (optimization.summary or {}).get(
+                    "research_quality_gates",
+                    {},
+                ),
                 "data_profile": (optimization.summary or {}).get("data_profile", {}),
                 "decision_context": (optimization.summary or {}).get(
                     "decision_context",

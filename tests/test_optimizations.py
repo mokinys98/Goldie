@@ -1,6 +1,7 @@
 import os
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
+from types import SimpleNamespace
 from uuid import UUID
 
 os.environ["DATABASE_URL"] = "sqlite:///./.pytest-goldie.db"
@@ -25,7 +26,10 @@ from goldie_api.optimizations import (
     sample_parameters,
     split_optimization_period,
 )
-from goldie_api.optimization_diagnostics import build_backtest_diagnostics
+from goldie_api.optimization_diagnostics import (
+    build_backtest_diagnostics,
+    build_research_quality_gates,
+)
 
 
 def test_optimization_progress_and_cancellation_use_five_trial_batches() -> None:
@@ -388,6 +392,17 @@ def test_optimization_api_and_execution_flow(monkeypatch) -> None:
         assert "robustness" in detail.json()["summary"]
         assert "parameter_insights" in detail.json()["summary"]
         assert "decision_context" in detail.json()["summary"]
+        quality_gates = detail.json()["summary"]["research_quality_gates"]
+        assert quality_gates["overall_status"] in {"PASS", "WARN", "BLOCK"}
+        assert quality_gates["recommendation"]
+        assert {gate["id"] for gate in quality_gates["gates"]} >= {
+            "validation_trade_sample",
+            "search_validation_degradation",
+            "data_quality",
+            "failed_trial_rate",
+            "validation_robustness",
+            "risk_profile",
+        }
         assert committed_progress == [0, 5, 10, 12, 15, 20, 25, 30, 35, 40, 45, 50, 55, 57]
         assert trials.status_code == 200
         assert trials.json()["total"] == 57
@@ -448,6 +463,7 @@ def test_optimization_api_and_execution_flow(monkeypatch) -> None:
         assert export_body["analysis"]["candidate_validation"]
         assert export_body["analysis"]["parameter_insights"]
         assert export_body["analysis"]["robustness"]
+        assert export_body["analysis"]["research_quality_gates"] == quality_gates
         llm_context = client.get(
             f"/api/v1/optimizations/{optimization_id}/llm-context",
             headers=headers,
@@ -460,6 +476,8 @@ def test_optimization_api_and_execution_flow(monkeypatch) -> None:
         assert llm_body["validation_winners"]
         assert llm_body["parameter_insights"]
         assert llm_body["robustness"]
+        assert llm_body["research_quality_gates"] == quality_gates
+        assert llm_body["run_context"]["research_quality_gates"] == quality_gates
         assert "equity_curve" not in str(llm_body["top_trials"])
         successful_export_trial = next(
             item for item in export_body["trials"] if item["status"] == "SUCCEEDED"
@@ -471,6 +489,50 @@ def test_optimization_api_and_execution_flow(monkeypatch) -> None:
                 db.query(OptimizationTrial).filter_by(optimization_run_id=optimization_id).count()
             )
             assert stored_trials == 57
+
+
+def test_research_quality_gates_block_weak_validation_sample_and_degradation() -> None:
+    trials = [
+        SimpleNamespace(
+            status="SUCCEEDED",
+            phase="FIXED_CONFIG_VALIDATION",
+            summary={"total_trades": 2},
+        ),
+        SimpleNamespace(
+            status="FAILED",
+            phase="FIXED_CONFIG_VALIDATION",
+            summary={},
+        ),
+    ]
+
+    gates = build_research_quality_gates(
+        trials,
+        data_profile={
+            "detected_m1_gap_count": 1,
+            "incomplete_candles": 0,
+        },
+        robustness={
+            "validated_candidate_count": 1,
+            "average_score_degradation_pct": 90,
+            "stable_candidates": [],
+            "best_validation_candidates": [
+                {
+                    "validation_metrics": {
+                        "max_drawdown_pct": 25,
+                        "max_consecutive_losses": 9,
+                    }
+                }
+            ],
+        },
+    )
+
+    statuses = {gate["id"]: gate["status"] for gate in gates["gates"]}
+    assert gates["overall_status"] == "BLOCK"
+    assert statuses["validation_trade_sample"] == "BLOCK"
+    assert statuses["search_validation_degradation"] == "BLOCK"
+    assert statuses["data_quality"] == "WARN"
+    assert statuses["validation_robustness"] == "BLOCK"
+    assert statuses["risk_profile"] == "BLOCK"
 
 
 def test_queued_optimization_can_be_cancelled() -> None:

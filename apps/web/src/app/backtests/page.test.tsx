@@ -40,8 +40,8 @@ describe("BacktestsPage", () => {
 
   it("renders completed experiment metrics", async () => {
     renderPage();
-    expect(await screen.findByText("Gold bot")).toBeInTheDocument();
-    expect(screen.getByText("SUCCEEDED")).toBeInTheDocument();
+    expect((await screen.findAllByText("Gold bot")).length).toBeGreaterThan(0);
+    expect(screen.getAllByText("SUCCEEDED").length).toBeGreaterThan(0);
     expect(screen.getByText("42.50")).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "New backtest" })).toHaveAttribute(
       "href",

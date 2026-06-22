@@ -1,15 +1,17 @@
-import { render, screen } from "@testing-library/react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OptimizationRun } from "@/lib/types";
 import OptimizationDetailPage from "./page";
 
 const useQuery = vi.fn();
+const api = vi.fn();
 
 vi.mock("next/navigation", () => ({ useParams: () => ({ id: "optimization-1" }) }));
 vi.mock("@tanstack/react-query", () => ({
   useQuery: (options: unknown) => useQuery(options),
   useQueryClient: () => ({ invalidateQueries: vi.fn() }),
 }));
+vi.mock("@/lib/api", () => ({ api: (...args: unknown[]) => api(...args) }));
 vi.mock("@/lib/config", () => ({
   normalizeBotConfig: () => ({
     market: { symbol: "EURUSD" },
@@ -67,6 +69,26 @@ const optimization = {
       database_commit_seconds: 0.045678,
       total_seconds: 1.789012,
     },
+    research_quality_gates: {
+      overall_status: "BLOCK",
+      recommendation: "Research gates block promotion.",
+      gates: [
+        {
+          id: "validation_trade_sample",
+          status: "BLOCK",
+          severity: "HIGH",
+          message: "Validation sample is too small for a V1 promotion decision.",
+          evidence: { validation_trades: 2, minimum_required: 10 },
+        },
+        {
+          id: "data_quality",
+          status: "WARN",
+          severity: "MEDIUM",
+          message: "Input candles contain gaps or incomplete records.",
+          evidence: { detected_m1_gap_count: 1 },
+        },
+      ],
+    },
   },
   config_snapshot: {},
   fill_mode: "simulated",
@@ -74,11 +96,18 @@ const optimization = {
 
 describe("OptimizationDetailPage", () => {
   beforeEach(() => {
+    cleanup();
+    api.mockReset();
     useQuery.mockImplementation(({ queryKey }: { queryKey: string[] }) => (
       queryKey[0] === "optimization"
         ? { data: optimization, isLoading: false, error: null }
         : { data: { items: [], total: 0 }, isLoading: false, error: null }
     ));
+  });
+
+  afterEach(() => {
+    cleanup();
+    vi.restoreAllMocks();
   });
 
   it("renders persisted performance timings", () => {
@@ -109,5 +138,31 @@ describe("OptimizationDetailPage", () => {
     expect(
       screen.getAllByRole("button", { name: "Copy results in clipboard" }).at(-1),
     ).toBeEnabled();
+  });
+
+  it("renders research readiness gates", () => {
+    render(<OptimizationDetailPage />);
+
+    expect(
+      screen.getAllByRole("heading", { name: "Research readiness" }).at(-1),
+    ).toBeInTheDocument();
+    expect(screen.getByText("Research gates block promotion.")).toBeInTheDocument();
+    expect(screen.getAllByText("BLOCK").length).toBeGreaterThan(0);
+    expect(screen.getByText("validation trade sample")).toBeInTheDocument();
+    expect(screen.getByText("Validation sample is too small for a V1 promotion decision.")).toBeInTheDocument();
+  });
+
+  it("requires an override confirmation before applying a blocked candidate", () => {
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+    render(<OptimizationDetailPage />);
+
+    fireEvent.click(
+      screen.getAllByRole("button", { name: "Apply best as new config" }).at(-1)!,
+    );
+
+    expect(confirm).toHaveBeenCalledWith(
+      "Research gates block this candidate. Apply it anyway as a new active config?",
+    );
+    expect(api).not.toHaveBeenCalled();
   });
 });

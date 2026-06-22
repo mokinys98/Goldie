@@ -244,6 +244,9 @@ legend { color: var(--gold); padding: 0 8px; font-size: 12px; font-weight: 800; 
 .status-succeeded { color: var(--green); background: #10271f; }
 .status-failed, .status-degraded { color: var(--red); background: #2b151a; }
 .status-cancelled, .status-cancel-requested { color: var(--red); background: #2b151a; }
+.status-pass { color: var(--green); background: #10271f; }
+.status-warn { color: var(--gold-bright); background: #2b2413; }
+.status-block { color: var(--red); background: #2b151a; }
 .backtest-progress { display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 14px; }
 .backtest-progress progress { width: 100%; accent-color: var(--gold); }
 .equity-chart { width: 100%; height: 280px; background: #111318; border: 1px solid var(--line); border-radius: 7px; }

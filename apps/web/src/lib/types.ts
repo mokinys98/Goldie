@@ -431,6 +431,22 @@ export type OptimizationRunTimings = {
   total_seconds: number;
 };
 
+export type ResearchQualityGateStatus = "PASS" | "WARN" | "BLOCK";
+
+export type ResearchQualityGate = {
+  id: string;
+  status: ResearchQualityGateStatus;
+  severity: "INFO" | "MEDIUM" | "HIGH";
+  message: string;
+  evidence: Record<string, unknown>;
+};
+
+export type ResearchQualityGates = {
+  overall_status: ResearchQualityGateStatus;
+  gates: ResearchQualityGate[];
+  recommendation: string;
+};
+
 export type OptimizationTrialTimings = {
   sampling_seconds: number;
   backtest_seconds: number;
@@ -527,6 +543,7 @@ export type OptimizationRun = {
     data_profile?: Record<string, unknown>;
     robustness?: Record<string, unknown>;
     parameter_insights?: Record<string, unknown>;
+    research_quality_gates?: ResearchQualityGates;
     decision_context?: Record<string, unknown>;
   };
   error: string | null;
@@ -591,5 +608,6 @@ export type OptimizationLlmContext = {
   validation_winners: Array<Record<string, unknown>>;
   parameter_insights: Record<string, unknown>;
   robustness: Record<string, unknown>;
+  research_quality_gates: ResearchQualityGates | Record<string, never>;
   data_quality_notes: Record<string, unknown>;
 };

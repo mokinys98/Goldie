@@ -39,7 +39,10 @@ export default function BacktestsPage() {
     [rows, botNames],
   );
   const statuses = useMemo(() => [...new Set(rows.map((item) => item.status))].sort(), [rows]);
-  const fillModes = useMemo(() => [...new Set(rows.map((item) => item.fill_mode))].sort(), [rows]);
+  const fillModes = useMemo(
+    () => [...new Set(rows.map((item) => item.fill_mode).filter(Boolean))].sort(),
+    [rows],
+  );
   const normalizedSearch = search.trim().toLocaleLowerCase();
   const filteredRows = rows.filter((item) => {
     const botName = botNames.get(item.bot_id) ?? item.bot_id;

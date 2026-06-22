@@ -29,6 +29,19 @@ CORE_TRIAL_METRICS = (
     "average_duration_seconds",
 )
 
+MIN_VALIDATION_TRADES_WARN = 30
+MIN_VALIDATION_TRADES_BLOCK = 10
+DEGRADATION_WARN_PCT = 35
+DEGRADATION_BLOCK_PCT = 75
+FAILED_TRIAL_WARN_RATIO = 0.25
+FAILED_TRIAL_BLOCK_RATIO = 0.50
+MIN_VALIDATED_CANDIDATES_WARN = 5
+MIN_VALIDATED_CANDIDATES_BLOCK = 3
+DRAWDOWN_WARN_PCT = 10
+DRAWDOWN_BLOCK_PCT = 20
+CONSECUTIVE_LOSSES_WARN = 5
+CONSECUTIVE_LOSSES_BLOCK = 8
+
 
 def _number(value: Any) -> float | None:
     if value is None or isinstance(value, bool):
@@ -339,6 +352,319 @@ def build_robustness(trials: list[OptimizationTrial]) -> dict[str, Any]:
     )
 
 
+def _gate(
+    gate_id: str,
+    status: str,
+    severity: str,
+    message: str,
+    evidence: dict[str, Any],
+) -> dict[str, Any]:
+    return {
+        "id": gate_id,
+        "status": status,
+        "severity": severity,
+        "message": message,
+        "evidence": evidence,
+    }
+
+
+def _gate_status(gates: list[dict[str, Any]]) -> str:
+    if any(gate["status"] == "BLOCK" for gate in gates):
+        return "BLOCK"
+    if any(gate["status"] == "WARN" for gate in gates):
+        return "WARN"
+    return "PASS"
+
+
+def _quality_recommendation(overall_status: str) -> str:
+    if overall_status == "PASS":
+        return (
+            "Research gates passed for V1 review. Candidate can be considered for "
+            "shadow validation, while still requiring forward monitoring."
+        )
+    if overall_status == "WARN":
+        return (
+            "Research gates produced warnings. Treat the candidate as investigational "
+            "and review the warning evidence before applying it."
+        )
+    return (
+        "Research gates block promotion. Do not treat this candidate as robust until "
+        "the blocked evidence is resolved with a cleaner or broader run."
+    )
+
+
+def _best_validation_metrics(robustness: dict[str, Any]) -> dict[str, Any]:
+    candidates = robustness.get("best_validation_candidates") or []
+    if not candidates:
+        return {}
+    return candidates[0].get("validation_metrics") or {}
+
+
+def build_research_quality_gates(
+    trials: list[OptimizationTrial],
+    *,
+    data_profile: dict[str, Any],
+    robustness: dict[str, Any],
+) -> dict[str, Any]:
+    succeeded = _successful_trials(trials)
+    validation_trials = [
+        trial for trial in succeeded if trial.phase == "FIXED_CONFIG_VALIDATION"
+    ]
+    total_trials = len(trials)
+    failed_trials = len([trial for trial in trials if trial.status == "FAILED"])
+    failed_ratio = failed_trials / total_trials if total_trials else 0
+    validation_trade_counts = [
+        value
+        for trial in validation_trials
+        if (value := _number((trial.summary or {}).get("total_trades"))) is not None
+    ]
+    validation_trades = int(sum(validation_trade_counts))
+    average_degradation = _number(robustness.get("average_score_degradation_pct"))
+    validated_candidate_count = int(robustness.get("validated_candidate_count") or 0)
+    stable_candidate_count = len(robustness.get("stable_candidates") or [])
+    best_metrics = _best_validation_metrics(robustness)
+    drawdown_pct = _number(best_metrics.get("max_drawdown_pct"))
+    consecutive_losses = _number(best_metrics.get("max_consecutive_losses"))
+
+    gates: list[dict[str, Any]] = []
+    if validation_trades < MIN_VALIDATION_TRADES_BLOCK:
+        gates.append(
+            _gate(
+                "validation_trade_sample",
+                "BLOCK",
+                "HIGH",
+                "Validation sample is too small for a V1 promotion decision.",
+                {
+                    "validation_trades": validation_trades,
+                    "minimum_required": MIN_VALIDATION_TRADES_BLOCK,
+                    "warning_threshold": MIN_VALIDATION_TRADES_WARN,
+                },
+            )
+        )
+    elif validation_trades < MIN_VALIDATION_TRADES_WARN:
+        gates.append(
+            _gate(
+                "validation_trade_sample",
+                "WARN",
+                "MEDIUM",
+                "Validation sample is thin; conclusions may be unstable.",
+                {
+                    "validation_trades": validation_trades,
+                    "warning_threshold": MIN_VALIDATION_TRADES_WARN,
+                },
+            )
+        )
+    else:
+        gates.append(
+            _gate(
+                "validation_trade_sample",
+                "PASS",
+                "INFO",
+                "Validation sample has enough trades for a first V1 review.",
+                {"validation_trades": validation_trades},
+            )
+        )
+
+    if average_degradation is None:
+        gates.append(
+            _gate(
+                "search_validation_degradation",
+                "WARN",
+                "MEDIUM",
+                "Search-to-validation degradation could not be calculated.",
+                {"average_score_degradation_pct": None},
+            )
+        )
+    elif average_degradation > DEGRADATION_BLOCK_PCT:
+        gates.append(
+            _gate(
+                "search_validation_degradation",
+                "BLOCK",
+                "HIGH",
+                "Validation score degraded heavily versus search.",
+                {
+                    "average_score_degradation_pct": average_degradation,
+                    "block_threshold_pct": DEGRADATION_BLOCK_PCT,
+                },
+            )
+        )
+    elif average_degradation > DEGRADATION_WARN_PCT:
+        gates.append(
+            _gate(
+                "search_validation_degradation",
+                "WARN",
+                "MEDIUM",
+                "Validation score degraded materially versus search.",
+                {
+                    "average_score_degradation_pct": average_degradation,
+                    "warning_threshold_pct": DEGRADATION_WARN_PCT,
+                },
+            )
+        )
+    else:
+        gates.append(
+            _gate(
+                "search_validation_degradation",
+                "PASS",
+                "INFO",
+                "Search-to-validation degradation is within the V1 tolerance.",
+                {"average_score_degradation_pct": average_degradation},
+            )
+        )
+
+    gap_count = int(data_profile.get("detected_m1_gap_count") or 0)
+    incomplete_count = int(data_profile.get("incomplete_candles") or 0)
+    if gap_count > 0 or incomplete_count > 0:
+        gates.append(
+            _gate(
+                "data_quality",
+                "WARN",
+                "MEDIUM",
+                "Input candles contain gaps or incomplete records.",
+                {
+                    "detected_m1_gap_count": gap_count,
+                    "incomplete_candles": incomplete_count,
+                },
+            )
+        )
+    else:
+        gates.append(
+            _gate(
+                "data_quality",
+                "PASS",
+                "INFO",
+                "No M1 gaps or incomplete candles were detected in the run window.",
+                {
+                    "detected_m1_gap_count": gap_count,
+                    "incomplete_candles": incomplete_count,
+                },
+            )
+        )
+
+    if failed_ratio > FAILED_TRIAL_BLOCK_RATIO:
+        status, severity, message = (
+            "BLOCK",
+            "HIGH",
+            "Too many optimization trials failed.",
+        )
+    elif failed_ratio > FAILED_TRIAL_WARN_RATIO:
+        status, severity, message = (
+            "WARN",
+            "MEDIUM",
+            "Optimization had an elevated failed-trial rate.",
+        )
+    else:
+        status, severity, message = (
+            "PASS",
+            "INFO",
+            "Failed-trial rate is within the V1 tolerance.",
+        )
+    gates.append(
+        _gate(
+            "failed_trial_rate",
+            status,
+            severity,
+            message,
+            {
+                "failed_trials": failed_trials,
+                "total_trials": total_trials,
+                "failed_ratio": failed_ratio,
+            },
+        )
+    )
+
+    if validated_candidate_count < MIN_VALIDATED_CANDIDATES_BLOCK:
+        gates.append(
+            _gate(
+                "validation_robustness",
+                "BLOCK",
+                "HIGH",
+                "Too few validated candidates exist to judge robustness.",
+                {
+                    "validated_candidate_count": validated_candidate_count,
+                    "stable_candidate_count": stable_candidate_count,
+                    "minimum_required": MIN_VALIDATED_CANDIDATES_BLOCK,
+                },
+            )
+        )
+    elif validated_candidate_count < MIN_VALIDATED_CANDIDATES_WARN:
+        gates.append(
+            _gate(
+                "validation_robustness",
+                "WARN",
+                "MEDIUM",
+                "Validated candidate coverage is narrow.",
+                {
+                    "validated_candidate_count": validated_candidate_count,
+                    "stable_candidate_count": stable_candidate_count,
+                    "warning_threshold": MIN_VALIDATED_CANDIDATES_WARN,
+                },
+            )
+        )
+    else:
+        gates.append(
+            _gate(
+                "validation_robustness",
+                "PASS",
+                "INFO",
+                "Validated candidate coverage is broad enough for V1 review.",
+                {
+                    "validated_candidate_count": validated_candidate_count,
+                    "stable_candidate_count": stable_candidate_count,
+                },
+            )
+        )
+
+    risk_status = "PASS"
+    risk_severity = "INFO"
+    risk_message = "Drawdown and consecutive-loss risk are within V1 tolerance."
+    if (
+        (drawdown_pct is not None and drawdown_pct > DRAWDOWN_BLOCK_PCT)
+        or (
+            consecutive_losses is not None
+            and consecutive_losses > CONSECUTIVE_LOSSES_BLOCK
+        )
+    ):
+        risk_status = "BLOCK"
+        risk_severity = "HIGH"
+        risk_message = "Best validation candidate breaches V1 risk limits."
+    elif (
+        (drawdown_pct is not None and drawdown_pct > DRAWDOWN_WARN_PCT)
+        or (
+            consecutive_losses is not None
+            and consecutive_losses > CONSECUTIVE_LOSSES_WARN
+        )
+    ):
+        risk_status = "WARN"
+        risk_severity = "MEDIUM"
+        risk_message = "Best validation candidate is close to V1 risk limits."
+    gates.append(
+        _gate(
+            "risk_profile",
+            risk_status,
+            risk_severity,
+            risk_message,
+            {
+                "max_drawdown_pct": drawdown_pct,
+                "max_consecutive_losses": consecutive_losses,
+                "drawdown_warn_pct": DRAWDOWN_WARN_PCT,
+                "drawdown_block_pct": DRAWDOWN_BLOCK_PCT,
+                "consecutive_losses_warn": CONSECUTIVE_LOSSES_WARN,
+                "consecutive_losses_block": CONSECUTIVE_LOSSES_BLOCK,
+            },
+        )
+    )
+
+    overall_status = _gate_status(gates)
+    return jsonable_encoder(
+        {
+            "overall_status": overall_status,
+            "gates": gates,
+            "recommendation": _quality_recommendation(overall_status),
+        }
+    )
+
+
 def build_run_decision_sections(
     db: Session,
     optimization: OptimizationRun,
@@ -358,17 +684,24 @@ def build_run_decision_sections(
             .order_by(OptimizationTrial.phase.asc(), OptimizationTrial.trial_number.asc())
         )
     )
+    data_profile = build_data_profile(
+        db,
+        optimization,
+        search_period=search_period,
+        validation_period=validation_period,
+        search_total_candles=search_total_candles,
+        validation_total_candles=validation_total_candles,
+    )
+    robustness = build_robustness(trials)
     return {
-        "data_profile": build_data_profile(
-            db,
-            optimization,
-            search_period=search_period,
-            validation_period=validation_period,
-            search_total_candles=search_total_candles,
-            validation_total_candles=validation_total_candles,
-        ),
-        "robustness": build_robustness(trials),
+        "data_profile": data_profile,
+        "robustness": robustness,
         "parameter_insights": build_parameter_insights(trials),
+        "research_quality_gates": build_research_quality_gates(
+            trials,
+            data_profile=data_profile,
+            robustness=robustness,
+        ),
         "decision_context": jsonable_encoder(
             {
                 "search_space": search_space,
@@ -439,6 +772,7 @@ def build_llm_context(db: Session, optimization: OptimizationRun) -> dict[str, A
             "run_context": {
                 "data_profile": data_profile,
                 "decision_context": summary.get("decision_context", {}),
+                "research_quality_gates": summary.get("research_quality_gates", {}),
                 "progress": optimization.progress,
                 "error": optimization.error,
             },
@@ -447,6 +781,7 @@ def build_llm_context(db: Session, optimization: OptimizationRun) -> dict[str, A
             "validation_winners": [compact_trial(trial) for trial in validation],
             "parameter_insights": summary.get("parameter_insights", {}),
             "robustness": summary.get("robustness", {}),
+            "research_quality_gates": summary.get("research_quality_gates", {}),
             "data_quality_notes": {
                 "detected_m1_gap_count": data_profile.get("detected_m1_gap_count"),
                 "incomplete_candles": data_profile.get("incomplete_candles"),

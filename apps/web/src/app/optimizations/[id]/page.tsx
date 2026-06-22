@@ -11,6 +11,7 @@ import type {
   OptimizationResultsExport,
   OptimizationRun,
   OptimizationTrialPage,
+  ResearchQualityGates,
 } from "@/lib/types";
 import { StatusPill } from "@/components/status-pill";
 
@@ -66,6 +67,7 @@ export default function OptimizationDetailPage() {
   const strategyTrials = strategyTrialQuery.data?.items ?? [];
   const validationTrials = validationTrialQuery.data?.items ?? [];
   const fixedTradeOverrides = data.best_candidate.fixed_config_overrides?.theoretical_trade;
+  const researchQuality = data.summary.research_quality_gates;
 
   async function cancel() {
     if (!window.confirm("Cancel this optimization?")) return;
@@ -75,6 +77,14 @@ export default function OptimizationDetailPage() {
 
   async function applyBestAsNewConfig() {
     if (!canApplyBest || !data) return;
+    if (
+      researchQuality?.overall_status === "BLOCK"
+      && !window.confirm(
+        "Research gates block this candidate. Apply it anyway as a new active config?",
+      )
+    ) {
+      return;
+    }
     if (!window.confirm("Create and activate a new config from the current best candidate?")) {
       return;
     }
@@ -289,6 +299,15 @@ export default function OptimizationDetailPage() {
           value={data.summary.failed_trials ?? data.progress.failed_trials ?? 0}
         />
       </div>
+      {researchQuality && (
+        <ResearchReadinessPanel quality={researchQuality} />
+      )}
+      {researchQuality?.overall_status === "BLOCK" && (
+        <div className="error-box collector-alert">
+          Research gates block this candidate. Applying it should be treated as an explicit
+          override, not as V1 promotion.
+        </div>
+      )}
       {data.progress.strategy_trials_total !== undefined && (
         <div className="split-layout collector-section">
           <PhaseProgress
@@ -485,6 +504,44 @@ function JsonPanel({ title, value }: { title: string; value: unknown }) {
   );
 }
 
+function ResearchReadinessPanel({ quality }: { quality: ResearchQualityGates }) {
+  return (
+    <div className="panel collector-section">
+      <div className="section-title">
+        <div>
+          <h2>Research readiness</h2>
+          <p>{quality.recommendation}</p>
+        </div>
+        <StatusPill value={quality.overall_status} />
+      </div>
+      <div className="table-wrap borderless">
+        <table>
+          <thead>
+            <tr>
+              <th>Gate</th>
+              <th>Status</th>
+              <th>Severity</th>
+              <th>Message</th>
+              <th>Evidence</th>
+            </tr>
+          </thead>
+          <tbody>
+            {quality.gates.map((gate) => (
+              <tr key={gate.id}>
+                <td>{formatGateName(gate.id)}</td>
+                <td><StatusPill value={gate.status} /></td>
+                <td>{gate.severity}</td>
+                <td>{gate.message}</td>
+                <td>{formatEvidence(gate.evidence)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
 function formatSeconds(value: number | undefined): string {
   return value === undefined ? "--" : `${value.toFixed(6)} s`;
 }
@@ -501,6 +558,16 @@ function PhaseProgress({ label, completed, total }: { label: string; completed: 
 
 function formatPeriod(period: { date_from: string; date_to: string }): string {
   return `${new Date(period.date_from).toLocaleString()} - ${new Date(period.date_to).toLocaleString()}`;
+}
+
+function formatGateName(value: string): string {
+  return value.replaceAll("_", " ");
+}
+
+function formatEvidence(evidence: Record<string, unknown>): string {
+  return Object.entries(evidence)
+    .map(([key, value]) => `${formatGateName(key)}: ${String(value)}`)
+    .join(", ");
 }
 
 function exportFilename(strategy: string, symbol: string, optimizationId: string): string {
