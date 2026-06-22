@@ -707,7 +707,7 @@ def build_run_decision_sections(
                 "search_space": search_space,
                 "fixed_config_grid": fixed_config_grid or [],
                 "objective": optimization.objective,
-                "objective_formula": "BALANCED = net_pnl - 1.5 * max_drawdown - 50 * missing_trades_below_5; no-trade trials score -99999",
+                "objective_formula": "BALANCED = net_pnl - 1.5 * max_drawdown - 50 * missing_trades_below_30; no-trade trials score -99999",
                 "execution_model": execution_model,
             }
         ),

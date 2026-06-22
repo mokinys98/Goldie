@@ -32,7 +32,7 @@ from .optimization_diagnostics import (
     build_trial_metrics,
 )
 
-MIN_BALANCED_TRADES = 5
+MIN_BALANCED_TRADES = 30
 NO_TRADES_SCORE = Decimal("-99999")
 OPTIMIZATION_COMMIT_INTERVAL = 5
 OPTIMIZATION_CANCEL_CHECK_INTERVAL = 5

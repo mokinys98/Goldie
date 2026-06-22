@@ -52,12 +52,25 @@ Optimizacija v1:
 5. Palik `BALANCED` objective.
 6. Paleisk optimization run.
 
+`BALANCED` objective nėra “best settings” selektorius vien pagal PnL.
+Jis baudžia drawdown ir per mažą trade sample:
+
+```text
+BALANCED = net_pnl - 1.5 * max_drawdown - 50 * missing_trades_below_30
+no-trade trials score = -99999
+```
+
+Tai reiškia, kad 1-2 sandorių kandidatai neturi būti interpretuojami kaip
+robustūs laimėtojai, net jei jie atsiduria viršuje dėl to, kad kiti kandidatai
+prekiavo dar blogiau.
+
 Optimization detail puslapyje turi matytis:
 
 - run būsena;
 - trial progresas;
 - `best_candidate.score`;
 - `best_candidate.sampled_parameters`;
+- `summary.research_quality_gates`;
 - top trial lentelė.
 
 ## Railway diegimas

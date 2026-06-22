@@ -95,6 +95,13 @@ Pagrindinė taisyklė turėtų būti tokia:
 Įdomi strategija yra tik tada, kai panašūs parametrų regionai duoda panašų elgesį.
 ```
 
+Konkretus EURUSD `bb_rsi_mean_reversion` LLM context pavyzdys parodė svarbų
+anti-patterną: “geriausias” validation kandidatas gali turėti tik 1 sandorį,
+neigiamą PnL, `TIMEOUT` exit ir labai užsmaugtus parametrus, pvz. 428 periodų
+Bollinger, 6.25 deviation, 103 RSI period ir `require_touch_band = false`.
+Tokio rezultato negalima traktuoti kaip “best settings”; tai yra signalas, kad
+objective, search space arba pati strategijos hipotezė turi būti peržiūrėta.
+
 ### 2. Plėsčiau optimizacijos scope etapais, o ne vienu šuoliu
 
 V1 pagrįstai optimizuoja tik `strategy.parameters`.
@@ -175,6 +182,7 @@ Sistema turėtų aiškiai kelti perspėjimus, kai:
 - validation score stipriai krenta prieš search score;
 - cost model sunaikina edge;
 - vienas trade arba viena diena dominuoja bendrą rezultatą;
+- best candidate turi per mažą trade sample, net jei jo score yra geriausias;
 - data-gap uždarymų per daug;
 - sample size per mažas išvadai;
 - consecutive losses arba drawdown peržengia politikos ribas.
@@ -299,6 +307,7 @@ jei strategija atrodo blogai dėl sistemos kokybės, parametrų keitimas būtų 
 
 ### P0: dar likę artimiausiam V1.x užbaigimui
 
+- griežtesnis minimalus trade-sample evidence target objective funkcijoje;
 - signal context snapshot
 - accepted, rejected ir expired reason counts
 - aiškesnis signal rejection ir skipped signal breakdown backtest/shadow artefaktuose

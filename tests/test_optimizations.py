@@ -183,7 +183,12 @@ def seed_market_data(client: TestClient, feed_id: str, agent_id: str) -> None:
 
 def test_compute_balanced_score_penalizes_drawdown_and_low_trade_count() -> None:
     summary = {"net_pnl": "120", "max_drawdown": "20", "total_trades": 2}
-    assert compute_balanced_score(summary) == Decimal("-60")
+    assert compute_balanced_score(summary) == Decimal("-1310")
+
+
+def test_compute_balanced_score_heavily_penalizes_one_trade_candidate() -> None:
+    summary = {"net_pnl": "-20.35113984", "max_drawdown": "20.35113984", "total_trades": 1}
+    assert compute_balanced_score(summary) == Decimal("-1500.877849600")
 
 
 def test_compute_balanced_score_rejects_candidate_without_trades() -> None:
