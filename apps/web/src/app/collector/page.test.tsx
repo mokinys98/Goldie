@@ -146,6 +146,25 @@ describe("CollectorPage", () => {
     });
   });
 
+  it("creates a feed-scoped resume command from the row action", async () => {
+    renderPage();
+    const resume = await screen.findByRole("button", { name: "Resume" });
+    fireEvent.click(resume);
+    await waitFor(() => {
+      expect(api).toHaveBeenCalledWith(
+        "/api/v1/collector/commands",
+        expect.objectContaining({
+          method: "POST",
+          body: JSON.stringify({
+            command: "RESUME",
+            market_feed_id: "feed-1",
+            payload: {},
+          }),
+        }),
+      );
+    });
+  });
+
   it("deletes a pending collector command", async () => {
     renderPage();
     const deleteButton = await screen.findByRole("button", { name: "Delete" });

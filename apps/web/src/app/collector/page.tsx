@@ -88,13 +88,21 @@ export default function CollectorPage() {
     [client],
   );
 
-  const command = async (name: "PAUSE" | "RESUME") => {
-    if (!window.confirm(`${name} all collector instruments?`)) return;
+  const command = async (
+    name: "PAUSE" | "RESUME",
+    feed?: { id: string; provider_symbol: string },
+  ) => {
+    const target = feed ? feed.provider_symbol : "all collector instruments";
+    if (!window.confirm(`${name} ${target}?`)) return;
     setError("");
     try {
       await api<CollectorCommand>("/api/v1/collector/commands", {
         method: "POST",
-        body: JSON.stringify({ command: name, payload: {} }),
+        body: JSON.stringify({
+          command: name,
+          market_feed_id: feed?.id,
+          payload: {},
+        }),
       });
       await client.invalidateQueries({ queryKey: ["collector-overview"] });
     } catch (caught) {
@@ -268,7 +276,7 @@ export default function CollectorPage() {
               <thead>
                 <tr>
                   <th>Instrument</th><th>Status</th><th>Bid / Ask</th><th>Spread</th>
-                  <th>Earliest M1</th><th>Latest M1</th><th>Lag</th><th>Bots</th>
+                  <th>Earliest M1</th><th>Latest M1</th><th>Lag</th><th>Bots</th><th>Actions</th>
                 </tr>
               </thead>
               <tbody>
@@ -291,6 +299,22 @@ export default function CollectorPage() {
                     <td>{date(feed.latest_candle_at)}</td>
                     <td>{feed.data_lag_seconds === null ? "--" : `${feed.data_lag_seconds}s`}</td>
                     <td>{feed.bot_count}</td>
+                    <td>
+                      <div className="button-row">
+                        <button
+                          className="button button-secondary"
+                          onClick={() => void command("PAUSE", feed)}
+                        >
+                          Pause
+                        </button>
+                        <button
+                          className="button button-primary"
+                          onClick={() => void command("RESUME", feed)}
+                        >
+                          Resume
+                        </button>
+                      </div>
+                    </td>
                   </tr>
                 ))}
               </tbody>
