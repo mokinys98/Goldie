@@ -162,6 +162,23 @@ legend { color: var(--gold); padding: 0 8px; font-size: 12px; font-weight: 800; 
 .theoretical-banner { border: 1px solid #6f5a24; background: #211b0e; color: var(--gold-bright); border-radius: 8px; padding: 12px 14px; font-size: 12px; font-weight: 800; letter-spacing: .06em; }
 .collector-section, .collector-metrics { margin-top: 18px; }
 .collector-alert { margin-top: 16px; }
+.continuity-plot { display: grid; gap: 18px; padding: 18px 4px 4px; }
+.continuity-axis { position: relative; height: 34px; }
+.continuity-line { position: absolute; top: 16px; left: 12px; right: 12px; height: 3px; border-radius: 999px; background: #2f8f69; }
+.continuity-dot { position: absolute; z-index: 2; top: 7px; left: 0; width: 21px; height: 21px; border: 3px solid var(--green); border-radius: 50%; background: var(--panel); }
+.continuity-dot-end { right: 0; left: auto; }
+.continuity-gap { position: absolute; z-index: 3; top: 11px; height: 13px; min-width: 16px; border: 1px solid #8d3b44; border-radius: 999px; background: repeating-linear-gradient(90deg, #632029 0 7px, #35151a 7px 14px); transform: translateX(-50%); }
+.continuity-labels { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); gap: 14px; align-items: center; color: var(--muted); font-size: 12px; }
+.continuity-labels strong { color: var(--text); text-align: center; }
+.continuity-labels span:last-child { text-align: right; }
+.continuity-checks { display: grid; gap: 12px; }
+.continuity-check { display: grid; grid-template-columns: auto 1fr; gap: 12px; align-items: center; padding: 12px; border: 1px solid var(--line); border-radius: 7px; background: #0c1118; }
+.continuity-check > span { width: 11px; height: 11px; border-radius: 50%; background: var(--green); box-shadow: 0 0 0 4px #10271f; }
+.continuity-check-warn > span { background: var(--gold-bright); box-shadow: 0 0 0 4px #2b2413; }
+.continuity-check-missing > span { background: var(--red); box-shadow: 0 0 0 4px #2b151a; }
+.continuity-check div { min-width: 0; display: grid; gap: 3px; }
+.continuity-check strong { font-size: 13px; }
+.continuity-check small { color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
 .inline-form { display: flex; gap: 8px; width: min(340px, 100%); }
 .inline-form input { min-width: 0; }
 .borderless { border: 0; border-radius: 0; background: transparent; }

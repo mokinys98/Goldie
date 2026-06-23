@@ -3,14 +3,11 @@
 import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { api, downloadAuthenticated, openCollectorStream } from "@/lib/api";
+import { api, openCollectorStream } from "@/lib/api";
 import type {
-  CollectorCandle,
   CollectorCommand,
   CollectorFeedDetail,
   CollectorSettingsResponse,
-  CollectorTick,
-  PageResult,
 } from "@/lib/types";
 import { StatusPill } from "@/components/status-pill";
 
@@ -68,9 +65,6 @@ export default function CollectorFeedPage() {
           )
         ) {
           void client.invalidateQueries({ queryKey: ["collector-feed", feedId] });
-          if (event.event_type === "market.candle") {
-            void client.invalidateQueries({ queryKey: ["collector-data", feedId] });
-          }
         }
       }),
     [client, feedId],
@@ -102,7 +96,7 @@ export default function CollectorFeedPage() {
         ))}
       </div>
       {tab === "Overview" && <Overview detail={data} />}
-      {tab === "Data" && <DataExplorer feedId={feedId} symbol={data.feed.provider_symbol} />}
+      {tab === "Data" && <DataContinuity detail={data} />}
       {tab === "Commands" && <Commands feedId={feedId} commands={data.commands} />}
       {tab === "Settings" && settings.data && (
         <Settings
@@ -146,87 +140,106 @@ function Overview({ detail }: { detail: CollectorFeedDetail }) {
   );
 }
 
-function DataExplorer({ feedId, symbol }: { feedId: string; symbol: string }) {
-  const [type, setType] = useState<"candles" | "ticks">("candles");
-  const [cursor, setCursor] = useState<string | null>(null);
-  const [start, setStart] = useState(localInput(new Date(Date.now() - 24 * 3600_000)));
-  const [end, setEnd] = useState(localInput(new Date()));
-  const [error, setError] = useState("");
-  const data = useQuery({
-    queryKey: ["collector-data", feedId, type, cursor],
-    queryFn: () =>
-      api<PageResult<CollectorCandle | CollectorTick>>(
-        `/api/v1/collector/feeds/${feedId}/${type}?limit=100${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}`,
-      ),
-  });
-  useEffect(() => setCursor(null), [type]);
-
-  const exportCsv = async () => {
-    setError("");
-    try {
-      const query = new URLSearchParams({
-        start: new Date(start).toISOString(),
-        end: new Date(end).toISOString(),
-      });
-      await downloadAuthenticated(
-        `/api/v1/collector/feeds/${feedId}/export/${type}?${query}`,
-        `${symbol}-${type}.csv`,
-      );
-    } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "Export failed");
-    }
-  };
+function DataContinuity({ detail }: { detail: CollectorFeedDetail }) {
+  const feed = detail.feed;
+  const latestCandle = feed.latest_candle_at ? new Date(feed.latest_candle_at) : null;
+  const earliestCandle = feed.earliest_candle_at ? new Date(feed.earliest_candle_at) : null;
+  const latestTick = feed.latest_tick?.observed_at ? new Date(feed.latest_tick.observed_at) : null;
+  const heartbeat = feed.last_heartbeat_at ? new Date(feed.last_heartbeat_at) : null;
+  const gapStatus = detail.gap_count === 0 ? "PASS" : detail.gap_count < 5 ? "WARN" : "BLOCK";
+  const lagStatus =
+    feed.data_lag_seconds === null ? "MISSING" : feed.data_lag_seconds <= 90 ? "FRESH" : "STALE";
+  const candleSpanMinutes =
+    earliestCandle && latestCandle
+      ? Math.max(0, Math.round((latestCandle.getTime() - earliestCandle.getTime()) / 60_000) + 1)
+      : 0;
+  const observedMinutes = Math.max(0, candleSpanMinutes - detail.gap_count);
+  const coverage = candleSpanMinutes ? Math.max(0, Math.min(100, (observedMinutes / candleSpanMinutes) * 100)) : 0;
+  const gapWidth = candleSpanMinutes ? Math.max(2, Math.min(38, 100 - coverage)) : 0;
+  const gapOffset = Math.max(8, Math.min(88, coverage));
+  const qualityLabel =
+    detail.gap_count === 0
+      ? "Continuous M1 sequence"
+      : `${detail.gap_count} missing M1 candle${detail.gap_count === 1 ? "" : "s"} in the recent window`;
 
   return (
     <div className="performance-stack">
       <div className="panel">
         <div className="section-title">
-          <div><h2>Stored data</h2><p>Newest rows first, 100 rows per page.</p></div>
-          <div className="button-row">
-            <button className={`button ${type === "candles" ? "button-primary" : "button-secondary"}`} onClick={() => setType("candles")}>Candles</button>
-            <button className={`button ${type === "ticks" ? "button-primary" : "button-secondary"}`} onClick={() => setType("ticks")}>Ticks</button>
+          <div>
+            <h2>Data continuity</h2>
+            <p>M1 sequence health from the latest collector feed detail.</p>
+          </div>
+          <StatusPill value={gapStatus} />
+        </div>
+        <div className="continuity-plot" aria-label={qualityLabel}>
+          <div className="continuity-axis">
+            <span className="continuity-dot" />
+            <span className="continuity-line" />
+            {detail.gap_count > 0 && (
+              <span
+                className="continuity-gap"
+                style={{ left: `${gapOffset}%`, width: `${gapWidth}%` }}
+              />
+            )}
+            <span className="continuity-dot continuity-dot-end" />
+          </div>
+          <div className="continuity-labels">
+            <span>{displayDate(feed.earliest_candle_at)}</span>
+            <strong>{qualityLabel}</strong>
+            <span>{displayDate(feed.latest_candle_at)}</span>
           </div>
         </div>
-        {data.isLoading ? <p className="muted">Loading data...</p> : (
-          <DataRows type={type} rows={data.data?.items ?? []} />
-        )}
-        <div className="button-row table-actions">
-          <button className="button button-secondary" disabled={!data.data?.next_cursor} onClick={() => setCursor(data.data?.next_cursor ?? null)}>
-            Older rows
-          </button>
-          {cursor && <button className="button button-ghost" onClick={() => setCursor(null)}>Newest</button>}
-        </div>
       </div>
-      <div className="panel">
-        <h2>CSV export</h2>
-        <div className="form-grid compact-form">
-          <label>Start<input type="datetime-local" value={start} onChange={(event) => setStart(event.target.value)} /></label>
-          <label>End<input type="datetime-local" value={end} onChange={(event) => setEnd(event.target.value)} /></label>
-          <button className="button button-primary" onClick={() => void exportCsv()}>Export {type}</button>
+      <div className="dashboard-grid">
+        <Metric label="Gap status" value={gapStatus} />
+        <Metric label="Recent M1 gaps" value={detail.gap_count} />
+        <Metric label="Coverage" value={candleSpanMinutes ? `${coverage.toFixed(1)}%` : "--"} />
+        <Metric label="Observed M1 candles" value={candleSpanMinutes ? observedMinutes : "--"} />
+        <Metric label="Expected M1 candles" value={candleSpanMinutes || "--"} />
+        <Metric label="Lag status" value={lagStatus} />
+      </div>
+      <div className="split-layout collector-section">
+        <div className="panel">
+          <h2>Continuity checkpoints</h2>
+          <div className="continuity-checks">
+            <ContinuityCheck label="First complete M1 candle" value={earliestCandle} state={earliestCandle ? "ok" : "missing"} />
+            <ContinuityCheck label="Latest complete M1 candle" value={latestCandle} state={latestCandle ? "ok" : "missing"} />
+            <ContinuityCheck label="Latest tick" value={latestTick} state={lagStatus === "FRESH" ? "ok" : "warn"} />
+            <ContinuityCheck label="Collector heartbeat" value={heartbeat} state={heartbeat ? "ok" : "missing"} />
+          </div>
         </div>
-        <p className="muted">Maximum 100,000 rows per export.</p>
-        {error && <div className="error-box">{error}</div>}
+        <div className={detail.gap_count ? "error-box" : "success-box"}>
+          <strong>{detail.gap_count ? "Backfill recommended" : "No recent gap action"}</strong>
+          <p>
+            {detail.gap_count
+              ? "Run a targeted backfill from Commands for the affected period, then confirm this panel returns to PASS."
+              : "Recent M1 candles are contiguous in the collector detail window."}
+          </p>
+        </div>
       </div>
     </div>
   );
 }
 
-function DataRows({ type, rows }: { type: "candles" | "ticks"; rows: Array<CollectorCandle | CollectorTick> }) {
-  if (!rows.length) return <p className="muted">No stored data.</p>;
-  if (type === "candles") {
-    return <Table
-      headers={["Opened", "Open", "High", "Low", "Close", "Volume"]}
-      rows={(rows as CollectorCandle[]).map((row) => [
-        displayDate(row.opened_at), row.open, row.high, row.low, row.close, row.volume,
-      ])}
-    />;
-  }
-  return <Table
-    headers={["Observed", "Received", "Bid", "Ask", "Spread"]}
-    rows={(rows as CollectorTick[]).map((row) => [
-      displayDate(row.observed_at), displayDate(row.received_at), row.bid, row.ask, row.spread,
-    ])}
-  />;
+function ContinuityCheck({
+  label,
+  value,
+  state,
+}: {
+  label: string;
+  value: Date | null;
+  state: "ok" | "warn" | "missing";
+}) {
+  return (
+    <div className={`continuity-check continuity-check-${state}`}>
+      <span />
+      <div>
+        <strong>{label}</strong>
+        <small>{value ? value.toLocaleString() : "--"}</small>
+      </div>
+    </div>
+  );
 }
 
 function Commands({ feedId, commands }: { feedId: string; commands: CollectorCommand[] }) {
