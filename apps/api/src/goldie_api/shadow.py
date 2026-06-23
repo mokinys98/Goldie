@@ -1,5 +1,5 @@
 from collections import defaultdict
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 from goldie_domain import (
@@ -157,13 +157,19 @@ def evaluate_open_outcome(
     db: Session,
     bot: Bot,
     tick: MarketTick,
+    *,
+    loaded_outcome: SignalOutcome | None = None,
+    loaded_config: ConfigVersion | None = None,
+    loaded_spec: InstrumentSpecification | None = None,
 ) -> SignalOutcome | None:
-    if bot.market_feed_id != tick.market_feed_id:
+    if (
+        bot.archived_at is not None
+        or bot.market_feed_id != tick.market_feed_id
+    ):
         return None
-    outcome = db.scalar(
+    outcome = loaded_outcome or db.scalar(
         select(SignalOutcome).where(
-            SignalOutcome.bot_id == bot.id,
-            SignalOutcome.status == "OPEN",
+            SignalOutcome.bot_id == bot.id, SignalOutcome.status == "OPEN"
         )
     )
     if outcome is None or outcome.opened_at is None or outcome.last_evaluated_at is None:
@@ -176,9 +182,9 @@ def evaluate_open_outcome(
         or outcome.risk_amount is None
     ):
         return None
-    config_row = db.get(ConfigVersion, outcome.config_version_id)
+    config_row = loaded_config or db.get(ConfigVersion, outcome.config_version_id)
     config = BotConfiguration.model_validate(config_row.config if config_row else {})
-    spec = instrument_specification(db, bot, tick.symbol)
+    spec = loaded_spec or instrument_specification(db, bot, tick.symbol)
     if spec is None:
         return None
 
@@ -196,8 +202,10 @@ def evaluate_open_outcome(
         point=spec.point,
         tick_size=spec.point,
         tick_value=spec.point,
-        opened_at=as_utc(outcome.opened_at),
-        last_evaluated_at=last_evaluated_at,
+        opened_at=as_utc(outcome.opened_at)
+        + timedelta(seconds=outcome.paused_duration_seconds),
+        last_evaluated_at=last_evaluated_at
+        + timedelta(seconds=outcome.paused_duration_seconds),
         tick_at=tick_at,
         bid=tick.bid,
         ask=tick.ask,
@@ -221,8 +229,10 @@ def evaluate_open_outcome(
         outcome.gross_pnl = evaluation.net_pnl
         outcome.net_pnl = evaluation.net_pnl
         outcome.r_multiple = evaluation.r_multiple
-        outcome.duration_seconds = int(
-            (tick_at - as_utc(outcome.opened_at)).total_seconds()
+        outcome.duration_seconds = max(
+            0,
+            int((tick_at - as_utc(outcome.opened_at)).total_seconds())
+            - outcome.paused_duration_seconds,
         )
     return outcome
 

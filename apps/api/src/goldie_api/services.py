@@ -111,7 +111,11 @@ def activate_config_version(
 
 
 def evaluate_latest_signal(db: Session, bot: Bot) -> tuple[Signal | None, bool]:
-    if bot.active_config_version_id is None:
+    if (
+        bot.archived_at is not None
+        or bot.state != "MONITORING"
+        or bot.active_config_version_id is None
+    ):
         return None, False
     config_row = db.get(ConfigVersion, bot.active_config_version_id)
     if config_row is None or config_row.status != "ACTIVE":
@@ -169,6 +173,33 @@ def evaluate_latest_signal(db: Session, bot: Bot) -> tuple[Signal | None, bool]:
     if duplicate is not None:
         return duplicate, False
 
+    return evaluate_signal_from_context(
+        db,
+        bot=bot,
+        config_row=config_row,
+        active_run=active_run,
+        tick=tick,
+        spec=spec,
+        rows=rows,
+    )
+
+
+def evaluate_signal_from_context(
+    db: Session,
+    *,
+    bot: Bot,
+    config_row: ConfigVersion,
+    active_run: Run,
+    tick: MarketTick,
+    spec: InstrumentSpecification,
+    rows: list[Candle],
+) -> tuple[Signal | None, bool]:
+    if not rows:
+        return None, False
+    config = BotConfiguration.model_validate(config_row.config)
+    strategy = get_strategy(config.strategy.name)
+    latest_candle_at = max(as_utc(row.opened_at) for row in rows)
+
     decision = strategy.evaluate(
         MarketContext(
             observed_at=as_utc(tick.observed_at),
@@ -191,6 +222,7 @@ def evaluate_latest_signal(db: Session, bot: Bot) -> tuple[Signal | None, bool]:
         config,
     )
     signal = Signal(
+        id=uuid.uuid4(),
         bot_id=bot.id,
         run_id=active_run.id,
         config_version_id=config_row.id,
@@ -205,5 +237,4 @@ def evaluate_latest_signal(db: Session, bot: Bot) -> tuple[Signal | None, bool]:
         inputs=jsonable_encoder(decision.inputs),
     )
     db.add(signal)
-    db.flush()
     return signal, True

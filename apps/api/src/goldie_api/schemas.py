@@ -175,6 +175,7 @@ class SignalOutcomeRead(OrmModel):
     mfe_points: Decimal
     mae_points: Decimal
     duration_seconds: int | None
+    paused_duration_seconds: int
 
 
 class BotStatus(BaseModel):
@@ -211,6 +212,8 @@ class MarketFeedRead(OrmModel):
     provider_symbol: str
     status: str
     last_heartbeat_at: datetime | None
+    paused_at: datetime | None
+    resume_from_at: datetime | None
     details: dict
 
 
@@ -285,6 +288,7 @@ class CollectorSettingsRead(CollectorSettingsValues):
     id: uuid.UUID
     version: int
     updated_at: datetime
+    globally_paused: bool = False
 
 
 class CollectorSettingsUpdate(CollectorSettingsValues):

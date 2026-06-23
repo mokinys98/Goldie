@@ -148,6 +148,7 @@ class InstrumentWorker:
             if latest_candle_at
             else now - timedelta(days=self.settings.backfill_days),
             now - timedelta(days=self.settings.backfill_days),
+            client.resume_from_at or datetime.min.replace(tzinfo=UTC),
         )
         provider.start()
         closed = provider.market_is_closed()
@@ -255,6 +256,7 @@ class CollectorSupervisor:
 
     def reconcile(self, control: dict) -> None:
         configuration = control["configuration"]
+        self.globally_paused = bool(configuration.get("globally_paused", False))
         version = int(configuration["version"])
         desired: dict[str, CollectorSettings] = {}
         for instrument in control["instruments"]:
@@ -262,7 +264,13 @@ class CollectorSupervisor:
             feed_id = instrument.get("market_feed_id")
             if feed_id:
                 self.feed_symbols[feed_id] = symbol
-            if instrument["enabled"] and symbol not in self.paused and not self.globally_paused:
+            feed_paused = instrument.get("feed_status") == "PAUSED"
+            if (
+                instrument["enabled"]
+                and not feed_paused
+                and symbol not in self.paused
+                and not self.globally_paused
+            ):
                 desired[symbol] = self.effective_settings(
                     symbol,
                     configuration,
@@ -415,9 +423,9 @@ class CollectorSupervisor:
                         self.feed_symbols[instrument["market_feed_id"]] = instrument[
                             "provider_symbol"
                         ]
+                self.reconcile(control)
                 for command in control["commands"]:
                     self.handle_command(command)
-                self.reconcile(control)
                 self.heartbeat()
                 self.last_error = None
             except Exception as exc:

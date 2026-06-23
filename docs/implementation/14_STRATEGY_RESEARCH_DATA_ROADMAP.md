@@ -25,9 +25,9 @@ Dokumentas remiasi šiais esamais šaltiniais:
 
 Goldie jau turi pakankamai stiprią pirmą tyrimų bazę:
 
-- deterministinį M1 backtest variklį;
+- deterministinį M1 backtest variklį toms pačioms žvakėms, konfigūracijai ir cost prielaidoms;
 - Optuna optimizaciją `config.strategy.parameters` laukams;
-- saugomas backtest trade eilutes ir summary;
+- atskiruose backtest run'uose saugomas trade eilutes ir summary;
 - saugomus optimization trial ir run artefaktus;
 - chronologinį search ir validation split optimizacijoje;
 - fiksuoto grid validaciją `stop_loss_points` ir `take_profit_points`;
@@ -37,6 +37,86 @@ Goldie jau turi pakankamai stiprią pirmą tyrimų bazę:
 - shadow outcome evaluation;
 - immutable config snapshot ir `run_id`;
 - bendrą trading-domain sluoksnį, kuris jau dabar jungia backtest, optimization ir shadow logiką.
+
+Svarbios ribos:
+
+- Optuna study šiuo metu kuriamas be fiksuoto sampler seed, todėl visas optimization
+  run nėra tiksliai atkuriamas vien iš eksporto;
+- optimization trial saugo pilną summary ir equity curve, tačiau nesaugo pilno
+  `BacktestTrade` žurnalo; pilnos trade eilutės saugomos tik atskiruose backtest run'uose;
+- optimization naudoja M1 ir chronologinį 80/20 search/validation split, tačiau neturi
+  trečio nepriklausomo out-of-sample segmento.
+
+## Faktinė renkamų duomenų inventorizacija
+
+Ši lentelė yra dabartinio kodo auditas, o ne siekiamybių sąrašas. Statusai:
+
+- **TAIP** – duomuo apskaičiuojamas ir išsaugomas arba eksportuojamas;
+- **DALINAI** – yra artimas duomuo, bet jo semantika ar aprėptis siauresnė;
+- **NE** – dabartiniame optimization workflow nėra.
+
+| Sritis | Statusas | Kas realiai yra dabar | Ko dar trūksta |
+|---|---|---|---|
+| Strategija ir versija | DALINAI | `config_snapshot`, `config_version_id`, strategijos pavadinimas ir parametrai | Kodo commit SHA, strategijos implementacijos versija |
+| Instrumentas ir timeframe | TAIP | `market_feed_id`, canonical ir provider symbol, fiksuotas `M1` | Keli timeframe viename tyrime |
+| Train / validation / OOS | DALINAI | Chronologinis 80 % search ir 20 % validation | Nepriklausomas OOS/test segmentas |
+| Komisija, spread, slippage | DALINAI | Fee ir slippage/impact modelis eksportuojamas; backtest naudoja default spread | Naudota spread reikšmė nepatenka į optimization execution model eksportą |
+| Seed, trial skaičius, kriterijus | DALINAI | `n_trials`, `objective`, BALANCED formulė ir search space | Fiksuotas bei eksportuojamas Optuna seed |
+| Trial parametrai, score ir būsena | TAIP | Parametrai, overrides, score, `SUCCEEDED`/`FAILED`, klaida ir laikai | Optuna `PRUNED` būsena nenaudojama |
+| Search ir validation metrikos | TAIP | Fazės saugomos atskirai; kandidatai susiejami pagal parametrus | Atskiros OOS metrikos |
+| Net PnL ir grąža | DALINAI | `net_pnl`, `return_pct`, `final_equity` | CAGR ir annualizuota grąža |
+| Drawdown | DALINAI | `max_drawdown`, `max_drawdown_pct` | Drawdown trukmė, underwater trukmė ir recovery time |
+| Sharpe ir Sortino | DALINAI | `trade_sharpe` ir `trade_sortino` pagal sandorių R reikšmes | Periodinių grąžų annualizuoti Sharpe/Sortino |
+| PF, expectancy, sandoriai, win rate | TAIP | Profit factor, expectancy pinigais ir R, count, win rate, average win/loss | Pasikliautinieji intervalai |
+| Pozicijos trukmė | TAIP | `average_duration_seconds`, o backtest trade turi individualią trukmę | Trukmės percentiliai optimization santraukoje |
+| Exposure | NE | – | Time-in-market, gross/net exposure |
+| Trial metrikų statistika | DALINAI | Count, mean, median, min, max ir population standard deviation pagal fazę | Variance laukas ir agregacija tarp atskirų optimization run'ų |
+| Parametrų pasiskirstymas | TAIP | Visų successful search trial pasiskirstymai, top/bottom decile intervalai | Kelių run'ų bendras pasiskirstymas |
+| Parametrų svarba | DALINAI | Pearson koreliacija tarp numeric parametro ir score | Optuna importance, sąveikos ir patikimumo įvertis |
+| Plateau / heatmap | NE | – | Kaimyninių taškų analizė, heatmap ir plataus optimumo klasifikacija |
+| Top ir blogiausi trial | DALINAI | Full export turi visus trial; LLM context turi top 10, blogiausius ir validation winners | Konfigūruojamas top 20–50 reportas |
+| 5 optimizacijų stabilumas | NE | Kiekvienas run analizuojamas atskirai | Run group, parametrų atstumai, regionų pasikartojimas, blogiausias run |
+| Search-to-validation degradacija | TAIP | Kandidatų score degradacija ir jos vidurkis, quality gate | Sharpe, PF ir return degradacija kaip atskiri pirmos klasės laukai |
+| Walk-forward | NE | – | Langų orchestracija ir agreguota forward ataskaita |
+| Pelningi OOS langai | NE | – | Pelningų langų procentas ir langų dispersija |
+| Laikotarpio koncentracija | DALINAI | Year/month net PnL, direction ir exit reason breakdown | Blogiausia diena/savaitė/mėnuo, vieno laikotarpio dominavimo testas |
+| Rizikos profilis | DALINAI | Max DD, max consecutive losses, MFE/MAE trade lygiu backtest'e | Tail risk, VaR/CVaR, worst trade/day/week/month |
+| Monte Carlo | NE | – | DD ir terminal equity percentiliai |
+| Rinkos režimai | NE | – | Trend/range ir volatility/liquidity labels bei pjūviai |
+| Long / short | DALINAI | Direction breakdown su trades, net PnL ir win rate | Pilnas metrikų rinkinys kiekvienai krypčiai |
+| Pagal instrumentą | DALINAI | Vienas feed/instrumentas vienam run | Vieno tyrimo kelių instrumentų agregacija |
+| Pilnas sandorių žurnalas | DALINAI | Atskiras backtest saugo entry/exit, kainas, kryptį, PnL, komisiją, reason, MFE/MAE ir trukmę | Optimization trial trade eilutės nesaugomos; spread/slippage cost išskaidymas nepilnas |
+| Equity ir drawdown laiko eilutės | DALINAI | Equity curve yra summary | Atskirta drawdown/underwater laiko eilutė |
+| Signalų ir filtrų statistika | DALINAI | Validation trial diagnostics turi agreguotus `reason_counts`; search fazėje jų rinkimas išjungtas | Pilni signal context snapshot'ai ir accepted/rejected/expired įvykiai |
+| Duomenų kokybė | TAIP | Symbol, M1 periodai, candle counts, incomplete candles ir aptikti M1 gap'ai | Gap trukmė ir expected-vs-observed candle coverage pagal sesijų kalendorių |
+| Automatinė išvada | DALINAI | `research_quality_gates`, `decision_context`, PASS/WARN/BLOCK rekomendacija | 5 run'ų bendra tekstinė išvada ir konkrečios parametrų keitimo rekomendacijos |
+
+### Ką reiškia dabartinis „robustness“
+
+`summary.robustness` nėra bendras penkių optimizacijų robustumo tyrimas. Jis vieno
+run'o ribose:
+
+- susieja search kandidatą su jo fixed-config validation trial;
+- apskaičiuoja score degradaciją;
+- pateikia iki 5 mažiausiai degradavusių kandidatų;
+- pateikia iki 5 geriausių validation kandidatų;
+- apskaičiuoja vidutinę score degradaciją.
+
+Todėl šį lauką reikia interpretuoti kaip **vieno run'o candidate validation
+diagnostiką**, o ne kaip walk-forward, kelių seed ar kelių periodų stabilumo įrodymą.
+
+### Kur saugomi ir pateikiami duomenys
+
+- `optimization_runs.summary` – terminalinė run santrauka, data profile, robustness,
+  parameter insights, quality gates ir decision context;
+- `optimization_trials.metrics` – pagrindinės metrikos, timings ir diagnostics;
+- `optimization_trials.summary` – pilna backtest summary, įskaitant equity curve ir
+  breakdown'us;
+- `/api/v1/optimizations/{id}/export` – pilnas `goldie.optimization-results.v2`
+  eksportas su visais trial;
+- `/api/v1/optimizations/{id}/llm-context` – kompaktiškas
+  `goldie.optimization-llm-context.v1` eksportas;
+- `backtest_trades` – pilnas trade žurnalas tik atskiriems backtest experimentams.
 
 Po V1.x kokybės vartų ši bazė jau atsako ne tik į klausimą:
 

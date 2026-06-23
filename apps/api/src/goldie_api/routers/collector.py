@@ -7,7 +7,7 @@ from datetime import UTC, datetime, timedelta
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import StreamingResponse
-from sqlalchemy import desc, func, select
+from sqlalchemy import desc, func, select, update
 from sqlalchemy.orm import Session
 
 from ..db import get_db
@@ -22,7 +22,14 @@ from ..models import (
     CollectorInstrumentConfiguration,
     MarketFeed,
     MarketTick,
+    SignalOutcome,
     User,
+)
+from ..realtime import (
+    OVERVIEW_CACHE_KEY,
+    invalidate_collector_overview,
+    publish_event_sync,
+    redis_client,
 )
 from ..schemas import (
     CollectorCommandCreate,
@@ -36,12 +43,6 @@ from ..schemas import (
     CollectorSettingsValues,
 )
 from ..security import get_current_user
-from ..realtime import (
-    OVERVIEW_CACHE_KEY,
-    invalidate_collector_overview,
-    publish_event_sync,
-    redis_client,
-)
 from ..services import add_audit, as_utc
 from ..settings import get_settings
 
@@ -87,6 +88,7 @@ def serialize_configuration(row: CollectorConfiguration) -> dict:
             id=row.id,
             version=row.version,
             updated_at=row.updated_at,
+            globally_paused=row.globally_paused,
             **configuration_values(row),
         )
     )
@@ -100,7 +102,38 @@ def serialize_instrument(row: CollectorInstrumentConfiguration, feed: MarketFeed
         "overrides": row.overrides,
         "market_feed_id": str(feed.id) if feed else None,
         "canonical_symbol": feed.canonical_symbol if feed else row.provider_symbol.replace("_", ""),
+        "feed_status": feed.status if feed else None,
+        "resume_from_at": feed.resume_from_at.isoformat() if feed and feed.resume_from_at else None,
     }
+
+
+def pause_feed(feed: MarketFeed, now: datetime) -> None:
+    if feed.paused_at is None:
+        feed.paused_at = now
+    feed.status = "PAUSED"
+
+
+def resume_feed(db: Session, feed: MarketFeed, now: datetime) -> None:
+    paused_at = as_utc(feed.paused_at) if feed.paused_at else now
+    paused_seconds = max(0, int((now - paused_at).total_seconds()))
+    bot_ids = select(Bot.id).where(Bot.market_feed_id == feed.id)
+    if paused_seconds:
+        db.execute(
+            update(SignalOutcome)
+            .where(
+                SignalOutcome.bot_id.in_(bot_ids),
+                SignalOutcome.status == "OPEN",
+            )
+            .values(
+                paused_duration_seconds=(
+                    SignalOutcome.paused_duration_seconds + paused_seconds
+                )
+            )
+        )
+    next_minute = now.replace(second=0, microsecond=0) + timedelta(minutes=1)
+    feed.paused_at = None
+    feed.resume_from_at = next_minute
+    feed.status = "REGISTERED"
 
 
 def serialize_command(row: CollectorCommand) -> dict:
@@ -149,6 +182,7 @@ def feed_summary(db: Session, feed: MarketFeed, now: datetime) -> dict:
         select(MarketTick)
         .where(MarketTick.market_feed_id == feed.id)
         .order_by(desc(MarketTick.observed_at))
+        .limit(1)
     )
     candle = db.scalar(
         select(Candle)
@@ -158,6 +192,7 @@ def feed_summary(db: Session, feed: MarketFeed, now: datetime) -> dict:
             Candle.is_complete.is_(True),
         )
         .order_by(desc(Candle.opened_at))
+        .limit(1)
     )
     earliest_candle_at = db.scalar(
         select(func.min(Candle.opened_at)).where(
@@ -166,7 +201,12 @@ def feed_summary(db: Session, feed: MarketFeed, now: datetime) -> dict:
             Candle.is_complete.is_(True),
         )
     )
-    bots = db.scalar(select(func.count(Bot.id)).where(Bot.market_feed_id == feed.id)) or 0
+    bots = db.scalar(
+        select(func.count(Bot.id)).where(
+            Bot.market_feed_id == feed.id,
+            Bot.archived_at.is_(None),
+        )
+    ) or 0
     lag = None
     spread = None
     if tick:
@@ -305,7 +345,10 @@ def overview(
             feed_id: count
             for feed_id, count in db.execute(
                 select(Bot.market_feed_id, func.count(Bot.id))
-                .where(Bot.market_feed_id.in_(feed_ids))
+                .where(
+                    Bot.market_feed_id.in_(feed_ids),
+                    Bot.archived_at.is_(None),
+                )
                 .group_by(Bot.market_feed_id)
             )
         }
@@ -529,6 +572,7 @@ def feed_detail(
         select(Agent)
         .where(Agent.market_feed_id == feed.id)
         .order_by(desc(Agent.updated_at))
+        .limit(1)
     )
     instrument = db.scalar(
         select(CollectorInstrumentConfiguration).where(
@@ -779,6 +823,14 @@ def create_command(
     )
     db.add(row)
     db.flush()
+    if payload.command == "PAUSE":
+        now = datetime.now(UTC)
+        if payload.market_feed_id:
+            pause_feed(feed_or_404(db, payload.market_feed_id), now)
+        else:
+            get_configuration(db).globally_paused = True
+            for feed in db.scalars(select(MarketFeed)):
+                pause_feed(feed, now)
     add_audit(
         db,
         actor_type="USER",
@@ -938,14 +990,24 @@ def update_command(
     if payload.status in {"SUCCEEDED", "FAILED"}:
         command.completed_at = datetime.now(UTC)
     if payload.status == "SUCCEEDED" and command.command in {"PAUSE", "RESUME"}:
-        feed_status = "PAUSED" if command.command == "PAUSE" else "REGISTERED"
+        now = datetime.now(UTC)
         if command.market_feed_id:
             feed = db.get(MarketFeed, command.market_feed_id)
             if feed:
-                feed.status = feed_status
+                if command.command == "PAUSE":
+                    pause_feed(feed, now)
+                else:
+                    resume_feed(db, feed, now)
         else:
+            if command.command == "PAUSE":
+                get_configuration(db).globally_paused = True
+            else:
+                get_configuration(db).globally_paused = False
             for feed in db.scalars(select(MarketFeed)):
-                feed.status = feed_status
+                if command.command == "PAUSE":
+                    pause_feed(feed, now)
+                else:
+                    resume_feed(db, feed, now)
     db.commit()
     db.refresh(command)
     invalidate_collector_overview()

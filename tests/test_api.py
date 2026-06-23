@@ -938,6 +938,146 @@ def test_collector_control_plane_lifecycle() -> None:
         assert overview.json()["instance"]["applied_config_version"] == 2
 
 
+def test_feed_pause_is_immediate_persistent_and_resume_skips_gap() -> None:
+    Base.metadata.drop_all(engine)
+    Base.metadata.create_all(engine)
+    agent_headers = {"X-Agent-Token": "test-agent-token"}
+    with TestClient(app) as client:
+        instance = client.post(
+            "/api/v1/collector/instances/register",
+            headers=agent_headers,
+            json={
+                "name": "pause-test-collector",
+                "defaults": {
+                    "quote_interval_seconds": 5,
+                    "candle_poll_seconds": 15,
+                    "heartbeat_seconds": 10,
+                    "backfill_days": 30,
+                    "backfill_batch_size": 50,
+                    "configuration_retry_seconds": 900,
+                },
+                "instruments": ["EUR_USD"],
+            },
+        ).json()["instance"]
+        feed = client.post(
+            "/api/v1/market-feeds/register",
+            headers=agent_headers,
+            json={
+                "provider": "oanda",
+                "environment": "practice",
+                "canonical_symbol": "EURUSD",
+                "provider_symbol": "EUR_USD",
+                "agent_name": "pause-test-agent",
+            },
+        ).json()["feed"]
+        headers = login(client)
+        paused = client.post(
+            "/api/v1/collector/commands",
+            headers=headers,
+            json={"command": "PAUSE", "market_feed_id": feed["id"], "payload": {}},
+        ).json()
+
+        feeds = client.get("/api/v1/market-feeds", headers=headers).json()
+        current = next(item for item in feeds if item["id"] == feed["id"])
+        assert current["status"] == "PAUSED"
+        assert current["paused_at"] is not None
+        control = client.post(
+            f"/api/v1/collector/instances/{instance['id']}/poll",
+            headers=agent_headers,
+            json={},
+        ).json()
+        instrument = next(
+            item for item in control["instruments"] if item["market_feed_id"] == feed["id"]
+        )
+        assert instrument["feed_status"] == "PAUSED"
+
+        client.patch(
+            f"/api/v1/collector/commands/{paused['id']}",
+            headers=agent_headers,
+            json={"status": "SUCCEEDED", "result": {}, "progress": {}},
+        )
+        resumed = client.post(
+            "/api/v1/collector/commands",
+            headers=headers,
+            json={"command": "RESUME", "market_feed_id": feed["id"], "payload": {}},
+        ).json()
+        client.patch(
+            f"/api/v1/collector/commands/{resumed['id']}",
+            headers=agent_headers,
+            json={"status": "SUCCEEDED", "result": {}, "progress": {}},
+        )
+
+        feeds = client.get("/api/v1/market-feeds", headers=headers).json()
+        current = next(item for item in feeds if item["id"] == feed["id"])
+        assert current["status"] == "REGISTERED"
+        assert current["paused_at"] is None
+        assert current["resume_from_at"] is not None
+        resume_from = datetime.fromisoformat(current["resume_from_at"])
+        assert resume_from.second == 0
+        assert resume_from.microsecond == 0
+
+
+def test_feed_heartbeat_publishes_once_and_excludes_archived_bots(monkeypatch) -> None:
+    Base.metadata.drop_all(engine)
+    Base.metadata.create_all(engine)
+    agent_headers = {"X-Agent-Token": "test-agent-token"}
+    published: list[dict] = []
+    monkeypatch.setattr(
+        "goldie_api.routers.feeds.publish_event_sync",
+        lambda payload: published.append(dict(payload)) or True,
+    )
+    with TestClient(app) as client:
+        registration = client.post(
+            "/api/v1/market-feeds/register",
+            headers=agent_headers,
+            json={
+                "provider": "oanda",
+                "environment": "practice",
+                "canonical_symbol": "EURUSD",
+                "provider_symbol": "EUR_USD",
+                "agent_name": "heartbeat-test-agent",
+            },
+        ).json()
+        feed_id = registration["feed"]["id"]
+        with SessionLocal() as db:
+            active_ids = []
+            for index in range(3):
+                bot = Bot(
+                    name=f"Heartbeat active {index}",
+                    market_feed_id=uuid.UUID(feed_id),
+                    state="MONITORING",
+                    active_config_version_id=uuid.uuid4(),
+                )
+                db.add(bot)
+                db.flush()
+                active_ids.append(str(bot.id))
+            db.add(
+                Bot(
+                    name="Heartbeat archived",
+                    market_feed_id=uuid.UUID(feed_id),
+                    state="MONITORING",
+                    active_config_version_id=uuid.uuid4(),
+                    archived_at=datetime.now(UTC),
+                )
+            )
+            db.commit()
+
+        response = client.post(
+            f"/api/v1/market-feeds/{feed_id}/heartbeat",
+            headers=agent_headers,
+            json={
+                "agent_id": registration["agent"]["id"],
+                "status": "ONLINE",
+                "details": {},
+                "observed_at": datetime.now(UTC).isoformat(),
+            },
+        )
+
+        assert response.status_code == 200
+        assert len(published) == 1
+        assert set(published[0]["bot_instance_ids"]) == set(active_ids)
+
+
 def test_collector_feed_data_commands_and_export() -> None:
     Base.metadata.drop_all(engine)
     Base.metadata.create_all(engine)

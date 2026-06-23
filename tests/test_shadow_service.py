@@ -113,6 +113,7 @@ def test_shadow_lifecycle_enforces_one_open_position_and_is_idempotent() -> None
         assert opened is repeated
         assert opened.status == "OPEN"
         assert opened.volume == Decimal("35")
+        opened.paused_duration_seconds = 120
 
         second_signal = Signal(
             bot_id=bot.id,
@@ -136,7 +137,7 @@ def test_shadow_lifecycle_enforces_one_open_position_and_is_idempotent() -> None
             market_feed_id=feed.id,
             agent_id=agent.id,
             symbol="XAUUSD",
-            observed_at=NOW + timedelta(seconds=2),
+            observed_at=NOW + timedelta(seconds=122),
             bid=Decimal("2351.30"),
             ask=Decimal("2351.50"),
         )
@@ -147,6 +148,7 @@ def test_shadow_lifecycle_enforces_one_open_position_and_is_idempotent() -> None
         assert closed.status == "CLOSED"
         assert closed.result == "WIN"
         assert closed.close_reason == "TAKE_PROFIT"
+        assert closed.duration_seconds == 2
         assert evaluate_open_outcome(db, bot, closing_tick) is None
 
         db.commit()

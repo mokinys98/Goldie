@@ -18,6 +18,7 @@ from ..models import (
     MarketFeed,
     User,
 )
+from ..realtime import invalidate_collector_overview, publish_event, publish_event_sync
 from ..schemas import (
     FeedCandleBatch,
     FeedHeartbeatRequest,
@@ -28,7 +29,6 @@ from ..schemas import (
     MarketFeedRegistration,
 )
 from ..security import get_current_user
-from ..realtime import invalidate_collector_overview, publish_event, publish_event_sync
 from ..settings import get_settings
 
 router = APIRouter(prefix="/api/v1/market-feeds", tags=["market-feeds"])
@@ -55,13 +55,19 @@ def broadcast_to_feed_bots(
     payload: dict,
 ) -> None:
     bot_ids = list(
-        db.scalars(select(Bot.id).where(Bot.market_feed_id == feed_id))
+        db.scalars(
+            select(Bot.id).where(
+                Bot.market_feed_id == feed_id,
+                Bot.archived_at.is_(None),
+                Bot.state == "MONITORING",
+                Bot.active_config_version_id.is_not(None),
+            )
+        )
     )
-    if not bot_ids:
-        publish_event_sync(payload)
-        return
-    for bot_id in bot_ids:
-        publish_event_sync({**payload, "bot_instance_id": str(bot_id)})
+    db.commit()
+    publish_event_sync(
+        {**payload, "bot_instance_ids": [str(bot_id) for bot_id in bot_ids]}
+    )
 
 
 @router.get("", response_model=list[MarketFeedRead])
@@ -146,6 +152,9 @@ def heartbeat(
 ) -> MarketFeed:
     feed = get_feed_or_404(db, feed_id)
     agent = validate_feed_agent(db, feed_id, payload.agent_id)
+    if feed.status == "PAUSED" or feed.paused_at is not None:
+        return feed
+    previous_status = feed.status
     observed_at = payload.observed_at.astimezone(UTC)
     feed.status = payload.status
     feed.details = payload.details
@@ -155,7 +164,8 @@ def heartbeat(
     agent.last_heartbeat_at = observed_at
     db.commit()
     db.refresh(feed)
-    invalidate_collector_overview()
+    if previous_status != feed.status:
+        invalidate_collector_overview()
     broadcast_to_feed_bots(
         db,
         feed.id,
@@ -178,6 +188,8 @@ def ingest_instrument_specification(
 ) -> dict:
     feed = get_feed_or_404(db, feed_id)
     validate_feed_agent(db, feed_id, payload.agent_id)
+    if feed.status == "PAUSED" or feed.paused_at is not None:
+        return {"accepted": False, "dropped": True, "reason": "FEED_PAUSED"}
     if payload.provider_symbol != feed.provider_symbol:
         raise HTTPException(status_code=422, detail="Provider symbol does not match feed")
     point = Decimal(10) ** payload.pip_location

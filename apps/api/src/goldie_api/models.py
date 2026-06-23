@@ -43,6 +43,9 @@ class User(Base, TimestampMixin):
 
 class Bot(Base, TimestampMixin):
     __tablename__ = "bots"
+    __table_args__ = (
+        Index("ix_bots_runtime_feed", "market_feed_id", "archived_at", "state"),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
     name: Mapped[str] = mapped_column(String(120), unique=True)
@@ -99,6 +102,7 @@ class StrategyProfile(Base, TimestampMixin):
 
 class Run(Base, TimestampMixin):
     __tablename__ = "runs"
+    __table_args__ = (Index("ix_runs_bot_status", "bot_id", "status"),)
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
     bot_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("bots.id"), index=True)
@@ -145,6 +149,10 @@ class MarketFeed(Base, TimestampMixin):
     provider_symbol: Mapped[str] = mapped_column(String(64))
     status: Mapped[str] = mapped_column(String(32), default="REGISTERED")
     last_heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    paused_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    resume_from_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     details: Mapped[dict] = mapped_column(JSON, default=dict)
 
 
@@ -159,6 +167,7 @@ class CollectorConfiguration(Base, TimestampMixin):
     backfill_days: Mapped[int] = mapped_column(Integer)
     backfill_batch_size: Mapped[int] = mapped_column(Integer)
     configuration_retry_seconds: Mapped[Decimal] = mapped_column(Numeric(10, 2))
+    globally_paused: Mapped[bool] = mapped_column(Boolean, default=False)
 
 
 class CollectorInstrumentConfiguration(Base, TimestampMixin):
@@ -326,6 +335,9 @@ class IngestionEvent(Base):
 
 class Signal(Base):
     __tablename__ = "signals"
+    __table_args__ = (
+        Index("ix_signals_bot_run_observed", "bot_id", "run_id", "observed_at"),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
     bot_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("bots.id"), index=True)
@@ -388,6 +400,7 @@ class SignalOutcome(Base, TimestampMixin):
     mfe_points: Mapped[Decimal] = mapped_column(Numeric(20, 8), default=Decimal("0"))
     mae_points: Mapped[Decimal] = mapped_column(Numeric(20, 8), default=Decimal("0"))
     duration_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    paused_duration_seconds: Mapped[int] = mapped_column(Integer, default=0)
     signal: Mapped[Signal] = relationship(back_populates="outcome")
 
 
