@@ -1,9 +1,9 @@
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from types import SimpleNamespace
 
 import pytest
-from goldie_collector.__main__ import CollectorSupervisor
+from goldie_collector.__main__ import CollectorSupervisor, InstrumentWorker
 from goldie_collector.client import GoldieApiClient
 from goldie_collector.provider import (
     OandaApiError,
@@ -273,3 +273,81 @@ def test_remote_collector_settings_are_validated_and_coerced() -> None:
     assert isinstance(settings.quote_interval_seconds, float)
     assert settings.backfill_days == 14
     assert isinstance(settings.backfill_days, int)
+
+
+def test_instrument_worker_starts_stream_before_candle_catchup(monkeypatch) -> None:
+    events: list[str] = []
+    worker_ref = {}
+
+    class FakeClient:
+        def __init__(self, _settings):
+            pass
+
+        def set_collector_id(self, _collector_id):
+            pass
+
+        def register(self, _settings):
+            events.append("register")
+            return datetime.now(UTC) - timedelta(days=1)
+
+        def instrument(self, _instrument):
+            events.append("instrument")
+
+        def heartbeat(self, status, _details):
+            events.append(f"heartbeat:{status}")
+
+        def quotes(self, _quotes):
+            pass
+
+        def candles(self, _candles):
+            events.append("send-candles")
+            return {"count": 0, "duplicates": 0}
+
+        def flush_due(self):
+            pass
+
+        def flush_quotes(self):
+            pass
+
+    class FakeProvider:
+        stream_error = None
+
+        def __init__(self, _settings):
+            self.started = False
+
+        def validate_instrument(self):
+            return SimpleNamespace()
+
+        def start(self):
+            self.started = True
+            events.append("stream-start")
+
+        def market_is_closed(self):
+            return False
+
+        def latest_quote(self):
+            return None
+
+        def candles(self, _start, _end):
+            events.append(f"candles-started:{self.started}")
+            worker_ref["worker"].stop_event.set()
+            return []
+
+        def close(self):
+            events.append("close")
+
+    monkeypatch.setattr("goldie_collector.__main__.GoldieApiClient", FakeClient)
+    monkeypatch.setattr("goldie_collector.__main__.OandaProvider", FakeProvider)
+    settings = CollectorSettings(
+        api_url="https://goldie-api.example",
+        agent_token="agent-token",
+        oanda_api_token="oanda-token",
+        oanda_account_id="practice-account",
+    )
+    worker = InstrumentWorker(settings, lambda *_args: None)
+    worker_ref["worker"] = worker
+
+    worker._run()
+
+    assert events.index("stream-start") < events.index("candles-started:True")
+    assert "heartbeat:ONLINE" in events

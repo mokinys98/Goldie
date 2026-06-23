@@ -17,6 +17,7 @@ logging.basicConfig(
 logger = logging.getLogger("goldie-market-data-collector")
 backfill_locks: dict[str, threading.Lock] = {}
 backfill_locks_guard = threading.Lock()
+LIVE_CATCHUP_MAX_MINUTES = 5000
 
 
 def backfill_lock(symbol: str) -> threading.Lock:
@@ -148,14 +149,24 @@ class InstrumentWorker:
             else now - timedelta(days=self.settings.backfill_days),
             now - timedelta(days=self.settings.backfill_days),
         )
-        candle_cursor = run_backfill(self.settings, client, provider, start, now)
         provider.start()
-        self.status = "ONLINE"
+        closed = provider.market_is_closed()
+        self.status = "MARKET_CLOSED" if closed else "ONLINE"
         self.last_error = None
+        client.heartbeat(
+            self.status,
+            {
+                "read_only": True,
+                "provider": "oanda",
+                "latest_quote_at": self.latest_quote_at,
+                "error": self.last_error,
+            },
+        )
+        candle_cursor = start
         last_quote_sent = 0.0
         last_quote_observed_at: datetime | None = None
         last_candle_poll = 0.0
-        last_heartbeat = 0.0
+        last_heartbeat = time.monotonic()
         try:
             while not self.stop_event.is_set():
                 monotonic = time.monotonic()
@@ -174,7 +185,11 @@ class InstrumentWorker:
                 client.flush_due()
                 if monotonic - last_candle_poll >= self.settings.candle_poll_seconds:
                     current = datetime.now(UTC)
-                    candles = provider.candles(candle_cursor, current)
+                    catchup_end = min(
+                        current,
+                        candle_cursor + timedelta(minutes=LIVE_CATCHUP_MAX_MINUTES),
+                    )
+                    candles = provider.candles(candle_cursor, catchup_end)
                     if candles:
                         client.candles(candles)
                         candle_cursor = candles[-1].opened_at + timedelta(minutes=1)
