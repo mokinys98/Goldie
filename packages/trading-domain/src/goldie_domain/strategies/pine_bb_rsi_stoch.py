@@ -9,33 +9,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from ..indicators import bollinger_bands, sma
 from ..models import CandleInput, MarketContext, SignalDecision, SignalType
 from ..strategy import BacktestGuards, common_guard, completed, trade_prices
-
-
-def _decimal_field(
-    default: str,
-    *,
-    ge: int | None = None,
-    gt: int | None = None,
-    le: int,
-    description: str,
-    unit: str,
-    impact: str,
-    optimization_minimum: str | int | None = None,
-    optimization_maximum: str | int | None = None,
-) -> Any:
-    extra: dict[str, Any] = {"unit": unit, "impact": impact}
-    if optimization_minimum is not None:
-        extra["optimization_minimum"] = optimization_minimum
-    if optimization_maximum is not None:
-        extra["optimization_maximum"] = optimization_maximum
-    return Field(
-        default=Decimal(default),
-        ge=ge,
-        gt=gt,
-        le=le,
-        description=description,
-        json_schema_extra=extra,
-    )
+from .fields import decimal_parameter
 
 
 class PineBollingerRsiStochParameters(BaseModel):
@@ -53,7 +27,7 @@ class PineBollingerRsiStochParameters(BaseModel):
             "optimization_maximum": 120,
         },
     )
-    bollinger_deviations: Decimal = _decimal_field(
+    bollinger_deviations: Decimal = decimal_parameter(
         "2",
         gt=0,
         le=10,
@@ -75,7 +49,7 @@ class PineBollingerRsiStochParameters(BaseModel):
             "optimization_maximum": 35,
         },
     )
-    rsi_overbought: Decimal = _decimal_field(
+    rsi_overbought: Decimal = decimal_parameter(
         "63",
         ge=0,
         le=100,
@@ -85,7 +59,7 @@ class PineBollingerRsiStochParameters(BaseModel):
         optimization_minimum="60",
         optimization_maximum="80",
     )
-    rsi_oversold: Decimal = _decimal_field(
+    rsi_oversold: Decimal = decimal_parameter(
         "30",
         ge=0,
         le=100,
@@ -107,7 +81,7 @@ class PineBollingerRsiStochParameters(BaseModel):
             "optimization_maximum": 40,
         },
     )
-    stochastic_overbought: Decimal = _decimal_field(
+    stochastic_overbought: Decimal = decimal_parameter(
         "80",
         ge=0,
         le=100,
@@ -117,7 +91,7 @@ class PineBollingerRsiStochParameters(BaseModel):
         optimization_minimum="70",
         optimization_maximum="90",
     )
-    stochastic_oversold: Decimal = _decimal_field(
+    stochastic_oversold: Decimal = decimal_parameter(
         "20",
         ge=0,
         le=100,

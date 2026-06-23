@@ -6,30 +6,36 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, Field
 
 from ..models import CandleInput, MarketContext, SignalDecision, SignalType
-from ..strategy import (
-    BacktestGuards,
-    common_guard,
-    completed,
-    trade_prices,
-)
+from ..strategy import BacktestGuards
+from .base import PreparedStrategy
 
 
 class BasicMomentumParameters(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     lookback_candles: int = Field(
-        default=5, ge=2, le=100,
+        default=5,
+        ge=2,
+        le=100,
         description="Užbaigtų žvakių skaičius kainos pokyčiui apskaičiuoti.",
-        json_schema_extra={"unit": "candles", "impact": "Didinant signalas vertina ilgesnį ir lėtesnį judėjimą."},
+        json_schema_extra={
+            "unit": "candles",
+            "impact": "Didinant signalas vertina ilgesnį ir lėtesnį judėjimą.",
+        },
     )
     min_momentum_points: Decimal = Field(
-        default=Decimal("50"), gt=0, le=10000,
+        default=Decimal("50"),
+        gt=0,
+        le=10000,
         description="Mažiausias kainos pokytis, reikalingas BUY arba SELL signalui.",
-        json_schema_extra={"unit": "points", "impact": "Didinant signalų bus mažiau, bet reikės stipresnio judėjimo."},
+        json_schema_extra={
+            "unit": "points",
+            "impact": "Didinant signalų bus mažiau, bet reikės stipresnio judėjimo.",
+        },
     )
 
 
-class BasicMomentumStrategy:
+class BasicMomentumStrategy(PreparedStrategy):
     name = "basic_momentum"
     description = "Signals when close-to-close momentum exceeds a points threshold."
     parameters_model = BasicMomentumParameters
@@ -54,22 +60,21 @@ class BasicMomentumStrategy:
         )
 
     def evaluate(self, context: MarketContext, config: Any) -> SignalDecision:
-        candles = completed(context)
-        parameters = BasicMomentumParameters.model_validate(config.strategy.parameters)
-        inputs: dict[str, str | int | bool | None] = {
-            "strategy": self.name,
-            "lookback_candles": parameters.lookback_candles,
-            "complete_candles": len(candles),
-            "symbol": config.market.symbol,
-        }
-        guard = common_guard(context, config, inputs)
+        candles, raw, inputs, guard = self._start(context, config)
+        parameters = BasicMomentumParameters.model_validate(raw)
+        inputs.update(
+            lookback_candles=parameters.lookback_candles,
+            symbol=config.market.symbol,
+        )
         if isinstance(guard, SignalDecision):
             return guard
         if len(candles) < self.required_candles(parameters):
-            return SignalDecision(
-                signal=SignalType.NO_TRADE,
-                reason_code="INSUFFICIENT_COMPLETED_CANDLES",
-                **guard,
+            return self._finish(
+                SignalType.NO_TRADE,
+                "INSUFFICIENT_COMPLETED_CANDLES",
+                context,
+                config,
+                guard,
             )
         baseline = candles[-(parameters.lookback_candles + 1)].close
         latest = candles[-1].close
@@ -80,22 +85,18 @@ class BasicMomentumStrategy:
         elif momentum_points <= -parameters.min_momentum_points:
             signal, reason = SignalType.SELL, "MOMENTUM_DOWN"
         else:
-            return SignalDecision(
-                signal=SignalType.NO_TRADE,
-                reason_code="MOMENTUM_BELOW_THRESHOLD",
-                momentum_points=momentum_points,
-                **guard,
+            decision = self._finish(
+                SignalType.NO_TRADE,
+                "MOMENTUM_BELOW_THRESHOLD",
+                context,
+                config,
+                guard,
             )
-        entry, stop_loss, take_profit = trade_prices(signal, context, config)
-        return SignalDecision(
-            signal=signal,
-            reason_code=reason,
-            entry_price=entry,
-            stop_loss=stop_loss,
-            take_profit=take_profit,
-            momentum_points=momentum_points,
-            **guard,
-        )
+            decision.momentum_points = momentum_points
+            return decision
+        decision = self._finish(signal, reason, context, config, guard)
+        decision.momentum_points = momentum_points
+        return decision
 
 
 class _BasicMomentumBacktestEvaluator:

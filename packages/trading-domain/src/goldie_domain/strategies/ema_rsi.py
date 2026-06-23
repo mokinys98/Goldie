@@ -1,4 +1,3 @@
-from collections import deque
 from datetime import datetime
 from decimal import Decimal
 from typing import Any
@@ -7,24 +6,76 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from ..indicators import ema_series, rsi
 from ..models import CandleInput, MarketContext, SignalDecision, SignalType
-from ..strategy import (
-    BacktestGuards,
-    common_guard,
-    completed,
-    trade_prices,
-)
+from ..strategy import BacktestGuards
+from .base import PreparedStrategy
+from .rolling import FastRollingEma, FastRollingRsi, RollingRsi, RollingWindowEma
 
 
 class EmaRsiParameters(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    fast_ema_period: int = Field(default=9, ge=2, le=200, description="Greitos EMA periodas.", json_schema_extra={"unit": "candles", "impact": "Mažinant EMA greičiau reaguoja į kainą."})
-    slow_ema_period: int = Field(default=21, ge=3, le=500, description="Lėtos EMA periodas.", json_schema_extra={"unit": "candles", "impact": "Didinant bazinė tendencija tampa lygesnė."})
-    rsi_period: int = Field(default=14, ge=2, le=200, description="RSI indikatoriaus skaičiavimo periodas.", json_schema_extra={"unit": "candles", "impact": "Didinant RSI tampa mažiau jautrus trumpiems pokyčiams."})
-    buy_rsi_max: Decimal = Field(default=Decimal("70"), ge=0, le=100, description="Didžiausia RSI reikšmė, prie kurios leidžiamas BUY.", json_schema_extra={"unit": "RSI", "impact": "Mažinant BUY filtras griežtėja."})
-    sell_rsi_min: Decimal = Field(default=Decimal("30"), ge=0, le=100, description="Mažiausia RSI reikšmė, prie kurios leidžiamas SELL.", json_schema_extra={"unit": "RSI", "impact": "Didinant SELL filtras griežtėja."})
-    min_trend_points: Decimal = Field(default=Decimal("0"), ge=0, le=10000, description="Mažiausias atstumas tarp greitos ir lėtos EMA.", json_schema_extra={"unit": "points", "impact": "Didinant reikalaujama stipresnės tendencijos."})
-    require_crossover: bool = Field(default=False, description="Reikalauja, kad EMA susikirtimas įvyktų paskutinėje žvakėje.", json_schema_extra={"unit": "boolean", "impact": "Įjungus signalai tampa retesni ir priklauso nuo naujo susikirtimo."})
+    fast_ema_period: int = Field(
+        default=9,
+        ge=2,
+        le=200,
+        description="Greitos EMA periodas.",
+        json_schema_extra={
+            "unit": "candles",
+            "impact": "Mažinant EMA greičiau reaguoja į kainą.",
+        },
+    )
+    slow_ema_period: int = Field(
+        default=21,
+        ge=3,
+        le=500,
+        description="Lėtos EMA periodas.",
+        json_schema_extra={
+            "unit": "candles",
+            "impact": "Didinant bazinė tendencija tampa lygesnė.",
+        },
+    )
+    rsi_period: int = Field(
+        default=14,
+        ge=2,
+        le=200,
+        description="RSI indikatoriaus skaičiavimo periodas.",
+        json_schema_extra={
+            "unit": "candles",
+            "impact": "Didinant RSI tampa mažiau jautrus trumpiems pokyčiams.",
+        },
+    )
+    buy_rsi_max: Decimal = Field(
+        default=Decimal("70"),
+        ge=0,
+        le=100,
+        description="Didžiausia RSI reikšmė, prie kurios leidžiamas BUY.",
+        json_schema_extra={"unit": "RSI", "impact": "Mažinant BUY filtras griežtėja."},
+    )
+    sell_rsi_min: Decimal = Field(
+        default=Decimal("30"),
+        ge=0,
+        le=100,
+        description="Mažiausia RSI reikšmė, prie kurios leidžiamas SELL.",
+        json_schema_extra={"unit": "RSI", "impact": "Didinant SELL filtras griežtėja."},
+    )
+    min_trend_points: Decimal = Field(
+        default=Decimal("0"),
+        ge=0,
+        le=10000,
+        description="Mažiausias atstumas tarp greitos ir lėtos EMA.",
+        json_schema_extra={
+            "unit": "points",
+            "impact": "Didinant reikalaujama stipresnės tendencijos.",
+        },
+    )
+    require_crossover: bool = Field(
+        default=False,
+        description="Reikalauja, kad EMA susikirtimas įvyktų paskutinėje žvakėje.",
+        json_schema_extra={
+            "unit": "boolean",
+            "impact": "Įjungus signalai tampa retesni ir priklauso nuo naujo susikirtimo.",
+        },
+    )
 
     @model_validator(mode="after")
     def validate_periods(self) -> "EmaRsiParameters":
@@ -33,7 +84,7 @@ class EmaRsiParameters(BaseModel):
         return self
 
 
-class EmaRsiStrategy:
+class EmaRsiStrategy(PreparedStrategy):
     name = "ema_rsi"
     description = "Combines fast/slow EMA trend with an RSI threshold."
     parameters_model = EmaRsiParameters
@@ -72,24 +123,23 @@ class EmaRsiStrategy:
         )
 
     def evaluate(self, context: MarketContext, config: Any) -> SignalDecision:
-        candles = completed(context)
-        parameters = EmaRsiParameters.model_validate(config.strategy.parameters)
-        inputs: dict[str, str | int | bool | None] = {
-            "strategy": self.name,
-            "complete_candles": len(candles),
-            "fast_ema_period": parameters.fast_ema_period,
-            "slow_ema_period": parameters.slow_ema_period,
-            "rsi_period": parameters.rsi_period,
-            "require_crossover": parameters.require_crossover,
-        }
-        guard = common_guard(context, config, inputs)
+        candles, raw, inputs, guard = self._start(context, config)
+        parameters = EmaRsiParameters.model_validate(raw)
+        inputs.update(
+            fast_ema_period=parameters.fast_ema_period,
+            slow_ema_period=parameters.slow_ema_period,
+            rsi_period=parameters.rsi_period,
+            require_crossover=parameters.require_crossover,
+        )
         if isinstance(guard, SignalDecision):
             return guard
         if len(candles) < self.required_candles(parameters):
-            return SignalDecision(
-                signal=SignalType.NO_TRADE,
-                reason_code="INSUFFICIENT_COMPLETED_CANDLES",
-                **guard,
+            return self._finish(
+                SignalType.NO_TRADE,
+                "INSUFFICIENT_COMPLETED_CANDLES",
+                context,
+                config,
+                guard,
             )
         closes = [candle.close for candle in candles]
         fast_values = ema_series(closes, parameters.fast_ema_period)
@@ -128,246 +178,14 @@ class EmaRsiStrategy:
         ):
             signal, reason = SignalType.SELL, "EMA_RSI_SELL"
         else:
-            return SignalDecision(
-                signal=SignalType.NO_TRADE,
-                reason_code="EMA_RSI_CONDITIONS_NOT_MET",
-                **guard,
+            return self._finish(
+                SignalType.NO_TRADE,
+                "EMA_RSI_CONDITIONS_NOT_MET",
+                context,
+                config,
+                guard,
             )
-        entry, stop_loss, take_profit = trade_prices(signal, context, config)
-        return SignalDecision(
-            signal=signal,
-            reason_code=reason,
-            entry_price=entry,
-            stop_loss=stop_loss,
-            take_profit=take_profit,
-            **guard,
-        )
-
-
-def _ema_tail(
-    values: deque[Decimal],
-    period: int,
-    period_decimal: Decimal,
-    multiplier: Decimal,
-) -> tuple[Decimal, Decimal | None]:
-    # Preserve the legacy bounded-window Decimal operation order exactly.
-    iterator = iter(values)
-    seed = Decimal("0")
-    for _ in range(period):
-        seed += next(iterator)
-    current = seed / period_decimal
-    previous = None
-    for value in iterator:
-        previous = current
-        current = (value - current) * multiplier + current
-    return current, previous
-
-
-def _rsi_tail(
-    values: deque[Decimal],
-    period: int,
-    period_decimal: Decimal,
-) -> Decimal:
-    iterator = iter(values)
-    previous = next(iterator)
-    skip = len(values) - period - 1
-    gain = Decimal("0")
-    loss = Decimal("0")
-    for index, current in enumerate(iterator):
-        if index >= skip:
-            change = current - previous
-            if change > 0:
-                gain += change
-            elif change < 0:
-                loss -= change
-        previous = current
-    average_gain = gain / period_decimal
-    average_loss = loss / period_decimal
-    if average_loss == 0:
-        return Decimal("100") if average_gain > 0 else Decimal("50")
-    strength = average_gain / average_loss
-    return Decimal("100") - Decimal("100") / (Decimal("1") + strength)
-
-
-class _RollingWindowEma:
-    def __init__(
-        self,
-        *,
-        period: int,
-        window_size: int,
-        track_previous: bool,
-    ) -> None:
-        self.period = period
-        self.window_size = window_size
-        self.track_previous = track_previous
-        self.period_decimal = Decimal(period)
-        self.alpha = Decimal("2") / Decimal(period + 1)
-        self.beta = Decimal("1") - self.alpha
-        self.tail_length = window_size - period
-        self.beta_tail = self.beta**self.tail_length
-        self.values: deque[Decimal] = deque(maxlen=window_size)
-        self.seed_sum = Decimal("0")
-        self.tail_weighted = Decimal("0")
-        self.current: Decimal | None = None
-
-    def update(self, value: Decimal) -> tuple[Decimal | None, Decimal | None]:
-        if len(self.values) < self.window_size:
-            self.values.append(value)
-            if len(self.values) == self.window_size:
-                self._initialize()
-            previous = self.previous_in_window(value) if self.track_previous else None
-            return self.current, previous
-
-        old_first = self.values[0]
-        if self.tail_length == 0:
-            self.seed_sum += value - old_first
-        else:
-            old_tail_first = self.values[self.period]
-            self.seed_sum += old_tail_first - old_first
-            self.tail_weighted = (
-                self.beta * self.tail_weighted
-                - self.alpha * self.beta_tail * old_tail_first
-                + self.alpha * value
-            )
-        self.values.append(value)
-        self.current = self.beta_tail * self.seed_sum / self.period_decimal + self.tail_weighted
-        previous = self.previous_in_window(value) if self.track_previous else None
-        return self.current, previous
-
-    def _initialize(self) -> None:
-        values = list(self.values)
-        self.seed_sum = sum(values[: self.period], Decimal("0"))
-        self.tail_weighted = Decimal("0")
-        for index, item in enumerate(values[self.period :]):
-            exponent = self.tail_length - 1 - index
-            self.tail_weighted += self.alpha * (self.beta**exponent) * item
-        self.current = self.beta_tail * self.seed_sum / self.period_decimal + self.tail_weighted
-
-    def previous_in_window(self, last_value: Decimal) -> Decimal | None:
-        if self.current is None or self.tail_length == 0:
-            return None
-        return (self.current - self.alpha * last_value) / self.beta
-
-
-class _RollingRsi:
-    def __init__(self, *, period: int) -> None:
-        self.period = period
-        self.period_decimal = Decimal(period)
-        self.previous: Decimal | None = None
-        self.changes: deque[Decimal] = deque(maxlen=period)
-        self.gain = Decimal("0")
-        self.loss = Decimal("0")
-
-    def update(self, value: Decimal) -> Decimal | None:
-        if self.previous is None:
-            self.previous = value
-            return None
-        change = value - self.previous
-        self.previous = value
-        if len(self.changes) == self.period:
-            removed = self.changes[0]
-            if removed > 0:
-                self.gain -= removed
-            elif removed < 0:
-                self.loss += removed
-        self.changes.append(change)
-        if change > 0:
-            self.gain += change
-        elif change < 0:
-            self.loss -= change
-        if len(self.changes) < self.period:
-            return None
-        average_gain = self.gain / self.period_decimal
-        average_loss = self.loss / self.period_decimal
-        if average_loss == 0:
-            return Decimal("100") if average_gain > 0 else Decimal("50")
-        strength = average_gain / average_loss
-        return Decimal("100") - Decimal("100") / (Decimal("1") + strength)
-
-
-class _FastRollingEma:
-    def __init__(self, *, period: int, window_size: int, track_previous: bool) -> None:
-        self.period = period
-        self.window_size = window_size
-        self.track_previous = track_previous
-        self.alpha = 2.0 / (period + 1)
-        self.beta = 1.0 - self.alpha
-        self.tail_length = window_size - period
-        self.beta_tail = self.beta**self.tail_length
-        self.values: deque[float] = deque(maxlen=window_size)
-        self.seed_sum = 0.0
-        self.tail_weighted = 0.0
-        self.current: float | None = None
-
-    def update(self, value: float) -> tuple[float | None, float | None]:
-        if len(self.values) < self.window_size:
-            self.values.append(value)
-            if len(self.values) == self.window_size:
-                values = list(self.values)
-                self.seed_sum = sum(values[: self.period])
-                self.tail_weighted = sum(
-                    self.alpha * (self.beta ** (self.tail_length - 1 - index)) * item
-                    for index, item in enumerate(values[self.period :])
-                )
-                self.current = (
-                    self.beta_tail * self.seed_sum / self.period + self.tail_weighted
-                )
-            return self.current, self._previous(value)
-
-        old_first = self.values[0]
-        if self.tail_length == 0:
-            self.seed_sum += value - old_first
-        else:
-            old_tail_first = self.values[self.period]
-            self.seed_sum += old_tail_first - old_first
-            self.tail_weighted = (
-                self.beta * self.tail_weighted
-                - self.alpha * self.beta_tail * old_tail_first
-                + self.alpha * value
-            )
-        self.values.append(value)
-        self.current = self.beta_tail * self.seed_sum / self.period + self.tail_weighted
-        return self.current, self._previous(value)
-
-    def _previous(self, last_value: float) -> float | None:
-        if not self.track_previous or self.current is None or self.tail_length == 0:
-            return None
-        return (self.current - self.alpha * last_value) / self.beta
-
-
-class _FastRollingRsi:
-    def __init__(self, *, period: int) -> None:
-        self.period = period
-        self.previous: float | None = None
-        self.changes: deque[float] = deque(maxlen=period)
-        self.gain = 0.0
-        self.loss = 0.0
-
-    def update(self, value: float) -> float | None:
-        if self.previous is None:
-            self.previous = value
-            return None
-        change = value - self.previous
-        self.previous = value
-        if len(self.changes) == self.period:
-            removed = self.changes[0]
-            if removed > 0:
-                self.gain -= removed
-            elif removed < 0:
-                self.loss += removed
-        self.changes.append(change)
-        if change > 0:
-            self.gain += change
-        elif change < 0:
-            self.loss -= change
-        if len(self.changes) < self.period:
-            return None
-        average_gain = self.gain / self.period
-        average_loss = self.loss / self.period
-        if average_loss == 0:
-            return 100.0 if average_gain > 0 else 50.0
-        return 100.0 - 100.0 / (1.0 + average_gain / average_loss)
-
+        return self._finish(signal, reason, context, config, guard)
 
 class _FastEmaRsiBacktestEvaluator:
     def __init__(
@@ -392,17 +210,17 @@ class _FastEmaRsiBacktestEvaluator:
             parameters.rsi_period + 1,
         )
         self.count = 0
-        self.fast_ema = _FastRollingEma(
+        self.fast_ema = FastRollingEma(
             period=parameters.fast_ema_period,
             window_size=self.required,
             track_previous=parameters.require_crossover,
         )
-        self.slow_ema = _FastRollingEma(
+        self.slow_ema = FastRollingEma(
             period=parameters.slow_ema_period,
             window_size=self.required,
             track_previous=parameters.require_crossover,
         )
-        self.rsi = _FastRollingRsi(period=parameters.rsi_period)
+        self.rsi = FastRollingRsi(period=parameters.rsi_period)
         self.min_trend_points = float(parameters.min_trend_points)
         self.buy_rsi_max = float(parameters.buy_rsi_max)
         self.sell_rsi_min = float(parameters.sell_rsi_min)
@@ -457,28 +275,23 @@ class _EmaRsiBacktestEvaluator:
         self.parameters = parameters
         self.point = point
         self.guards = guards
-        self.fast_period_decimal = Decimal(parameters.fast_ema_period)
-        self.slow_period_decimal = Decimal(parameters.slow_ema_period)
-        self.rsi_period_decimal = Decimal(parameters.rsi_period)
-        self.fast_multiplier = Decimal("2") / Decimal(parameters.fast_ema_period + 1)
-        self.slow_multiplier = Decimal("2") / Decimal(parameters.slow_ema_period + 1)
         crossover_extra = 1 if parameters.require_crossover else 0
         self.required = max(
             parameters.slow_ema_period + crossover_extra,
             parameters.rsi_period + 1,
         )
         self.count = 0
-        self.fast_ema = _RollingWindowEma(
+        self.fast_ema = RollingWindowEma(
             period=parameters.fast_ema_period,
             window_size=self.required,
             track_previous=parameters.require_crossover,
         )
-        self.slow_ema = _RollingWindowEma(
+        self.slow_ema = RollingWindowEma(
             period=parameters.slow_ema_period,
             window_size=self.required,
             track_previous=parameters.require_crossover,
         )
-        self.rsi = _RollingRsi(period=parameters.rsi_period)
+        self.rsi = RollingRsi(period=parameters.rsi_period)
 
     def evaluate(
         self,
