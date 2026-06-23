@@ -1,3 +1,4 @@
+import uuid
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from types import SimpleNamespace
@@ -281,13 +282,15 @@ def test_instrument_worker_starts_stream_before_candle_catchup(monkeypatch) -> N
 
     class FakeClient:
         def __init__(self, _settings):
-            pass
+            self.feed_id = None
+            self.resume_from_at = None
 
         def set_collector_id(self, _collector_id):
             pass
 
         def register(self, _settings):
             events.append("register")
+            self.feed_id = uuid.uuid4()
             return datetime.now(UTC) - timedelta(days=1)
 
         def instrument(self, _instrument):
