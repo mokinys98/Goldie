@@ -303,6 +303,11 @@ export type CollectorFeedDetail = {
   agent: Record<string, unknown> | null;
   instrument_settings: CollectorInstrumentSettings;
   gap_count: number;
+  gaps: Array<{
+    from: string;
+    to: string;
+    missing_minutes: number;
+  }>;
   commands: CollectorCommand[];
 };
 

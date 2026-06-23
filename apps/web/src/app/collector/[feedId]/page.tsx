@@ -146,6 +146,7 @@ function DataContinuity({ detail }: { detail: CollectorFeedDetail }) {
   const earliestCandle = feed.earliest_candle_at ? new Date(feed.earliest_candle_at) : null;
   const latestTick = feed.latest_tick?.observed_at ? new Date(feed.latest_tick.observed_at) : null;
   const heartbeat = feed.last_heartbeat_at ? new Date(feed.last_heartbeat_at) : null;
+  const gaps = detail.gaps ?? [];
   const gapStatus = detail.gap_count === 0 ? "PASS" : detail.gap_count < 5 ? "WARN" : "BLOCK";
   const lagStatus =
     feed.data_lag_seconds === null ? "MISSING" : feed.data_lag_seconds <= 90 ? "FRESH" : "STALE";
@@ -157,6 +158,7 @@ function DataContinuity({ detail }: { detail: CollectorFeedDetail }) {
   const coverage = candleSpanMinutes ? Math.max(0, Math.min(100, (observedMinutes / candleSpanMinutes) * 100)) : 0;
   const gapWidth = candleSpanMinutes ? Math.max(2, Math.min(38, 100 - coverage)) : 0;
   const gapOffset = Math.max(8, Math.min(88, coverage));
+  const fallbackGap = detail.gap_count > 0 && gaps.length === 0;
   const qualityLabel =
     detail.gap_count === 0
       ? "Continuous M1 sequence"
@@ -176,10 +178,34 @@ function DataContinuity({ detail }: { detail: CollectorFeedDetail }) {
           <div className="continuity-axis">
             <span className="continuity-dot" />
             <span className="continuity-line" />
-            {detail.gap_count > 0 && (
+            {gaps.map((gap, index) => {
+              const gapFrom = new Date(gap.from);
+              const gapTo = new Date(gap.to);
+              const startPercent =
+                earliestCandle && latestCandle && candleSpanMinutes
+                  ? ((gapFrom.getTime() - earliestCandle.getTime()) / (candleSpanMinutes * 60_000)) * 100
+                  : gapOffset;
+              const widthPercent =
+                candleSpanMinutes ? (gap.missing_minutes / candleSpanMinutes) * 100 : gapWidth;
+              return (
+                <span
+                  className="continuity-gap"
+                  key={`${gap.from}-${gap.to}-${index}`}
+                  style={{
+                    left: `${Math.max(2, Math.min(96, startPercent))}%`,
+                    width: `${Math.max(2, Math.min(38, widthPercent))}%`,
+                  }}
+                  tabIndex={0}
+                  data-tooltip={`${displayDate(gap.from)} - ${displayDate(gap.to)} (${gap.missing_minutes}m)`}
+                />
+              );
+            })}
+            {fallbackGap && (
               <span
                 className="continuity-gap"
                 style={{ left: `${gapOffset}%`, width: `${gapWidth}%` }}
+                tabIndex={0}
+                data-tooltip={`${detail.gap_count} missing M1 candle${detail.gap_count === 1 ? "" : "s"}`}
               />
             )}
             <span className="continuity-dot continuity-dot-end" />
@@ -209,14 +235,52 @@ function DataContinuity({ detail }: { detail: CollectorFeedDetail }) {
             <ContinuityCheck label="Collector heartbeat" value={heartbeat} state={heartbeat ? "ok" : "missing"} />
           </div>
         </div>
-        <div className={detail.gap_count ? "error-box" : "success-box"}>
-          <strong>{detail.gap_count ? "Backfill recommended" : "No recent gap action"}</strong>
-          <p>
-            {detail.gap_count
-              ? "Run a targeted backfill from Commands for the affected period, then confirm this panel returns to PASS."
-              : "Recent M1 candles are contiguous in the collector detail window."}
-          </p>
+        <GapList gaps={gaps} gapCount={detail.gap_count} />
+      </div>
+    </div>
+  );
+}
+
+function GapList({
+  gaps,
+  gapCount,
+}: {
+  gaps: CollectorFeedDetail["gaps"];
+  gapCount: number;
+}) {
+  if (!gapCount) {
+    return (
+      <div className="success-box">
+        <strong>No recent gap action</strong>
+        <p>Recent M1 candles are contiguous in the collector detail window.</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="panel">
+      <div className="section-title">
+        <div>
+          <h2>Detected gaps</h2>
+          <p>Aggregated missing M1 ranges only, no raw candle rows.</p>
         </div>
+        <StatusPill value="WARN" />
+      </div>
+      {gaps.length ? (
+        <div className="gap-list">
+          {gaps.map((gap, index) => (
+            <div className="gap-row" key={`${gap.from}-${gap.to}-${index}`}>
+              <span>{displayDate(gap.from)}</span>
+              <strong>{gap.missing_minutes}m</strong>
+              <span>{displayDate(gap.to)}</span>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <p className="muted">Gap count is available, but this API response does not include ranges yet.</p>
+      )}
+      <div className="error-box table-actions">
+        Run a targeted backfill from Commands for the listed range, then confirm this panel returns to PASS.
       </div>
     </div>
   );

@@ -590,15 +590,29 @@ def feed_detail(
     recent = list(
         db.scalars(
             select(Candle.opened_at)
-            .where(Candle.market_feed_id == feed.id)
+            .where(
+                Candle.market_feed_id == feed.id,
+                Candle.timeframe == "M1",
+                Candle.is_complete.is_(True),
+            )
             .order_by(desc(Candle.opened_at))
             .limit(1441)
         )
     )
     gaps = 0
+    gap_segments = []
     for newer, older in zip(recent, recent[1:], strict=False):
         delta = int((as_utc(newer) - as_utc(older)).total_seconds() // 60)
-        gaps += max(0, delta - 1)
+        missing_minutes = max(0, delta - 1)
+        gaps += missing_minutes
+        if missing_minutes:
+            gap_segments.append(
+                {
+                    "from": as_utc(older + timedelta(minutes=1)),
+                    "to": as_utc(newer - timedelta(minutes=1)),
+                    "missing_minutes": missing_minutes,
+                }
+            )
     return {
         "feed": summary,
         "agent": jsonable_encoder(agent) if agent else None,
@@ -614,6 +628,7 @@ def feed_detail(
             }
         ),
         "gap_count": gaps,
+        "gaps": jsonable_encoder(gap_segments),
         "commands": [serialize_command(command) for command in commands],
     }
 
