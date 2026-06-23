@@ -237,6 +237,7 @@ def test_fast_combo_strategies_match_prepared_backtest_results() -> None:
         "bb_ema_rsi_mean_reversion",
         "range_break_scalper",
         "pine_bb_rsi_stoch",
+        "fvg_ma_volume_profile",
     )
     for strategy_name in strategy_names:
         strategy = get_strategy(strategy_name)

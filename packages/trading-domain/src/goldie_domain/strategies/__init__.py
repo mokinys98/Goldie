@@ -16,6 +16,7 @@ from .combo_parameters import (
     RangeBreakScalperParameters,
 )
 from .ema_rsi import EmaRsiParameters, EmaRsiStrategy
+from .fvg_ma_volume_profile import FvgMaVolumeProfileParameters, FvgMaVolumeProfileStrategy
 from .pine_bb_rsi_stoch import PineBollingerRsiStochParameters, PineBollingerRsiStochStrategy
 
 __all__ = [
@@ -33,6 +34,8 @@ __all__ = [
     "EmaMomentumBreakoutStrategy",
     "EmaRsiParameters",
     "EmaRsiStrategy",
+    "FvgMaVolumeProfileParameters",
+    "FvgMaVolumeProfileStrategy",
     "RangeBreakScalperParameters",
     "RangeBreakScalperStrategy",
     "PineBollingerRsiStochParameters",

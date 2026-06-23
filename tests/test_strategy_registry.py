@@ -10,7 +10,7 @@ from goldie_domain import (
     register_strategy,
     strategy_catalog,
 )
-from goldie_domain.strategies import PineBollingerRsiStochParameters
+from goldie_domain.strategies import FvgMaVolumeProfileParameters, PineBollingerRsiStochParameters
 from pydantic import ValidationError
 
 
@@ -75,6 +75,7 @@ def test_registry_catalog_and_duplicate_protection() -> None:
         "bb_ema_rsi_mean_reversion",
         "range_break_scalper",
         "pine_bb_rsi_stoch",
+        "fvg_ma_volume_profile",
     ]
     momentum = catalog[0]["parameters"]["min_momentum_points"]
     assert momentum["type"] == "number"
@@ -170,6 +171,55 @@ def pine_config_with(**parameters) -> BotConfiguration:
     return BotConfiguration.model_validate(config.model_dump(mode="json"))
 
 
+def fvg_config(**parameters) -> BotConfiguration:
+    values = {
+        "fvg_lookback": 5,
+        "sma_period": 3,
+        "volume_profile_lookback": 5,
+        "volume_profile_bins": 5,
+        "volume_spike_period": 3,
+        "volume_spike_multiplier": "1.5",
+        "poc_tolerance_points": "100",
+        "require_volume_spike": False,
+        **parameters,
+    }
+    return BotConfiguration.model_validate(
+        {
+            "market": {"symbol": "XAUUSD", "timeframe": "M1"},
+            "strategy": {"name": "fvg_ma_volume_profile", "parameters": values},
+            "filters": {"max_spread_points": 100, "stale_after_seconds": 15},
+            "session": {
+                "timezone": "UTC",
+                "start_time": "00:00:00",
+                "end_time": "23:59:59",
+            },
+        }
+    )
+
+
+def fvg_market(values: list[tuple[str, str, str, str, int]]) -> MarketContext:
+    observed = datetime(2026, 1, 5, 10, len(values), tzinfo=UTC)
+    candles = [
+        CandleInput(
+            opened_at=observed - timedelta(minutes=len(values) - index),
+            open=Decimal(open_),
+            high=Decimal(high),
+            low=Decimal(low),
+            close=Decimal(close),
+            tick_volume=volume,
+        )
+        for index, (open_, high, low, close, volume) in enumerate(values)
+    ]
+    return MarketContext(
+        observed_at=observed,
+        evaluated_at=observed,
+        bid=Decimal("14.0"),
+        ask=Decimal("14.1"),
+        point=Decimal("0.1"),
+        candles=candles,
+    )
+
+
 def test_pine_port_generates_band_cross_signals() -> None:
     strategy = get_strategy("pine_bb_rsi_stoch")
 
@@ -242,6 +292,81 @@ def test_pine_strategy_guards_and_fast_factory() -> None:
     assert spread.reason_code == "SPREAD_TOO_HIGH"
     assert outside.reason_code == "OUTSIDE_TRADING_SESSION"
     assert callable(strategy.create_fast_backtest_evaluator)
+
+
+def test_fvg_ma_volume_profile_generates_buy_and_sell_signals() -> None:
+    strategy = get_strategy("fvg_ma_volume_profile")
+    buy_market = fvg_market(
+        [
+            ("9", "9.5", "8.5", "9", 100),
+            ("10", "10.5", "9.5", "10", 100),
+            ("11", "11.5", "10.5", "11", 100),
+            ("12", "12.0", "11.5", "12", 100),
+            ("13", "14.5", "12.5", "13", 100),
+            ("15", "15.5", "14.0", "15", 100),
+            ("14.4", "14.5", "13.5", "14.2", 100),
+        ]
+    )
+    sell_market = fvg_market(
+        [
+            ("16", "16.5", "15.5", "16", 100),
+            ("15", "15.5", "14.5", "15", 100),
+            ("14", "14.5", "13.5", "14", 100),
+            ("13", "13.5", "13.0", "13", 100),
+            ("12", "13.2", "11.5", "12", 100),
+            ("10", "11.0", "9.5", "10", 100),
+            ("10.7", "11.5", "10.2", "10.8", 100),
+        ]
+    )
+    sell_market.bid = Decimal("10.7")
+    sell_market.ask = Decimal("10.8")
+
+    buy = strategy.evaluate(buy_market, fvg_config())
+    sell = strategy.evaluate(sell_market, fvg_config())
+
+    assert buy.signal == "BUY"
+    assert buy.reason_code == "FVG_MA_VOLUME_PROFILE_BUY"
+    assert buy.inputs["fvg_direction"] == "BUY"
+    assert buy.inputs["poc"] is not None
+    assert sell.signal == "SELL"
+    assert sell.reason_code == "FVG_MA_VOLUME_PROFILE_SELL"
+    assert sell.inputs["fvg_direction"] == "SELL"
+
+
+def test_fvg_ma_volume_profile_direction_filter_and_insufficient_history() -> None:
+    strategy = get_strategy("fvg_ma_volume_profile")
+    buy_market = fvg_market(
+        [
+            ("9", "9.5", "8.5", "9", 100),
+            ("10", "10.5", "9.5", "10", 100),
+            ("11", "11.5", "10.5", "11", 100),
+            ("12", "12.0", "11.5", "12", 100),
+            ("13", "14.5", "12.5", "13", 100),
+            ("15", "15.5", "14.0", "15", 100),
+            ("14.4", "14.5", "13.5", "14.2", 100),
+        ]
+    )
+
+    disabled = strategy.evaluate(buy_market, fvg_config(trade_direction="SELL_ONLY"))
+    insufficient = strategy.evaluate(fvg_market([("10", "10.5", "9.5", "10", 100)]), fvg_config())
+
+    assert disabled.signal == "NO_TRADE"
+    assert disabled.reason_code == "FVG_MA_VOLUME_PROFILE_BUY_DISABLED"
+    assert insufficient.signal == "NO_TRADE"
+    assert insufficient.reason_code == "INSUFFICIENT_COMPLETED_CANDLES"
+
+
+def test_fvg_ma_volume_profile_parameters_defaults_bounds_and_required_candles() -> None:
+    strategy = get_strategy("fvg_ma_volume_profile")
+    defaults = FvgMaVolumeProfileParameters()
+
+    assert strategy.required_candles(defaults) == 50
+    with pytest.raises(ValidationError):
+        FvgMaVolumeProfileParameters(fvg_lookback=2)
+    with pytest.raises(ValidationError):
+        FvgMaVolumeProfileParameters(volume_spike_multiplier=0)
+    with pytest.raises(ValidationError, match="volume_profile_bins"):
+        FvgMaVolumeProfileParameters(volume_profile_lookback=2, volume_profile_bins=25)
 
 
 @pytest.mark.parametrize(
