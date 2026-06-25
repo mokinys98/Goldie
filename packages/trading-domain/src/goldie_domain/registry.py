@@ -7,9 +7,12 @@ from .strategies import (
     BollingerEmaRsiMeanReversionStrategy,
     BollingerMomentumBreakoutStrategy,
     BollingerRsiMeanReversionStrategy,
+    BollingerSqueezeBreakoutStrategy,
+    EmaAtrPullbackContinuationStrategy,
     EmaAtrTrendStrategy,
     EmaMomentumBreakoutStrategy,
     EmaRsiStrategy,
+    FailedRangeBreakReversalStrategy,
     FvgMaVolumeProfileStrategy,
     PineBollingerRsiStochStrategy,
     RangeBreakScalperStrategy,
@@ -106,3 +109,6 @@ register_strategy(BollingerEmaRsiMeanReversionStrategy())
 register_strategy(RangeBreakScalperStrategy())
 register_strategy(PineBollingerRsiStochStrategy())
 register_strategy(FvgMaVolumeProfileStrategy())
+register_strategy(FailedRangeBreakReversalStrategy())
+register_strategy(BollingerSqueezeBreakoutStrategy())
+register_strategy(EmaAtrPullbackContinuationStrategy())

@@ -115,7 +115,7 @@ export default function OptimizationTrialDetailPage() {
       )}
 
       <div className="dashboard-grid collector-section">
-        <Metric label="Score" value={trial.data.score ?? "--"} />
+        <Metric label={`${phaseScoreLabel(trial.data.phase)} objective score`} value={formatScore(trial.data.score)} />
         <Metric label="Net P&L" value={String(trial.data.metrics.net_pnl ?? "--")} />
         <Metric label="Drawdown" value={String(trial.data.metrics.max_drawdown ?? "--")} />
         <Metric label="Trades" value={String(trial.data.metrics.total_trades ?? "--")} />
@@ -195,6 +195,16 @@ export default function OptimizationTrialDetailPage() {
 
 function Metric({ label, value }: { label: string; value: string | number }) {
   return <div className="metric-card"><span>{label}</span><strong>{value}</strong></div>;
+}
+
+function phaseScoreLabel(phase: OptimizationTrial["phase"]): string {
+  return phase === "FIXED_CONFIG_VALIDATION" ? "Validation" : "Search";
+}
+
+function formatScore(value: string | number | null | undefined): string {
+  if (value === null || value === undefined || value === "") return "--";
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed.toFixed(2) : String(value);
 }
 
 function renderValue(value: unknown): string {

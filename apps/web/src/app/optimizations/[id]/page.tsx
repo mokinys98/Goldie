@@ -69,6 +69,7 @@ export default function OptimizationDetailPage() {
   const validationTrials = validationTrialQuery.data?.items ?? [];
   const fixedTradeOverrides = data.best_candidate.fixed_config_overrides?.theoretical_trade;
   const researchQuality = data.summary.research_quality_gates;
+  const objectiveFormula = getObjectiveFormula(data);
 
   async function cancel() {
     if (!window.confirm("Cancel this optimization?")) return;
@@ -309,7 +310,11 @@ export default function OptimizationDetailPage() {
         </span>
       </div>
       <div className="dashboard-grid collector-section">
-        <Metric label="Best score" value={data.best_candidate.score ?? "--"} />
+        <Metric
+          label="Best objective score"
+          value={formatScore(data.best_candidate.score)}
+          title={objectiveFormula}
+        />
         <Metric
           label="Completed"
           value={data.summary.completed_trials ?? data.progress.successful_trials ?? 0}
@@ -318,6 +323,14 @@ export default function OptimizationDetailPage() {
           label="Failed"
           value={data.summary.failed_trials ?? data.progress.failed_trials ?? 0}
         />
+      </div>
+      <div className="panel collector-section">
+        <h2>Objective score</h2>
+        <div className="key-values">
+          <div><dt>Objective</dt><dd>{data.objective ?? "BALANCED"}</dd></div>
+          <div><dt>Formula</dt><dd>{objectiveFormula}</dd></div>
+          <div><dt>Best row</dt><dd>{bestScoreSource(data)}</dd></div>
+        </div>
       </div>
       {researchQuality && (
         <ResearchReadinessPanel quality={researchQuality} />
@@ -458,7 +471,7 @@ export default function OptimizationDetailPage() {
                   <th>ID</th>
                   <th>Trial</th>
                   <th>Status</th>
-                  <th>Score</th>
+                  <th>Search objective score</th>
                   <th>Net P&amp;L</th>
                   <th>Drawdown</th>
                   <th>Trades</th>
@@ -474,7 +487,7 @@ export default function OptimizationDetailPage() {
                   </td>
                   <td>{trial.trial_number}</td>
                   <td><StatusPill value={trial.status} /></td>
-                  <td>{trial.score ?? "--"}</td>
+                  <td>{formatScore(trial.score)}</td>
                   <td>{String(trial.metrics.net_pnl ?? "--")}</td>
                   <td>{String(trial.metrics.max_drawdown ?? "--")}</td>
                   <td>{String(trial.metrics.total_trades ?? "--")}</td>
@@ -490,14 +503,14 @@ export default function OptimizationDetailPage() {
           <h2>Fixed config validation ({validationTrials.length})</h2>
           <div className="table-wrap borderless">
             <table>
-              <thead><tr><th>Trial</th><th>Stop loss</th><th>Take profit</th><th>Status</th><th>Score</th><th>Net P&amp;L</th><th>Drawdown</th><th>Trades</th></tr></thead>
+              <thead><tr><th>Trial</th><th>Stop loss</th><th>Take profit</th><th>Status</th><th>Validation objective score</th><th>Net P&amp;L</th><th>Drawdown</th><th>Trades</th></tr></thead>
               <tbody>{validationTrials.map((trial) => (
                 <tr key={trial.id}>
                   <td><Link className="table-link" href={`/optimizations/${id}/trials/${trial.id}`}>{trial.trial_number}</Link></td>
                   <td>{String(trial.config_overrides?.theoretical_trade?.stop_loss_points ?? "--")}</td>
                   <td>{String(trial.config_overrides?.theoretical_trade?.take_profit_points ?? "--")}</td>
                   <td><StatusPill value={trial.status} /></td>
-                  <td>{trial.score ?? "--"}</td>
+                  <td>{formatScore(trial.score)}</td>
                   <td>{String(trial.metrics.net_pnl ?? "--")}</td>
                   <td>{String(trial.metrics.max_drawdown ?? "--")}</td>
                   <td>{String(trial.metrics.total_trades ?? "--")}</td>
@@ -511,8 +524,8 @@ export default function OptimizationDetailPage() {
   );
 }
 
-function Metric({ label, value }: { label: string; value: string | number }) {
-  return <div className="metric-card"><span>{label}</span><strong>{value}</strong></div>;
+function Metric({ label, value, title }: { label: string; value: string | number; title?: string }) {
+  return <div className="metric-card" title={title}><span>{label}</span><strong>{value}</strong></div>;
 }
 
 function JsonPanel({ title, value }: { title: string; value: unknown }) {
@@ -564,6 +577,32 @@ function ResearchReadinessPanel({ quality }: { quality: ResearchQualityGates }) 
 
 function formatSeconds(value: number | undefined): string {
   return value === undefined ? "--" : `${value.toFixed(6)} s`;
+}
+
+function formatScore(value: string | number | null | undefined): string {
+  if (value === null || value === undefined || value === "") return "--";
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed.toFixed(2) : String(value);
+}
+
+function getObjectiveFormula(data: OptimizationRun): string {
+  const formula = data.summary.decision_context?.objective_formula;
+  return typeof formula === "string"
+    ? formula
+    : "BALANCED = net_pnl - 1.5 * max_drawdown - 50 * missing_trades_below_30; no-trade trials score -99999";
+}
+
+function bestScoreSource(data: OptimizationRun): string {
+  if (
+    data.best_candidate.validation_score !== undefined
+    || data.best_candidate.fixed_config_overrides
+  ) {
+    return "Best fixed config validation trial";
+  }
+  if (data.progress.phase === "FIXED_CONFIG_VALIDATION") {
+    return "Best strategy search candidate pending validation";
+  }
+  return "Best strategy search trial";
 }
 
 function PhaseProgress({ label, completed, total }: { label: string; completed: number; total: number }) {

@@ -113,11 +113,11 @@ export default function OptimizationsPage() {
               </select>
             </label>
             <label>
-              Best score
+              Objective score
               <select value={scoreFilter} onChange={(event) => setScoreFilter(event.target.value)}>
-                <option value="">Any score</option>
-                <option value="with-score">With score</option>
-                <option value="without-score">No score</option>
+                <option value="">Any objective score</option>
+                <option value="with-score">With objective score</option>
+                <option value="without-score">No objective score</option>
               </select>
             </label>
             <div className="bot-filter-summary">
@@ -137,7 +137,7 @@ export default function OptimizationsPage() {
                 <thead>
                   <tr>
                     <th>Created</th><th>Bot</th><th>Period</th><th>Status</th>
-                    <th>Progress</th><th>Best score</th><th>Trials</th>
+                    <th>Progress</th><th>Best objective score</th><th>Trials</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -156,7 +156,7 @@ export default function OptimizationsPage() {
                         {" / "}
                         {item.progress.total_trials ?? item.n_trials}
                       </td>
-                      <td>{item.best_candidate.score ?? "--"}</td>
+                      <td>{formatScore(item.best_candidate.score)}</td>
                       <td>{item.n_trials}</td>
                     </tr>
                   ))}
@@ -172,4 +172,10 @@ export default function OptimizationsPage() {
 
 function shortDate(value: string): string {
   return new Date(value).toLocaleDateString();
+}
+
+function formatScore(value: string | number | null | undefined): string {
+  if (value === null || value === undefined || value === "") return "--";
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed.toFixed(2) : String(value);
 }
