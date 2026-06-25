@@ -10,6 +10,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from .models import Candle, MarketFeed, OptimizationRun, OptimizationTrial
+from .services import as_utc
 
 CORE_TRIAL_METRICS = (
     "net_pnl",
@@ -41,6 +42,7 @@ DRAWDOWN_WARN_PCT = 10
 DRAWDOWN_BLOCK_PCT = 20
 CONSECUTIVE_LOSSES_WARN = 5
 CONSECUTIVE_LOSSES_BLOCK = 8
+GAP_SAMPLE_LIMIT = 10
 
 
 def _number(value: Any) -> float | None:
@@ -118,7 +120,10 @@ def build_backtest_diagnostics(
         },
         "mfe_mae_summary": {
             "source": "not_persisted_for_optimization_trials",
-            "note": "Full MFE/MAE values are available in persisted backtest trades, but optimization trials store compact summaries only.",
+            "note": (
+                "Full MFE/MAE values are available in persisted backtest trades, "
+                "but optimization trials store compact summaries only."
+            ),
         },
         "duration_summary": {
             "average_seconds": summary.get("average_duration_seconds"),
@@ -137,6 +142,98 @@ def build_trial_metrics(
     metrics["timings"] = timings
     metrics["diagnostics"] = build_backtest_diagnostics(summary, reason_counts)
     return jsonable_encoder(metrics)
+
+
+def _oanda_market_is_closed(value: datetime) -> bool:
+    timestamp = as_utc(value)
+    weekday = timestamp.weekday()
+    return weekday == 5 or (weekday == 4 and timestamp.hour >= 22) or (
+        weekday == 6 and timestamp.hour < 22
+    )
+
+
+def _is_expected_market_closure(value: datetime, feed: MarketFeed | None) -> bool:
+    if feed is None or feed.provider != "oanda":
+        return False
+    return _oanda_market_is_closed(value)
+
+
+def _gap_breakdown(
+    previous: datetime,
+    current: datetime,
+    *,
+    feed: MarketFeed | None,
+) -> dict[str, Any] | None:
+    previous = as_utc(previous)
+    current = as_utc(current)
+    total_minutes = int((current - previous).total_seconds() // 60)
+    missing_minutes = max(0, total_minutes - 1)
+    if missing_minutes == 0:
+        return None
+
+    market_closed_minutes = 0
+    unexpected_minutes = 0
+    missing_at = previous + timedelta(minutes=1)
+    while missing_at < current:
+        if _is_expected_market_closure(missing_at, feed):
+            market_closed_minutes += 1
+        else:
+            unexpected_minutes += 1
+        missing_at += timedelta(minutes=1)
+
+    return {
+        "from": previous + timedelta(minutes=1),
+        "to": current - timedelta(minutes=1),
+        "missing_minutes": missing_minutes,
+        "unexpected_missing_minutes": unexpected_minutes,
+        "market_closed_missing_minutes": market_closed_minutes,
+    }
+
+
+def _summarize_m1_gaps(
+    ordered_times: list[datetime],
+    *,
+    feed: MarketFeed | None,
+) -> dict[str, Any]:
+    raw_gap_count = 0
+    raw_missing_minutes = 0
+    unexpected_gap_count = 0
+    unexpected_missing_minutes = 0
+    market_closed_gap_count = 0
+    market_closed_missing_minutes = 0
+    unexpected_examples = []
+    market_closed_examples = []
+
+    for previous, current in zip(ordered_times, ordered_times[1:], strict=False):
+        gap = _gap_breakdown(previous, current, feed=feed)
+        if gap is None:
+            continue
+
+        raw_gap_count += 1
+        raw_missing_minutes += int(gap["missing_minutes"])
+
+        if gap["unexpected_missing_minutes"]:
+            unexpected_gap_count += 1
+            unexpected_missing_minutes += int(gap["unexpected_missing_minutes"])
+            if len(unexpected_examples) < GAP_SAMPLE_LIMIT:
+                unexpected_examples.append(gap)
+
+        if gap["market_closed_missing_minutes"]:
+            market_closed_gap_count += 1
+            market_closed_missing_minutes += int(gap["market_closed_missing_minutes"])
+            if len(market_closed_examples) < GAP_SAMPLE_LIMIT:
+                market_closed_examples.append(gap)
+
+    return {
+        "raw_m1_gap_count": raw_gap_count,
+        "raw_m1_missing_minutes": raw_missing_minutes,
+        "detected_m1_gap_count": unexpected_gap_count,
+        "detected_m1_missing_minutes": unexpected_missing_minutes,
+        "market_closed_m1_gap_count": market_closed_gap_count,
+        "market_closed_m1_missing_minutes": market_closed_missing_minutes,
+        "gap_examples": unexpected_examples,
+        "market_closed_gap_examples": market_closed_examples,
+    }
 
 
 def build_data_profile(
@@ -172,13 +269,8 @@ def build_data_profile(
             .order_by(Candle.opened_at)
         )
     )
-    expected_step = timedelta(minutes=1)
-    gap_count = sum(
-        1
-        for previous, current in zip(ordered_times, ordered_times[1:])
-        if current - previous > expected_step
-    )
     feed = db.get(MarketFeed, optimization.market_feed_id)
+    gap_summary = _summarize_m1_gaps(ordered_times, feed=feed)
     return jsonable_encoder(
         {
             "market_feed_id": optimization.market_feed_id,
@@ -201,7 +293,13 @@ def build_data_profile(
             "validation_candles": validation_total_candles,
             "complete_candles": len(ordered_times),
             "incomplete_candles": incomplete_count,
-            "detected_m1_gap_count": gap_count,
+            "gap_detection_policy": (
+                "OANDA weekend market-closed minutes are reported separately and "
+                "excluded from detected_m1_gap_count."
+                if feed and feed.provider == "oanda"
+                else "Calendar M1 continuity; no provider market-closed calendar was applied."
+            ),
+            **gap_summary,
         }
     )
 
@@ -265,7 +363,7 @@ def build_parameter_insights(trials: list[OptimizationTrial]) -> dict[str, Any]:
             continue
         covariance = sum(
             (value - mean_value) * (score - mean_score)
-            for value, score in zip(numeric_values, scores)
+            for value, score in zip(numeric_values, scores, strict=False)
         )
         correlations[name] = covariance / math.sqrt(value_variance * score_variance)
 
@@ -513,6 +611,7 @@ def build_research_quality_gates(
         )
 
     gap_count = int(data_profile.get("detected_m1_gap_count") or 0)
+    missing_minutes = int(data_profile.get("detected_m1_missing_minutes") or 0)
     incomplete_count = int(data_profile.get("incomplete_candles") or 0)
     if gap_count > 0 or incomplete_count > 0:
         gates.append(
@@ -520,10 +619,17 @@ def build_research_quality_gates(
                 "data_quality",
                 "WARN",
                 "MEDIUM",
-                "Input candles contain gaps or incomplete records.",
+                "Input candles contain unexpected M1 gaps or incomplete records.",
                 {
                     "detected_m1_gap_count": gap_count,
+                    "detected_m1_missing_minutes": missing_minutes,
                     "incomplete_candles": incomplete_count,
+                    "market_closed_m1_gap_count": int(
+                        data_profile.get("market_closed_m1_gap_count") or 0
+                    ),
+                    "market_closed_m1_missing_minutes": int(
+                        data_profile.get("market_closed_m1_missing_minutes") or 0
+                    ),
                 },
             )
         )
@@ -533,10 +639,17 @@ def build_research_quality_gates(
                 "data_quality",
                 "PASS",
                 "INFO",
-                "No M1 gaps or incomplete candles were detected in the run window.",
+                "No unexpected M1 gaps or incomplete candles were detected in the run window.",
                 {
                     "detected_m1_gap_count": gap_count,
+                    "detected_m1_missing_minutes": missing_minutes,
                     "incomplete_candles": incomplete_count,
+                    "market_closed_m1_gap_count": int(
+                        data_profile.get("market_closed_m1_gap_count") or 0
+                    ),
+                    "market_closed_m1_missing_minutes": int(
+                        data_profile.get("market_closed_m1_missing_minutes") or 0
+                    ),
                 },
             )
         )
@@ -707,7 +820,10 @@ def build_run_decision_sections(
                 "search_space": search_space,
                 "fixed_config_grid": fixed_config_grid or [],
                 "objective": optimization.objective,
-                "objective_formula": "BALANCED = net_pnl - 1.5 * max_drawdown - 50 * missing_trades_below_30; no-trade trials score -99999",
+                "objective_formula": (
+                    "BALANCED = net_pnl - 1.5 * max_drawdown - "
+                    "50 * missing_trades_below_30; no-trade trials score -99999"
+                ),
                 "execution_model": execution_model,
             }
         ),

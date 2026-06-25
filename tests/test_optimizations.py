@@ -13,7 +13,12 @@ os.environ["AGENT_SERVICE_TOKEN"] = "test-agent-token"
 from fastapi.testclient import TestClient
 from goldie_api.db import Base, SessionLocal, engine
 from goldie_api.main import app
-from goldie_api.models import OptimizationRun, OptimizationTrial
+from goldie_api.models import Candle, MarketFeed, OptimizationRun, OptimizationTrial
+from goldie_api.optimization_diagnostics import (
+    build_backtest_diagnostics,
+    build_data_profile,
+    build_research_quality_gates,
+)
 from goldie_api.optimizations import (
     OPTIMIZATION_CANCEL_CHECK_INTERVAL,
     OPTIMIZATION_COMMIT_INTERVAL,
@@ -25,10 +30,6 @@ from goldie_api.optimizations import (
     execute_optimization,
     sample_parameters,
     split_optimization_period,
-)
-from goldie_api.optimization_diagnostics import (
-    build_backtest_diagnostics,
-    build_research_quality_gates,
 )
 
 
@@ -179,6 +180,60 @@ def seed_market_data(client: TestClient, feed_id: str, agent_id: str) -> None:
         json={"agent_id": agent_id, "candles": candles},
     )
     assert stored.status_code == 202
+
+
+def test_data_profile_excludes_oanda_weekend_market_closure_from_detected_gaps() -> None:
+    Base.metadata.drop_all(engine)
+    Base.metadata.create_all(engine)
+    with SessionLocal() as db:
+        feed = MarketFeed(
+            provider="oanda",
+            environment="practice",
+            canonical_symbol="XAUUSD",
+            provider_symbol="XAU_USD",
+        )
+        db.add(feed)
+        db.flush()
+        for opened_at in (
+            datetime(2026, 1, 2, 21, 59, tzinfo=UTC),
+            datetime(2026, 1, 4, 22, 0, tzinfo=UTC),
+            datetime(2026, 1, 4, 22, 3, tzinfo=UTC),
+        ):
+            db.add(
+                Candle(
+                    market_feed_id=feed.id,
+                    symbol="XAUUSD",
+                    timeframe="M1",
+                    opened_at=opened_at,
+                    source="oanda",
+                    open=Decimal("2300"),
+                    high=Decimal("2301"),
+                    low=Decimal("2299"),
+                    close=Decimal("2300.5"),
+                    tick_volume=100,
+                    is_complete=True,
+                )
+            )
+        db.commit()
+
+        profile = build_data_profile(
+            db,
+            SimpleNamespace(
+                market_feed_id=feed.id,
+                date_from=datetime(2026, 1, 2, 21, 0, tzinfo=UTC),
+                date_to=datetime(2026, 1, 4, 22, 5, tzinfo=UTC),
+            ),
+            search_period=None,
+            validation_period=None,
+            search_total_candles=0,
+            validation_total_candles=0,
+        )
+
+    assert profile["raw_m1_gap_count"] == 2
+    assert profile["market_closed_m1_gap_count"] == 1
+    assert profile["market_closed_m1_missing_minutes"] == 2880
+    assert profile["detected_m1_gap_count"] == 1
+    assert profile["detected_m1_missing_minutes"] == 2
 
 
 def test_compute_balanced_score_penalizes_drawdown_and_low_trade_count() -> None:
