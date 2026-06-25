@@ -2,7 +2,7 @@ import os
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from types import SimpleNamespace
-from uuid import UUID
+from uuid import UUID, uuid4
 
 os.environ["DATABASE_URL"] = "sqlite:///./.pytest-goldie.db"
 os.environ["JWT_SECRET"] = "test-secret-that-is-longer-than-thirty-two-bytes"
@@ -13,10 +13,17 @@ os.environ["AGENT_SERVICE_TOKEN"] = "test-agent-token"
 from fastapi.testclient import TestClient
 from goldie_api.db import Base, SessionLocal, engine
 from goldie_api.main import app
-from goldie_api.models import Candle, MarketFeed, OptimizationRun, OptimizationTrial
+from goldie_api.models import (
+    Candle,
+    MarketFeed,
+    OptimizationRun,
+    OptimizationTrial,
+    OptimizationTrialTrade,
+)
 from goldie_api.optimization_diagnostics import (
     build_backtest_diagnostics,
     build_data_profile,
+    build_llm_context,
     build_research_quality_gates,
 )
 from goldie_api.optimizations import (
@@ -400,6 +407,128 @@ def test_pine_search_space_and_samples_are_always_valid() -> None:
         strategy.parameters_model.model_validate(sampled)
 
 
+def test_llm_context_v2_includes_all_trials_distributions_and_trades() -> None:
+    Base.metadata.drop_all(engine)
+    Base.metadata.create_all(engine)
+    with SessionLocal() as db:
+        optimization = OptimizationRun(
+            bot_id=uuid4(),
+            config_version_id=uuid4(),
+            market_feed_id=uuid4(),
+            run_id=uuid4(),
+            status="SUCCEEDED",
+            date_from=datetime(2026, 1, 1, tzinfo=UTC),
+            date_to=datetime(2026, 1, 2, tzinfo=UTC),
+            n_trials=4,
+            objective="BALANCED",
+            initial_capital=Decimal("10000"),
+            fill_mode="simulated",
+            fee_maker=Decimal("0"),
+            fee_taker=Decimal("0"),
+            taker_slippage=Decimal("0"),
+            slippage_small=Decimal("0"),
+            slippage_medium=Decimal("0"),
+            medium_impact=Decimal("0"),
+            impact_model="sqrt",
+            model_sqrt_limit=Decimal("1"),
+            limit_fill_timeout_s=30,
+            min_qty_threshold=Decimal("0"),
+            min_qty_check=True,
+            config_snapshot={"strategy": {"name": "ema_atr_pullback_continuation"}},
+            progress={},
+            best_candidate={},
+            summary={},
+        )
+        db.add(optimization)
+        db.flush()
+        trade_counts = [0, 3, 6, 30]
+        trials = []
+        for index, trade_count in enumerate(trade_counts):
+            trial = OptimizationTrial(
+                optimization_run_id=optimization.id,
+                trial_number=index,
+                phase="STRATEGY_SEARCH" if index < 2 else "FIXED_CONFIG_VALIDATION",
+                config_overrides={},
+                status="SUCCEEDED",
+                sampled_parameters={"fast_ema_period": 5 + index},
+                score=Decimal(index),
+                metrics={
+                    "diagnostics": {
+                        "condition_pass_counts": {
+                            "volatility_ok": {"evaluated": 10, "passed": index}
+                        }
+                    }
+                },
+                summary={"total_trades": trade_count},
+            )
+            db.add(trial)
+            db.flush()
+            trials.append(trial)
+            for trade_index in range(trade_count):
+                opened_at = datetime(2026, 1, 1, 10, 0, tzinfo=UTC) + timedelta(
+                    minutes=trade_index
+                )
+                db.add(
+                    OptimizationTrialTrade(
+                        trial_id=trial.id,
+                        direction="BUY",
+                        signal_reason="EMA_ATR_PULLBACK_CONTINUATION_BUY",
+                        signal_at=opened_at,
+                        opened_at=opened_at,
+                        closed_at=opened_at + timedelta(minutes=1),
+                        entry_price=Decimal("1.10000"),
+                        exit_price=Decimal("1.10100"),
+                        stop_loss=Decimal("1.09900"),
+                        take_profit=Decimal("1.10200"),
+                        close_reason="TAKE_PROFIT",
+                        gross_pnl=Decimal("10"),
+                        commission=Decimal("0"),
+                        net_pnl=Decimal("10"),
+                        pnl_points=Decimal("10"),
+                        r_multiple=Decimal("1"),
+                        mfe_points=Decimal("12"),
+                        mae_points=Decimal("3"),
+                        duration_seconds=60,
+                        session={
+                            "timezone": "UTC",
+                            "local_opened_at": opened_at.isoformat(),
+                            "window_start": "00:00:00",
+                            "window_end": "23:59:59",
+                        },
+                    )
+                )
+        db.commit()
+
+        payload = build_llm_context(db, optimization)
+        deleted_trial_id = trials[1].id
+        db.delete(trials[1])
+        db.commit()
+        remaining_deleted_trial_trades = (
+            db.query(OptimizationTrialTrade)
+            .filter_by(trial_id=deleted_trial_id)
+            .count()
+        )
+
+    assert payload["schema_version"] == "goldie.optimization-llm-context.v2"
+    assert len(payload["trials"]) == 4
+    assert payload["trial_distributions"]["trade_count_buckets"] == {
+        "0": 1,
+        "1_5": 1,
+        "6_29": 1,
+        "30_plus": 1,
+    }
+    assert payload["condition_pass_counts"]["overall"]["volatility_ok"] == {
+        "evaluated": 40,
+        "passed": 6,
+    }
+    assert payload["parameter_distributions"]["fast_ema_period"]["unique_values"] == 2
+    trade_payload = payload["trials"][1]["trades"][0]
+    assert trade_payload["signal_reason"] == "EMA_ATR_PULLBACK_CONTINUATION_BUY"
+    assert trade_payload["mfe_points"] == 12
+    assert trade_payload["mae_points"] == 3
+    assert remaining_deleted_trial_trades == 0
+
+
 def test_optimization_api_and_execution_flow(monkeypatch) -> None:
     Base.metadata.drop_all(engine)
     Base.metadata.create_all(engine)
@@ -582,11 +711,20 @@ def test_optimization_api_and_execution_flow(monkeypatch) -> None:
         )
         assert llm_context.status_code == 200
         llm_body = llm_context.json()
-        assert llm_body["schema_version"] == "goldie.optimization-llm-context.v1"
+        assert llm_body["schema_version"] == "goldie.optimization-llm-context.v2"
         assert llm_body["top_trials"]
         assert llm_body["worst_trials"]
         assert llm_body["validation_winners"]
+        assert len(llm_body["trials"]) == 57
+        assert llm_body["trial_distributions"]["phase_counts"]["STRATEGY_SEARCH"] == 12
+        assert set(llm_body["trial_distributions"]["trade_count_buckets"]) == {
+            "0",
+            "1_5",
+            "6_29",
+            "30_plus",
+        }
         assert llm_body["parameter_insights"]
+        assert llm_body["parameter_distributions"]
         assert llm_body["robustness"]
         assert llm_body["research_quality_gates"] == quality_gates
         assert llm_body["run_context"]["research_quality_gates"] == quality_gates

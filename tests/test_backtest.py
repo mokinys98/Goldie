@@ -121,6 +121,9 @@ def test_signal_opens_only_on_next_candle_and_is_deterministic() -> None:
     assert first == second
     assert first.trades[0].signal_at == candles[2].opened_at + timedelta(minutes=1)
     assert first.trades[0].opened_at == candles[3].opened_at
+    assert first.trades[0].signal_reason == "MOMENTUM_UP"
+    assert first.trades[0].mfe_points >= 0
+    assert first.trades[0].mae_points >= 0
 
 
 def test_same_candle_stop_and_take_uses_stop_first() -> None:
@@ -496,6 +499,58 @@ def test_run_stream_accepts_lightweight_candles_for_combo_strategies() -> None:
     )
 
     assert isinstance(result.reason_counts, dict)
+
+
+def test_ema_atr_fast_backtest_reports_condition_counts_after_warmup() -> None:
+    _, instrument, costs = settings()
+    strategy = get_strategy("ema_atr_pullback_continuation")
+    config = BotConfiguration.model_validate(
+        {
+            "market": {"symbol": "XAUUSD", "timeframe": "M1"},
+            "strategy": {
+                "name": "ema_atr_pullback_continuation",
+                "parameters": strategy.parameters_model().model_dump(mode="json"),
+            },
+            "filters": {"max_spread_points": "20", "stale_after_seconds": 15},
+            "session": {
+                "timezone": "UTC",
+                "start_time": "00:00:00",
+                "end_time": "23:59:59",
+            },
+            "theoretical_trade": {
+                "stop_loss_points": "5",
+                "take_profit_points": "8",
+                "risk_per_trade_pct": "1",
+                "max_trade_duration_minutes": 5,
+                "max_open_shadow_positions": 1,
+            },
+        }
+    )
+    start = datetime(2026, 1, 5, 10, 0, tzinfo=UTC)
+    candles = [
+        CandleInput(
+            opened_at=start + timedelta(minutes=index),
+            open=Decimal("100") + Decimal(index) / Decimal("10"),
+            high=Decimal("100.4") + Decimal(index) / Decimal("10"),
+            low=Decimal("99.6") + Decimal(index) / Decimal("10"),
+            close=Decimal("100.2") + Decimal(index) / Decimal("10"),
+        )
+        for index in range(80)
+    ]
+
+    result = BacktestEngine().run(
+        candles=candles,
+        config=config,
+        instrument=instrument,
+        costs=costs,
+        initial_capital=Decimal("10000"),
+        use_fast_strategy=True,
+    )
+
+    required = strategy.required_candles(strategy.parameters_model())
+    assert result.condition_counts["volatility_ok"]["evaluated"] == len(candles) - required + 1
+    assert result.condition_counts["signal_ready"]["evaluated"] == len(candles) - required + 1
+    assert set(result.condition_counts["trend_ok"]) == {"evaluated", "passed"}
 
 
 def test_perfect_fill_has_no_slippage_or_commission() -> None:

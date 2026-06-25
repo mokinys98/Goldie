@@ -336,25 +336,64 @@ class _FastEmaAtrPullbackContinuationEvaluator(FastGuardedEvaluator):
 
         atr_points = atr_value / self.point
         trend_points = abs(fast - slow) / self.point
-        volatility_ok = self.min_atr_points <= atr_points <= self.max_atr_points
-        trend_ok = trend_points >= self.min_trend_points
+        volatility_ok = self.count_condition(
+            "volatility_ok",
+            self.min_atr_points <= atr_points <= self.max_atr_points,
+        )
+        trend_ok = self.count_condition(
+            "trend_ok",
+            trend_points >= self.min_trend_points,
+        )
+        bullish_trend = self.count_condition("bullish_trend", fast > medium > slow)
+        bearish_trend = self.count_condition("bearish_trend", fast < medium < slow)
+        buy_pullback = self.count_condition(
+            "buy_pullback",
+            low <= medium + self.pullback_tolerance and close >= fast,
+        )
+        sell_pullback = self.count_condition(
+            "sell_pullback",
+            high >= medium - self.pullback_tolerance and close <= fast,
+        )
+        buy_rsi_ok = self.count_condition(
+            "buy_rsi_ok",
+            self.buy_rsi_min <= rsi_value <= self.buy_rsi_max,
+        )
+        sell_rsi_ok = self.count_condition(
+            "sell_rsi_ok",
+            self.sell_rsi_min <= rsi_value <= self.sell_rsi_max,
+        )
+        buy_body_ok = self.count_condition(
+            "buy_body_ok",
+            not self.parameters.require_reversal_candle or close > open_price,
+        )
+        sell_body_ok = self.count_condition(
+            "sell_body_ok",
+            not self.parameters.require_reversal_candle or close < open_price,
+        )
+        buy_signal_ready = self.count_condition(
+            "buy_signal_ready",
+            volatility_ok
+            and trend_ok
+            and bullish_trend
+            and buy_pullback
+            and buy_rsi_ok
+            and buy_body_ok,
+        )
+        sell_signal_ready = self.count_condition(
+            "sell_signal_ready",
+            volatility_ok
+            and trend_ok
+            and bearish_trend
+            and sell_pullback
+            and sell_rsi_ok
+            and sell_body_ok,
+        )
+        self.count_condition("signal_ready", buy_signal_ready or sell_signal_ready)
 
         if volatility_ok and trend_ok:
-            if (
-                fast > medium > slow
-                and low <= medium + self.pullback_tolerance
-                and close >= fast
-                and self.buy_rsi_min <= rsi_value <= self.buy_rsi_max
-                and (not self.parameters.require_reversal_candle or close > open_price)
-            ):
+            if buy_signal_ready:
                 return SignalType.BUY, "EMA_ATR_PULLBACK_CONTINUATION_BUY"
-            if (
-                fast < medium < slow
-                and high >= medium - self.pullback_tolerance
-                and close <= fast
-                and self.sell_rsi_min <= rsi_value <= self.sell_rsi_max
-                and (not self.parameters.require_reversal_candle or close < open_price)
-            ):
+            if sell_signal_ready:
                 return SignalType.SELL, "EMA_ATR_PULLBACK_CONTINUATION_SELL"
         return SignalType.NO_TRADE, "EMA_ATR_PULLBACK_CONTINUATION_CONDITIONS_NOT_MET"
 

@@ -563,6 +563,46 @@ class OptimizationTrial(Base, TimestampMixin):
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     run: Mapped[OptimizationRun] = relationship(back_populates="trials")
+    trades: Mapped[list["OptimizationTrialTrade"]] = relationship(
+        back_populates="trial", cascade="all, delete-orphan"
+    )
+
+
+class OptimizationTrialTrade(Base):
+    __tablename__ = "optimization_trial_trades"
+    __table_args__ = (
+        Index(
+            "ix_optimization_trial_trades_trial_opened_at",
+            "trial_id",
+            "opened_at",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    trial_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("optimization_trials.id", ondelete="CASCADE"), index=True
+    )
+    direction: Mapped[str] = mapped_column(String(8))
+    signal_reason: Mapped[str] = mapped_column(String(64))
+    signal_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    opened_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    closed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    entry_price: Mapped[Decimal] = mapped_column(Numeric(20, 8))
+    exit_price: Mapped[Decimal] = mapped_column(Numeric(20, 8))
+    stop_loss: Mapped[Decimal] = mapped_column(Numeric(20, 8))
+    take_profit: Mapped[Decimal] = mapped_column(Numeric(20, 8))
+    close_reason: Mapped[str] = mapped_column(String(32))
+    gross_pnl: Mapped[Decimal] = mapped_column(Numeric(20, 8))
+    commission: Mapped[Decimal] = mapped_column(Numeric(20, 8))
+    net_pnl: Mapped[Decimal] = mapped_column(Numeric(20, 8))
+    pnl_points: Mapped[Decimal] = mapped_column(Numeric(20, 8))
+    r_multiple: Mapped[Decimal] = mapped_column(Numeric(20, 8))
+    mfe_points: Mapped[Decimal] = mapped_column(Numeric(20, 8))
+    mae_points: Mapped[Decimal] = mapped_column(Numeric(20, 8))
+    duration_seconds: Mapped[int] = mapped_column(Integer)
+    session: Mapped[dict] = mapped_column(JSON, default=dict)
+
+    trial: Mapped[OptimizationTrial] = relationship(back_populates="trades")
 
 
 class AuditEvent(Base):

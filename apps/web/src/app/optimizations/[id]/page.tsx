@@ -191,7 +191,7 @@ export default function OptimizationDetailPage() {
       anchor.download = llmContextFilename(configSnapshot.strategy.name, configSnapshot.market.symbol, id);
       anchor.click();
       URL.revokeObjectURL(url);
-      setExportMessage(`Exported LLM context with ${payload.top_trials.length} top trials.`);
+      setExportMessage(`Exported LLM context with ${llmContextTrialCount(payload)} trials.`);
     } catch {
       // loadLlmContext exposes the actionable error in the page.
     }
@@ -201,7 +201,7 @@ export default function OptimizationDetailPage() {
     try {
       const payload = await loadLlmContext();
       await writeClipboardText(JSON.stringify(payload, null, 2));
-      setExportMessage(`Copied LLM context with ${payload.top_trials.length} top trials.`);
+      setExportMessage(`Copied LLM context with ${llmContextTrialCount(payload)} trials.`);
     } catch (reason) {
       if (!exportError) {
         setExportError(reason instanceof Error ? reason.message : "Could not copy LLM context");
@@ -657,4 +657,8 @@ function exportFilename(strategy: string, symbol: string, optimizationId: string
 function llmContextFilename(strategy: string, symbol: string, optimizationId: string): string {
   const safe = `${strategy}-${symbol}`.replace(/[^a-zA-Z0-9_-]+/g, "-").toLowerCase();
   return `${safe}-optimization-${optimizationId.slice(0, 8)}-llm-context.json`;
+}
+
+function llmContextTrialCount(payload: OptimizationLlmContext): number {
+  return payload.trials?.length ?? payload.top_trials.length;
 }

@@ -324,21 +324,61 @@ class _FastFailedRangeBreakReversalEvaluator(FastGuardedEvaluator):
         range_high, range_low = prior
         atr_points = atr_value / self.point
         trend_points = abs(fast - slow) / self.point
-        volatility_ok = self.min_atr_points <= atr_points <= self.max_atr_points
-        trend_ok = not self.parameters.use_ema_flat_filter or trend_points <= self.max_trend_points
+        volatility_ok = self.count_condition(
+            "volatility_ok",
+            self.min_atr_points <= atr_points <= self.max_atr_points,
+        )
+        trend_ok = self.count_condition(
+            "trend_ok",
+            not self.parameters.use_ema_flat_filter
+            or trend_points <= self.max_trend_points,
+        )
+        downside_sweep = self.count_condition(
+            "downside_sweep",
+            low <= range_low - self.fakeout,
+        )
+        upside_sweep = self.count_condition(
+            "upside_sweep",
+            high >= range_high + self.fakeout,
+        )
+        downside_reclaim = self.count_condition(
+            "downside_reclaim",
+            close >= range_low + self.reclaim,
+        )
+        upside_reclaim = self.count_condition(
+            "upside_reclaim",
+            close <= range_high - self.reclaim,
+        )
+        buy_rsi_confirmed = self.count_condition(
+            "buy_rsi_confirmed",
+            rsi_value <= self.buy_rsi_max,
+        )
+        sell_rsi_confirmed = self.count_condition(
+            "sell_rsi_confirmed",
+            rsi_value >= self.sell_rsi_min,
+        )
+        buy_signal_ready = self.count_condition(
+            "buy_signal_ready",
+            volatility_ok
+            and trend_ok
+            and downside_sweep
+            and downside_reclaim
+            and buy_rsi_confirmed,
+        )
+        sell_signal_ready = self.count_condition(
+            "sell_signal_ready",
+            volatility_ok
+            and trend_ok
+            and upside_sweep
+            and upside_reclaim
+            and sell_rsi_confirmed,
+        )
+        self.count_condition("signal_ready", buy_signal_ready or sell_signal_ready)
 
         if volatility_ok and trend_ok:
-            if (
-                low <= range_low - self.fakeout
-                and close >= range_low + self.reclaim
-                and rsi_value <= self.buy_rsi_max
-            ):
+            if buy_signal_ready:
                 return SignalType.BUY, "FAILED_RANGE_BREAK_REVERSAL_BUY"
-            if (
-                high >= range_high + self.fakeout
-                and close <= range_high - self.reclaim
-                and rsi_value >= self.sell_rsi_min
-            ):
+            if sell_signal_ready:
                 return SignalType.SELL, "FAILED_RANGE_BREAK_REVERSAL_SELL"
         return SignalType.NO_TRADE, "FAILED_RANGE_BREAK_REVERSAL_CONDITIONS_NOT_MET"
 

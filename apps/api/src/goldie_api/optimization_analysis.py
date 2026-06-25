@@ -250,19 +250,19 @@ def build_optimization_export(
                 ),
                 "candidate_validation": _candidate_validation_analysis(trials),
                 "parameter_insights": (optimization.summary or {}).get(
-                    "parameter_insights",
-                    {},
-                ),
-                "robustness": (optimization.summary or {}).get("robustness", {}),
+                    "parameter_insights"
+                )
+                or {},
+                "robustness": (optimization.summary or {}).get("robustness") or {},
                 "research_quality_gates": (optimization.summary or {}).get(
-                    "research_quality_gates",
-                    {},
-                ),
-                "data_profile": (optimization.summary or {}).get("data_profile", {}),
+                    "research_quality_gates"
+                )
+                or {},
+                "data_profile": (optimization.summary or {}).get("data_profile") or {},
                 "decision_context": (optimization.summary or {}).get(
-                    "decision_context",
-                    {},
-                ),
+                    "decision_context"
+                )
+                or {},
             },
             "trials": trial_payloads,
         }

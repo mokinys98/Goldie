@@ -175,6 +175,32 @@ describe("OptimizationDetailPage", () => {
     }
   });
 
+  it("reports copied LLM context using the full v2 trial count", async () => {
+    const clipboardDescriptor = Object.getOwnPropertyDescriptor(navigator, "clipboard");
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText: vi.fn().mockResolvedValue(undefined) },
+    });
+    api.mockResolvedValueOnce({
+      schema_version: "goldie.optimization-llm-context.v2",
+      top_trials: [{ id: "trial-1" }],
+      trials: [{ id: "trial-1" }, { id: "trial-2" }],
+    });
+    render(<OptimizationDetailPage />);
+
+    fireEvent.click(screen.getByLabelText("Download optimization data"));
+    fireEvent.click(screen.getAllByRole("button", { name: "LLM context JSON" }).at(1)!);
+
+    await waitFor(() => {
+      expect(screen.getByText("Copied LLM context with 2 trials.")).toBeInTheDocument();
+    });
+    if (clipboardDescriptor) {
+      Object.defineProperty(navigator, "clipboard", clipboardDescriptor);
+    } else {
+      Reflect.deleteProperty(navigator, "clipboard");
+    }
+  });
+
   it("renders research readiness gates", () => {
     render(<OptimizationDetailPage />);
 

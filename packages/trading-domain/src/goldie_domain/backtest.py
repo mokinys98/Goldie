@@ -54,6 +54,7 @@ class BacktestCandle:
 @dataclass(frozen=True)
 class BacktestTrade:
     direction: str
+    signal_reason: str
     signal_at: datetime
     opened_at: datetime
     closed_at: datetime
@@ -79,6 +80,7 @@ class BacktestResult:
     trades: list[BacktestTrade]
     summary: dict
     reason_counts: dict[str, int]
+    condition_counts: dict[str, dict[str, int]]
 
 
 class BacktestCancelled(Exception):
@@ -102,6 +104,7 @@ def _as_candle_input(candle: CandleInput | BacktestCandle) -> CandleInput:
 @dataclass
 class _OpenPosition:
     direction: str
+    signal_reason: str
     signal_at: datetime
     opened_at: datetime
     entry_price: Decimal
@@ -164,7 +167,7 @@ class BacktestEngine:
         reasons: Counter[str] = Counter()
         trades: list[BacktestTrade] = []
         position: _OpenPosition | None = None
-        pending: tuple[str, object] | None = None
+        pending: tuple[str, datetime, str] | None = None
         balance = initial_capital
         expected_step = timedelta(minutes=1)
         strategy = self.strategy or get_strategy(config.strategy.name)
@@ -215,7 +218,7 @@ class BacktestEngine:
                     reasons["DATA_GAP"] += 1
 
             if position is None and pending is not None:
-                direction, signal_at = pending
+                direction, signal_at, signal_reason = pending
                 fill_age = candle.opened_at - signal_at
                 if fill_age.total_seconds() > costs.limit_fill_timeout_s:
                     if collect_reason_counts:
@@ -223,6 +226,7 @@ class BacktestEngine:
                 else:
                     position = self._open(
                         direction=direction,
+                        signal_reason=signal_reason,
                         signal_at=signal_at,
                         candle=candle,
                         config=config,
@@ -271,7 +275,7 @@ class BacktestEngine:
             if collect_reason_counts:
                 reasons[reason_code] += 1
             if position is None and pending is None and decision_signal != SignalType.NO_TRADE:
-                pending = (decision_signal.value, observed_at)
+                pending = (decision_signal.value, observed_at, reason_code)
             elif decision_signal != SignalType.NO_TRADE:
                 if collect_reason_counts:
                     reasons["OPEN_POSITION_EXISTS"] += 1
@@ -297,12 +301,14 @@ class BacktestEngine:
             trades=trades,
             summary=self._summary(trades, initial_capital),
             reason_counts=dict(sorted(reasons.items())),
+            condition_counts=self._condition_counts(prepared),
         )
 
     def _open(
         self,
         *,
         direction: str,
+        signal_reason: str,
         signal_at: datetime,
         candle: CandleInput,
         config: BotConfiguration,
@@ -339,6 +345,7 @@ class BacktestEngine:
             return None
         return _OpenPosition(
             direction=direction,
+            signal_reason=signal_reason,
             signal_at=signal_at,
             opened_at=candle.opened_at,
             entry_price=entry,
@@ -444,6 +451,7 @@ class BacktestEngine:
         net = gross - commission
         return BacktestTrade(
             direction=position.direction,
+            signal_reason=position.signal_reason,
             signal_at=position.signal_at,
             opened_at=position.opened_at,
             closed_at=closed_at,
@@ -463,6 +471,21 @@ class BacktestEngine:
             mae_points=position.mae_points,
             duration_seconds=int((closed_at - position.opened_at).total_seconds()),
         )
+
+    @staticmethod
+    def _condition_counts(prepared: object | None) -> dict[str, dict[str, int]]:
+        diagnostics = getattr(prepared, "diagnostics", None)
+        if diagnostics is None:
+            return {}
+        values = diagnostics()
+        condition_counts = values.get("condition_counts", values)
+        return {
+            str(name): {
+                "evaluated": int(counts.get("evaluated", 0)),
+                "passed": int(counts.get("passed", 0)),
+            }
+            for name, counts in condition_counts.items()
+        }
 
     @staticmethod
     def _summary(trades: list[BacktestTrade], initial_capital: Decimal) -> dict:

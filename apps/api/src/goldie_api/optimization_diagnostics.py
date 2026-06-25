@@ -9,7 +9,13 @@ from fastapi.encoders import jsonable_encoder
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from .models import Candle, MarketFeed, OptimizationRun, OptimizationTrial
+from .models import (
+    Candle,
+    MarketFeed,
+    OptimizationRun,
+    OptimizationTrial,
+    OptimizationTrialTrade,
+)
 from .services import as_utc
 
 CORE_TRIAL_METRICS = (
@@ -87,6 +93,7 @@ def _range(values: list[float]) -> dict[str, float | None]:
 def build_backtest_diagnostics(
     summary: dict[str, Any],
     reason_counts: dict[str, int] | None = None,
+    condition_counts: dict[str, dict[str, int]] | None = None,
 ) -> dict[str, Any]:
     direction_breakdown = summary.get("direction_breakdown") or {}
     close_reason_counts = summary.get("close_reason_counts") or {}
@@ -99,6 +106,7 @@ def build_backtest_diagnostics(
         "direction_breakdown": direction_breakdown,
         "close_reason_counts": close_reason_counts,
         "reason_counts": reason_counts or {},
+        "condition_pass_counts": condition_counts or {},
         "trade_quality": {
             "expectancy_r": summary.get("expectancy_r"),
             "total_r": summary.get("total_r"),
@@ -137,10 +145,15 @@ def build_trial_metrics(
     *,
     timings: dict[str, float],
     reason_counts: dict[str, int] | None = None,
+    condition_counts: dict[str, dict[str, int]] | None = None,
 ) -> dict[str, Any]:
     metrics = {name: summary.get(name) for name in CORE_TRIAL_METRICS}
     metrics["timings"] = timings
-    metrics["diagnostics"] = build_backtest_diagnostics(summary, reason_counts)
+    metrics["diagnostics"] = build_backtest_diagnostics(
+        summary,
+        reason_counts,
+        condition_counts,
+    )
     return jsonable_encoder(metrics)
 
 
@@ -374,6 +387,33 @@ def build_parameter_insights(trials: list[OptimizationTrial]) -> dict[str, Any]:
             "numeric_score_correlation": correlations,
         }
     )
+
+
+def build_parameter_distributions(trials: list[OptimizationTrial]) -> dict[str, Any]:
+    values: dict[str, list[Any]] = defaultdict(list)
+    for trial in trials:
+        if trial.status != "SUCCEEDED" or trial.phase != "STRATEGY_SEARCH":
+            continue
+        for name, value in (trial.sampled_parameters or {}).items():
+            values[name].append(value)
+
+    result: dict[str, Any] = {}
+    for name, parameter_values in sorted(values.items()):
+        numeric = [_number(value) for value in parameter_values]
+        if all(value is not None for value in numeric):
+            result[name] = {
+                "type": "numeric",
+                "unique_values": len(set(parameter_values)),
+                "range": _range([value for value in numeric if value is not None]),
+            }
+        else:
+            counts = Counter(str(value) for value in parameter_values)
+            result[name] = {
+                "type": "categorical",
+                "unique_values": len(counts),
+                "value_counts": dict(counts.most_common()),
+            }
+    return jsonable_encoder(result)
 
 
 def build_robustness(trials: list[OptimizationTrial]) -> dict[str, Any]:
@@ -838,6 +878,25 @@ def build_llm_context(db: Session, optimization: OptimizationRun) -> dict[str, A
             .order_by(OptimizationTrial.phase.asc(), OptimizationTrial.trial_number.asc())
         )
     )
+    trial_ids = [trial.id for trial in trials]
+    trade_rows = (
+        list(
+            db.scalars(
+                select(OptimizationTrialTrade)
+                .where(OptimizationTrialTrade.trial_id.in_(trial_ids))
+                .order_by(
+                    OptimizationTrialTrade.trial_id.asc(),
+                    OptimizationTrialTrade.opened_at.asc(),
+                )
+            )
+        )
+        if trial_ids
+        else []
+    )
+    trades_by_trial: dict[Any, list[OptimizationTrialTrade]] = defaultdict(list)
+    for trade in trade_rows:
+        trades_by_trial[trade.trial_id].append(trade)
+
     succeeded = _successful_trials(trials)
     ranked = sorted(succeeded, key=lambda trial: _score(trial.score), reverse=True)
     worst = sorted(succeeded, key=lambda trial: _score(trial.score))[:10]
@@ -845,9 +904,100 @@ def build_llm_context(db: Session, optimization: OptimizationRun) -> dict[str, A
         trial for trial in ranked if trial.phase == "FIXED_CONFIG_VALIDATION"
     ][:10]
 
+    def condition_counts(trial: OptimizationTrial) -> dict[str, Any]:
+        return (
+            (trial.metrics or {})
+            .get("diagnostics", {})
+            .get("condition_pass_counts", {})
+        )
+
+    def add_condition_counts(
+        target: dict[str, dict[str, int]],
+        source: dict[str, Any],
+    ) -> None:
+        for name, counts in (source or {}).items():
+            bucket = target.setdefault(name, {"evaluated": 0, "passed": 0})
+            bucket["evaluated"] += int((counts or {}).get("evaluated") or 0)
+            bucket["passed"] += int((counts or {}).get("passed") or 0)
+
+    def aggregate_condition_counts() -> dict[str, Any]:
+        overall: dict[str, dict[str, int]] = {}
+        by_phase: dict[str, dict[str, dict[str, int]]] = defaultdict(dict)
+        for trial in trials:
+            counts = condition_counts(trial)
+            add_condition_counts(overall, counts)
+            add_condition_counts(by_phase[trial.phase], counts)
+        return jsonable_encoder({"overall": overall, "by_phase": dict(by_phase)})
+
+    def trade_count(trial: OptimizationTrial) -> int:
+        persisted = len(trades_by_trial.get(trial.id, []))
+        if persisted:
+            return persisted
+        return int(_number((trial.summary or {}).get("total_trades")) or 0)
+
+    def trial_distributions() -> dict[str, Any]:
+        buckets = {"0": 0, "1_5": 0, "6_29": 0, "30_plus": 0}
+        for trial in trials:
+            count = trade_count(trial)
+            if count == 0:
+                buckets["0"] += 1
+            elif count <= 5:
+                buckets["1_5"] += 1
+            elif count <= 29:
+                buckets["6_29"] += 1
+            else:
+                buckets["30_plus"] += 1
+        return {
+            "status_counts": dict(Counter(trial.status for trial in trials)),
+            "phase_counts": dict(Counter(trial.phase for trial in trials)),
+            "trade_count_buckets": buckets,
+        }
+
+    def trade_payload(trade: OptimizationTrialTrade) -> dict[str, Any]:
+        return {
+            "entry_time": trade.opened_at,
+            "exit_time": trade.closed_at,
+            "direction": trade.direction,
+            "entry_price": trade.entry_price,
+            "exit_price": trade.exit_price,
+            "stop_loss": trade.stop_loss,
+            "take_profit": trade.take_profit,
+            "close_reason": trade.close_reason,
+            "pnl": trade.net_pnl,
+            "pnl_points": trade.pnl_points,
+            "r_multiple": trade.r_multiple,
+            "duration_seconds": trade.duration_seconds,
+            "session": trade.session,
+            "signal_reason": trade.signal_reason,
+            "mfe_points": trade.mfe_points,
+            "mae_points": trade.mae_points,
+        }
+
+    def trial_payload(trial: OptimizationTrial) -> dict[str, Any]:
+        return {
+            "id": trial.id,
+            "trial_number": trial.trial_number,
+            "phase": trial.phase,
+            "status": trial.status,
+            "score": trial.score,
+            "sampled_parameters": trial.sampled_parameters,
+            "config_overrides": trial.config_overrides,
+            "metrics": trial.metrics,
+            "summary": trial.summary,
+            "condition_pass_counts": condition_counts(trial),
+            "trades": [
+                trade_payload(trade)
+                for trade in trades_by_trial.get(trial.id, [])
+            ],
+            "error": trial.error,
+            "started_at": trial.started_at,
+            "completed_at": trial.completed_at,
+        }
+
     def compact_trial(trial: OptimizationTrial) -> dict[str, Any]:
         metrics = trial.metrics or {}
         return {
+            "id": trial.id,
             "trial_number": trial.trial_number,
             "phase": trial.phase,
             "score": trial.score,
@@ -873,9 +1023,11 @@ def build_llm_context(db: Session, optimization: OptimizationRun) -> dict[str, A
 
     summary = optimization.summary or {}
     data_profile = summary.get("data_profile") or {}
+    persisted_trade_count = len(trade_rows)
+    expected_trade_count = sum(trade_count(trial) for trial in trials)
     return jsonable_encoder(
         {
-            "schema_version": "goldie.optimization-llm-context.v1",
+            "schema_version": "goldie.optimization-llm-context.v2",
             "optimization": {
                 "id": optimization.id,
                 "status": optimization.status,
@@ -887,22 +1039,36 @@ def build_llm_context(db: Session, optimization: OptimizationRun) -> dict[str, A
             },
             "run_context": {
                 "data_profile": data_profile,
-                "decision_context": summary.get("decision_context", {}),
-                "research_quality_gates": summary.get("research_quality_gates", {}),
+                "decision_context": summary.get("decision_context") or {},
+                "research_quality_gates": summary.get("research_quality_gates") or {},
                 "progress": optimization.progress,
                 "error": optimization.error,
             },
             "top_trials": [compact_trial(trial) for trial in ranked[:10]],
             "worst_trials": [compact_trial(trial) for trial in worst],
             "validation_winners": [compact_trial(trial) for trial in validation],
-            "parameter_insights": summary.get("parameter_insights", {}),
-            "robustness": summary.get("robustness", {}),
-            "research_quality_gates": summary.get("research_quality_gates", {}),
+            "trials": [trial_payload(trial) for trial in trials],
+            "trial_distributions": trial_distributions(),
+            "condition_pass_counts": aggregate_condition_counts(),
+            "parameter_distributions": build_parameter_distributions(trials),
+            "parameter_insights": summary.get("parameter_insights") or {},
+            "robustness": summary.get("robustness") or {},
+            "research_quality_gates": summary.get("research_quality_gates") or {},
             "data_quality_notes": {
                 "detected_m1_gap_count": data_profile.get("detected_m1_gap_count"),
                 "incomplete_candles": data_profile.get("incomplete_candles"),
                 "search_candles": data_profile.get("search_candles"),
                 "validation_candles": data_profile.get("validation_candles"),
+            },
+            "data_availability": {
+                "persisted_optimization_trade_count": persisted_trade_count,
+                "summary_trade_count": expected_trade_count,
+                "full_trades_available": persisted_trade_count > 0
+                or expected_trade_count == 0,
+                "note": (
+                    "Older optimization runs may not have persisted full trade lists "
+                    "or condition pass counts."
+                ),
             },
         }
     )

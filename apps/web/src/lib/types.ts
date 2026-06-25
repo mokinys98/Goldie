@@ -606,14 +606,19 @@ export type OptimizationResultsExport = {
 };
 
 export type OptimizationLlmContext = {
-  schema_version: "goldie.optimization-llm-context.v1";
+  schema_version: "goldie.optimization-llm-context.v1" | "goldie.optimization-llm-context.v2";
   optimization: Record<string, unknown>;
   run_context: Record<string, unknown>;
   top_trials: Array<Record<string, unknown>>;
   worst_trials: Array<Record<string, unknown>>;
   validation_winners: Array<Record<string, unknown>>;
+  trials?: Array<Record<string, unknown>>;
+  trial_distributions?: Record<string, unknown>;
+  condition_pass_counts?: Record<string, unknown>;
+  parameter_distributions?: Record<string, unknown>;
   parameter_insights: Record<string, unknown>;
   robustness: Record<string, unknown>;
   research_quality_gates: ResearchQualityGates | Record<string, never>;
   data_quality_notes: Record<string, unknown>;
+  data_availability?: Record<string, unknown>;
 };

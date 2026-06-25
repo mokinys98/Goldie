@@ -60,6 +60,7 @@ class FastGuardedEvaluator:
         self.guards = guards
         self.required = required
         self.count = 0
+        self.condition_counts: dict[str, dict[str, int]] = {}
         self.skip_guards = (
             guards.spread_points <= guards.max_spread_points
             and guards.timezone.key == "UTC"
@@ -69,6 +70,16 @@ class FastGuardedEvaluator:
 
     def rejection(self, observed_at: datetime) -> str | None:
         return None if self.skip_guards else self.guards.rejection_reason(observed_at)
+
+    def count_condition(self, name: str, passed: bool) -> bool:
+        counts = self.condition_counts.setdefault(name, {"evaluated": 0, "passed": 0})
+        counts["evaluated"] += 1
+        if passed:
+            counts["passed"] += 1
+        return passed
+
+    def diagnostics(self) -> dict[str, dict[str, dict[str, int]]]:
+        return {"condition_counts": self.condition_counts}
 
 
 class PreparedStrategy:

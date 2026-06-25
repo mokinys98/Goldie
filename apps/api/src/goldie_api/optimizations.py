@@ -5,6 +5,7 @@ from collections.abc import Sequence
 from decimal import Decimal
 from time import monotonic
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import optuna
 from fastapi.encoders import jsonable_encoder
@@ -16,7 +17,7 @@ from goldie_domain import (
     get_strategy,
     strategy_catalog,
 )
-from sqlalchemy import delete, func, select, update
+from sqlalchemy import delete, func, insert, select, update
 from sqlalchemy.orm import Session
 
 from .backtests import DEFAULT_BACKTEST_SPREAD_POINTS, utc_now
@@ -25,6 +26,7 @@ from .models import (
     InstrumentSpecification,
     OptimizationRun,
     OptimizationTrial,
+    OptimizationTrialTrade,
     Run,
 )
 from .optimization_diagnostics import (
@@ -298,6 +300,58 @@ def _execution_model_payload(optimization: OptimizationRun) -> dict[str, Any]:
     )
 
 
+def _trade_session_payload(trade, config: BotConfiguration) -> dict[str, Any]:
+    timezone = ZoneInfo(config.session.timezone)
+    opened_at = trade.opened_at
+    if opened_at.tzinfo is None:
+        opened_at = opened_at.replace(tzinfo=ZoneInfo("UTC"))
+    return {
+        "timezone": config.session.timezone,
+        "local_opened_at": opened_at.astimezone(timezone),
+        "window_start": config.session.start_time.isoformat(),
+        "window_end": config.session.end_time.isoformat(),
+    }
+
+
+def insert_optimization_trial_trades(
+    db: Session,
+    trial_id: uuid.UUID,
+    trades: list,
+    config: BotConfiguration,
+) -> None:
+    rows = []
+    for trade in trades:
+        rows.append(
+            {
+                "trial_id": trial_id,
+                "direction": trade.direction,
+                "signal_reason": trade.signal_reason,
+                "signal_at": trade.signal_at,
+                "opened_at": trade.opened_at,
+                "closed_at": trade.closed_at,
+                "entry_price": trade.entry_price,
+                "exit_price": trade.exit_price,
+                "stop_loss": trade.stop_loss,
+                "take_profit": trade.take_profit,
+                "close_reason": trade.close_reason,
+                "gross_pnl": trade.gross_pnl,
+                "commission": trade.commission,
+                "net_pnl": trade.net_pnl,
+                "pnl_points": trade.pnl_points,
+                "r_multiple": trade.r_multiple,
+                "mfe_points": trade.mfe_points,
+                "mae_points": trade.mae_points,
+                "duration_seconds": trade.duration_seconds,
+                "session": jsonable_encoder(_trade_session_payload(trade, config)),
+            }
+        )
+        if len(rows) == 1000:
+            db.execute(insert(OptimizationTrialTrade), rows)
+            rows.clear()
+    if rows:
+        db.execute(insert(OptimizationTrialTrade), rows)
+
+
 def reset_interrupted_optimizations(db: Session) -> int:
     result = db.execute(
         update(OptimizationRun)
@@ -519,6 +573,14 @@ def execute_optimization(db: Session, optimization_id: uuid.UUID) -> None:
         )
         if spec is None:
             raise ValueError("Instrument specification is missing")
+        existing_trial_ids = select(OptimizationTrial.id).where(
+            OptimizationTrial.optimization_run_id == optimization.id
+        )
+        db.execute(
+            delete(OptimizationTrialTrade).where(
+                OptimizationTrialTrade.trial_id.in_(existing_trial_ids)
+            )
+        )
         db.execute(
             delete(OptimizationTrial).where(
                 OptimizationTrial.optimization_run_id == optimization.id
@@ -692,10 +754,11 @@ def execute_optimization(db: Session, optimization_id: uuid.UUID) -> None:
             try:
                 trial_config = copy.deepcopy(optimization.config_snapshot)
                 trial_config["strategy"]["parameters"] = sampled_parameters
+                trial_bot_config = BotConfiguration.model_validate(trial_config)
                 result = BacktestEngine().run_stream(
                     candles=iter(search_candles),
                     total_candles=search_total_candles,
-                    config=BotConfiguration.model_validate(trial_config),
+                    config=trial_bot_config,
                     instrument=instrument,
                     costs=costs,
                     initial_capital=optimization.initial_capital,
@@ -711,12 +774,20 @@ def execute_optimization(db: Session, optimization_id: uuid.UUID) -> None:
                         "sampling_seconds": _seconds(sampling_seconds),
                         "backtest_seconds": _seconds(backtest_seconds),
                     },
+                    condition_counts=result.condition_counts,
                 )
                 trial_row.status = "SUCCEEDED"
                 trial_row.score = score
                 trial_row.metrics = metrics
                 trial_row.summary = jsonable_encoder(result.summary)
                 trial_row.completed_at = utc_now()
+                db.flush()
+                insert_optimization_trial_trades(
+                    db,
+                    trial_row.id,
+                    result.trades,
+                    trial_bot_config,
+                )
                 study.tell(optuna_trial, float(score))
                 succeeded += 1
                 candidate = _candidate_payload(
@@ -863,10 +934,11 @@ def execute_optimization(db: Session, optimization_id: uuid.UUID) -> None:
                     trial_config["theoretical_trade"].update(
                         fixed_config_overrides["theoretical_trade"]
                     )
+                    trial_bot_config = BotConfiguration.model_validate(trial_config)
                     result = BacktestEngine().run_stream(
                         candles=iter(validation_candles),
                         total_candles=validation_total_candles,
-                        config=BotConfiguration.model_validate(trial_config),
+                        config=trial_bot_config,
                         instrument=instrument,
                         costs=costs,
                         initial_capital=optimization.initial_capital,
@@ -883,12 +955,20 @@ def execute_optimization(db: Session, optimization_id: uuid.UUID) -> None:
                             "backtest_seconds": _seconds(backtest_seconds),
                         },
                         reason_counts=result.reason_counts,
+                        condition_counts=result.condition_counts,
                     )
                     trial_row.status = "SUCCEEDED"
                     trial_row.score = score
                     trial_row.metrics = metrics
                     trial_row.summary = jsonable_encoder(result.summary)
                     trial_row.completed_at = utc_now()
+                    db.flush()
+                    insert_optimization_trial_trades(
+                        db,
+                        trial_row.id,
+                        result.trades,
+                        trial_bot_config,
+                    )
                     validation_succeeded += 1
                     candidate = jsonable_encoder(
                         {
