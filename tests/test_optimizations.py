@@ -343,6 +343,55 @@ def test_ema_atr_pullback_continuation_search_samples_are_always_valid() -> None
         strategy.parameters_model.model_validate(sampled)
 
 
+def test_bb_squeeze_breakout_search_space_matches_candidate_ranges() -> None:
+    from goldie_domain import BotConfiguration, get_strategy
+
+    strategy = get_strategy("bb_squeeze_breakout")
+    defaults = strategy.parameters_model().model_dump(mode="json")
+    config = BotConfiguration.model_validate(
+        {
+            "strategy": {
+                "name": "bb_squeeze_breakout",
+                "parameters": defaults,
+            }
+        }
+    )
+    search_space = build_search_space(config)
+    by_name = {item["name"]: item for item in search_space}
+
+    assert by_name["bollinger_period"]["minimum"] == 20
+    assert by_name["bollinger_period"]["maximum"] == 60
+    assert by_name["bollinger_deviations"]["minimum"] == "1.8"
+    assert by_name["bollinger_deviations"]["maximum"] == "2.5"
+    assert by_name["squeeze_lookback"]["minimum"] == 20
+    assert by_name["squeeze_lookback"]["maximum"] == 80
+    assert by_name["max_squeeze_width_points"]["minimum"] == "50"
+    assert by_name["max_squeeze_width_points"]["maximum"] == "180"
+    assert by_name["breakout_points"]["minimum"] == "0"
+    assert by_name["breakout_points"]["maximum"] == "20"
+    assert by_name["momentum_period"]["minimum"] == 5
+    assert by_name["momentum_period"]["maximum"] == 24
+    assert by_name["min_momentum_points"]["minimum"] == "0"
+    assert by_name["min_momentum_points"]["maximum"] == "80"
+    assert by_name["atr_period"]["minimum"] == 10
+    assert by_name["atr_period"]["maximum"] == 40
+    assert by_name["min_atr_points"]["minimum"] == "0"
+    assert by_name["min_atr_points"]["maximum"] == "50"
+    assert by_name["max_atr_points"]["minimum"] == "50"
+    assert by_name["max_atr_points"]["maximum"] == "300"
+    assert by_name["squeeze_percentile"]["minimum"] == "5"
+    assert by_name["squeeze_percentile"]["maximum"] == "35"
+    assert by_name["trade_direction"]["choices"] == ["BOTH", "BUY_ONLY", "SELL_ONLY"]
+
+    for index in range(101):
+        sampled = sample_parameters(
+            FractionTrial(index / 100),
+            search_space=search_space,
+            defaults=defaults,
+        )
+        strategy.parameters_model.model_validate(sampled)
+
+
 def test_sample_parameters_respects_atr_bounds_regardless_of_catalog_order() -> None:
     sampled = sample_parameters(
         BoundaryTrial(),

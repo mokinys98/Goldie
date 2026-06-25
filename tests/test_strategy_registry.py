@@ -10,7 +10,11 @@ from goldie_domain import (
     register_strategy,
     strategy_catalog,
 )
-from goldie_domain.strategies import FvgMaVolumeProfileParameters, PineBollingerRsiStochParameters
+from goldie_domain.strategies import (
+    BollingerSqueezeBreakoutParameters,
+    FvgMaVolumeProfileParameters,
+    PineBollingerRsiStochParameters,
+)
 from pydantic import ValidationError
 
 
@@ -76,6 +80,9 @@ def test_registry_catalog_and_duplicate_protection() -> None:
         "range_break_scalper",
         "pine_bb_rsi_stoch",
         "fvg_ma_volume_profile",
+        "failed_range_break_reversal",
+        "bb_squeeze_breakout",
+        "ema_atr_pullback_continuation",
     ]
     momentum = catalog[0]["parameters"]["min_momentum_points"]
     assert momentum["type"] == "number"
@@ -84,6 +91,98 @@ def test_registry_catalog_and_duplicate_protection() -> None:
         register_strategy(get_strategy("basic_momentum"))
     with pytest.raises(ValueError, match="Unknown strategy"):
         get_strategy("missing")
+
+
+def test_ema_atr_pullback_continuation_allows_delayed_reclaim() -> None:
+    observed = datetime(2026, 1, 5, 10, 10, tzinfo=UTC)
+    candles = [
+        CandleInput(
+            opened_at=observed - timedelta(minutes=10 - index),
+            open=Decimal(open_),
+            high=Decimal(high),
+            low=Decimal(low),
+            close=Decimal(close),
+            tick_volume=100,
+        )
+        for index, (open_, high, low, close) in enumerate(
+            [
+                ("100", "100.2", "99.8", "100"),
+                ("101", "101.2", "100.8", "101"),
+                ("102", "102.2", "101.8", "102"),
+                ("103", "103.2", "102.8", "103"),
+                ("104", "104.2", "103.8", "104"),
+                ("105", "105.2", "104.8", "105"),
+                ("104.3", "104.4", "103.95", "104.2"),
+                ("104.5", "104.8", "104.4", "104.5"),
+                ("105.2", "105.3", "105.2", "105.2"),
+                ("105.8", "106.2", "105.9", "106.0"),
+            ]
+        )
+    ]
+    context = MarketContext(
+        observed_at=observed,
+        evaluated_at=observed,
+        bid=Decimal("106.0"),
+        ask=Decimal("106.1"),
+        point=Decimal("0.1"),
+        candles=candles,
+    )
+
+    def config(lookback: int) -> BotConfiguration:
+        return BotConfiguration.model_validate(
+            {
+                "market": {"symbol": "XAUUSD", "timeframe": "M1"},
+                "strategy": {
+                    "name": "ema_atr_pullback_continuation",
+                    "parameters": {
+                        "fast_ema_period": 2,
+                        "medium_ema_period": 3,
+                        "slow_ema_period": 5,
+                        "pullback_lookback": lookback,
+                        "reclaim_mode": "CLOSE_ABOVE_PREVIOUS_HIGH",
+                        "atr_period": 2,
+                        "min_atr_points": "0",
+                        "max_atr_points": "1000",
+                        "min_trend_points": "0",
+                        "pullback_tolerance_points": "2",
+                        "rsi_period": 2,
+                        "buy_rsi_min": "0",
+                        "buy_rsi_max": "100",
+                        "sell_rsi_min": "0",
+                        "sell_rsi_max": "100",
+                        "require_reversal_candle": False,
+                    },
+                },
+                "filters": {"max_spread_points": 20, "stale_after_seconds": 15},
+                "session": {
+                    "timezone": "UTC",
+                    "start_time": "00:00:00",
+                    "end_time": "23:59:59",
+                },
+            }
+        )
+
+    strategy = get_strategy("ema_atr_pullback_continuation")
+
+    delayed = strategy.evaluate(context, config(4))
+    too_narrow = strategy.evaluate(context, config(2))
+
+    assert delayed.signal == "BUY"
+    assert delayed.inputs["buy_pullback"] is True
+    assert delayed.inputs["buy_reclaim"] is True
+    assert too_narrow.signal == "NO_TRADE"
+
+    evaluator = strategy.create_fast_backtest_evaluator(
+        config(4),
+        point=context.point,
+        spread_points=(context.ask - context.bid) / context.point,
+    )
+    signal = reason = None
+    for item in candles:
+        signal, reason = evaluator.evaluate(item, item.opened_at + timedelta(minutes=1))
+
+    assert signal == delayed.signal
+    assert reason == delayed.reason_code
 
 
 def test_unknown_strategy_and_invalid_parameters_are_rejected() -> None:
@@ -218,6 +317,102 @@ def fvg_market(values: list[tuple[str, str, str, str, int]]) -> MarketContext:
         point=Decimal("0.1"),
         candles=candles,
     )
+
+
+def bb_squeeze_config(**parameters) -> BotConfiguration:
+    values = {
+        "bollinger_period": 4,
+        "bollinger_deviations": "1",
+        "squeeze_lookback": 3,
+        "squeeze_percentile": "100",
+        "max_squeeze_width_points": "100",
+        "breakout_points": "0",
+        "momentum_period": 1,
+        "min_momentum_points": "0",
+        "atr_period": 2,
+        "min_atr_points": "0",
+        "max_atr_points": "100",
+        **parameters,
+    }
+    return BotConfiguration.model_validate(
+        {
+            "market": {"symbol": "XAUUSD", "timeframe": "M1"},
+            "strategy": {"name": "bb_squeeze_breakout", "parameters": values},
+            "filters": {"max_spread_points": 100, "stale_after_seconds": 15},
+            "session": {
+                "timezone": "UTC",
+                "start_time": "00:00:00",
+                "end_time": "23:59:59",
+            },
+        }
+    )
+
+
+def bb_squeeze_market(closes: list[str]) -> MarketContext:
+    observed = datetime(2026, 1, 5, 10, len(closes), tzinfo=UTC)
+    candles = [
+        CandleInput(
+            opened_at=observed - timedelta(minutes=len(closes) - index),
+            open=Decimal(value),
+            high=Decimal(value) + Decimal("0.1"),
+            low=Decimal(value) - Decimal("0.1"),
+            close=Decimal(value),
+            tick_volume=100,
+        )
+        for index, value in enumerate(closes)
+    ]
+    return MarketContext(
+        observed_at=observed,
+        evaluated_at=observed,
+        bid=Decimal("12.0"),
+        ask=Decimal("12.1"),
+        point=Decimal("0.1"),
+        candles=candles,
+    )
+
+
+def test_bb_squeeze_breakout_relative_squeeze_direction_filter_and_fast_match() -> None:
+    strategy = get_strategy("bb_squeeze_breakout")
+    config = bb_squeeze_config()
+    context = bb_squeeze_market(["10", "10", "10", "10", "10", "10", "12"])
+
+    decision = strategy.evaluate(context, config)
+
+    assert decision.signal == "BUY"
+    assert decision.reason_code == "BB_SQUEEZE_BREAKOUT_BUY"
+    assert Decimal(str(decision.inputs["prior_width_points"])) == Decimal("0")
+    assert decision.inputs["squeeze_percentile_rank"] == "0"
+
+    disabled = strategy.evaluate(context, bb_squeeze_config(trade_direction="SELL_ONLY"))
+
+    assert disabled.signal == "NO_TRADE"
+    assert disabled.reason_code == "BB_SQUEEZE_BREAKOUT_BUY_DISABLED"
+
+    evaluator = strategy.create_fast_backtest_evaluator(
+        config,
+        point=context.point,
+        spread_points=(context.ask - context.bid) / context.point,
+    )
+    signal = reason = None
+    for candle in context.candles:
+        signal, reason = evaluator.evaluate(
+            candle,
+            candle.opened_at + timedelta(minutes=1),
+        )
+
+    assert signal == decision.signal
+    assert reason == decision.reason_code
+
+
+def test_bb_squeeze_breakout_parameters_defaults_bounds_and_required_candles() -> None:
+    strategy = get_strategy("bb_squeeze_breakout")
+    defaults = BollingerSqueezeBreakoutParameters()
+
+    assert strategy.required_candles(defaults) == 70
+    with pytest.raises(ValidationError):
+        BollingerSqueezeBreakoutParameters(squeeze_percentile=101)
+    with pytest.raises(ValidationError, match="min_atr_points"):
+        BollingerSqueezeBreakoutParameters(min_atr_points=301, max_atr_points=300)
 
 
 def test_pine_port_generates_band_cross_signals() -> None:

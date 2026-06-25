@@ -1,7 +1,7 @@
 from collections import deque
 from datetime import datetime
 from decimal import Decimal
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -24,8 +24,8 @@ class BollingerSqueezeBreakoutParameters(BaseModel):
         json_schema_extra={
             "unit": "candles",
             "impact": "Higher values make band width smoother and squeeze signals slower.",
-            "optimization_minimum": 10,
-            "optimization_maximum": 80,
+            "optimization_minimum": 20,
+            "optimization_maximum": 60,
         },
     )
     bollinger_deviations: Decimal = decimal_parameter(
@@ -35,8 +35,8 @@ class BollingerSqueezeBreakoutParameters(BaseModel):
         description="Bollinger standard-deviation multiplier.",
         unit="standard deviations",
         impact="Higher values widen the bands and reduce breakout frequency.",
-        optimization_minimum="1.5",
-        optimization_maximum="3.2",
+        optimization_minimum="1.8",
+        optimization_maximum="2.5",
     )
     squeeze_lookback: int = Field(
         default=50,
@@ -45,20 +45,30 @@ class BollingerSqueezeBreakoutParameters(BaseModel):
         description="Previous Bollinger widths scanned for compression.",
         json_schema_extra={
             "unit": "candles",
-            "impact": "Higher values allow older squeezes to qualify breakouts.",
+            "impact": "Higher values compare compression against a longer volatility regime.",
             "optimization_minimum": 20,
-            "optimization_maximum": 200,
+            "optimization_maximum": 80,
         },
     )
+    squeeze_percentile: Decimal = decimal_parameter(
+        "25",
+        ge=0,
+        le=100,
+        description="Maximum percentile rank of the prior Bollinger width inside the squeeze lookback.",
+        unit="percentile",
+        impact="Lower values require the setup width to be unusually compressed for its recent regime.",
+        optimization_minimum="5",
+        optimization_maximum="35",
+    )
     max_squeeze_width_points: Decimal = decimal_parameter(
-        "50",
+        "180",
         ge=0,
         le=100000,
-        description="Maximum prior Bollinger width that qualifies as squeeze.",
+        description="Maximum prior Bollinger width allowed even when relative squeeze qualifies.",
         unit="points",
-        impact="Lower values require tighter compression before breakout.",
-        optimization_minimum="5",
-        optimization_maximum="300",
+        impact="Lower values keep the relative squeeze filter from accepting broad volatile regimes.",
+        optimization_minimum="50",
+        optimization_maximum="180",
     )
     breakout_points: Decimal = decimal_parameter(
         "0",
@@ -68,7 +78,7 @@ class BollingerSqueezeBreakoutParameters(BaseModel):
         unit="points",
         impact="Higher values filter marginal band breaks.",
         optimization_minimum="0",
-        optimization_maximum="80",
+        optimization_maximum="20",
     )
     momentum_period: int = Field(
         default=5,
@@ -78,8 +88,8 @@ class BollingerSqueezeBreakoutParameters(BaseModel):
         json_schema_extra={
             "unit": "candles",
             "impact": "Higher values require broader directional continuation.",
-            "optimization_minimum": 2,
-            "optimization_maximum": 30,
+            "optimization_minimum": 5,
+            "optimization_maximum": 24,
         },
     )
     min_momentum_points: Decimal = decimal_parameter(
@@ -90,7 +100,7 @@ class BollingerSqueezeBreakoutParameters(BaseModel):
         unit="points",
         impact="Higher values require stronger post-squeeze expansion.",
         optimization_minimum="0",
-        optimization_maximum="200",
+        optimization_maximum="80",
     )
     atr_period: int = Field(
         default=14,
@@ -100,8 +110,8 @@ class BollingerSqueezeBreakoutParameters(BaseModel):
         json_schema_extra={
             "unit": "candles",
             "impact": "Higher values smooth the ATR expansion filter.",
-            "optimization_minimum": 5,
-            "optimization_maximum": 50,
+            "optimization_minimum": 10,
+            "optimization_maximum": 40,
         },
     )
     min_atr_points: Decimal = decimal_parameter(
@@ -112,17 +122,25 @@ class BollingerSqueezeBreakoutParameters(BaseModel):
         unit="points",
         impact="Higher values avoid very weak post-squeeze breaks.",
         optimization_minimum="0",
-        optimization_maximum="300",
+        optimization_maximum="50",
     )
     max_atr_points: Decimal = decimal_parameter(
-        "1000",
+        "300",
         gt=0,
         le=100000,
         description="Maximum ATR volatility allowed after breakout.",
         unit="points",
         impact="Lower values avoid late entries in panic expansion.",
         optimization_minimum="50",
-        optimization_maximum="1500",
+        optimization_maximum="300",
+    )
+    trade_direction: Literal["BOTH", "BUY_ONLY", "SELL_ONLY"] = Field(
+        default="BOTH",
+        description="Allowed signal direction for directional robustness tests.",
+        json_schema_extra={
+            "unit": "mode",
+            "impact": "Use BUY_ONLY or SELL_ONLY to isolate asymmetric squeeze-breakout edge.",
+        },
     )
 
     @model_validator(mode="after")
@@ -185,8 +203,12 @@ class BollingerSqueezeBreakoutStrategy(PreparedStrategy):
             )
             if bands is not None:
                 prior_widths_points.append((bands.upper - bands.lower) / context.point)
-        squeeze_width_points = min(prior_widths_points)
-        squeezed = squeeze_width_points <= parameters.max_squeeze_width_points
+        prior_width_points = prior_widths_points[-1]
+        squeeze_percentile_rank = _percentile_rank(prior_width_points, prior_widths_points)
+        squeezed = (
+            prior_width_points <= parameters.max_squeeze_width_points
+            and squeeze_percentile_rank <= parameters.squeeze_percentile
+        )
         current_width_points = (current_bands.upper - current_bands.lower) / context.point
         momentum_points = momentum_value / context.point
         atr_points = atr_value / context.point
@@ -197,7 +219,8 @@ class BollingerSqueezeBreakoutStrategy(PreparedStrategy):
             lower_band=str(current_bands.lower),
             upper_band=str(current_bands.upper),
             current_width_points=str(current_width_points),
-            squeeze_width_points=str(squeeze_width_points),
+            prior_width_points=str(prior_width_points),
+            squeeze_percentile_rank=str(squeeze_percentile_rank),
             squeezed=squeezed,
             momentum_points=str(momentum_points),
             atr_points=str(atr_points),
@@ -209,6 +232,14 @@ class BollingerSqueezeBreakoutStrategy(PreparedStrategy):
                 latest >= current_bands.upper + breakout
                 and momentum_points >= parameters.min_momentum_points
             ):
+                if parameters.trade_direction == "SELL_ONLY":
+                    return self._finish(
+                        SignalType.NO_TRADE,
+                        "BB_SQUEEZE_BREAKOUT_BUY_DISABLED",
+                        context,
+                        config,
+                        guard,
+                    )
                 return self._finish(
                     SignalType.BUY,
                     "BB_SQUEEZE_BREAKOUT_BUY",
@@ -220,6 +251,14 @@ class BollingerSqueezeBreakoutStrategy(PreparedStrategy):
                 latest <= current_bands.lower - breakout
                 and momentum_points <= -parameters.min_momentum_points
             ):
+                if parameters.trade_direction == "BUY_ONLY":
+                    return self._finish(
+                        SignalType.NO_TRADE,
+                        "BB_SQUEEZE_BREAKOUT_SELL_DISABLED",
+                        context,
+                        config,
+                        guard,
+                    )
                 return self._finish(
                     SignalType.SELL,
                     "BB_SQUEEZE_BREAKOUT_SELL",
@@ -236,23 +275,29 @@ class BollingerSqueezeBreakoutStrategy(PreparedStrategy):
         )
 
 
-class _FastRollingMinimum:
+def _percentile_rank(value: Decimal, values: list[Decimal]) -> Decimal:
+    if not values:
+        return Decimal("100")
+    below = sum(1 for item in values if item < value)
+    return Decimal(below * 100) / Decimal(len(values))
+
+
+class _FastRollingPercentileWindow:
     def __init__(self, *, period: int) -> None:
         self.period = period
-        self.index = 0
-        self.values: deque[tuple[int, float]] = deque()
+        self.values: deque[float] = deque(maxlen=period)
 
     def update(self, value: float) -> None:
-        cutoff = self.index - self.period + 1
-        while self.values and self.values[0][0] < cutoff:
-            self.values.popleft()
-        while self.values and self.values[-1][1] >= value:
-            self.values.pop()
-        self.values.append((self.index, value))
-        self.index += 1
+        self.values.append(value)
 
-    def minimum(self) -> float | None:
-        return self.values[0][1] if self.values else None
+    def latest(self) -> float | None:
+        return self.values[-1] if self.values else None
+
+    def percentile_rank(self, value: float) -> float | None:
+        if len(self.values) < self.period:
+            return None
+        below = sum(1 for item in self.values if item < value)
+        return below * 100.0 / len(self.values)
 
 
 class _FastBollingerSqueezeBreakoutEvaluator(FastGuardedEvaluator):
@@ -274,14 +319,16 @@ class _FastBollingerSqueezeBreakoutEvaluator(FastGuardedEvaluator):
             period=parameters.bollinger_period,
             deviations=float(parameters.bollinger_deviations),
         )
-        self.width_min = _FastRollingMinimum(period=parameters.squeeze_lookback)
+        self.widths = _FastRollingPercentileWindow(period=parameters.squeeze_lookback)
         self.momentum = FastRollingMomentum(period=parameters.momentum_period)
         self.atr = FastRollingAtr(period=parameters.atr_period)
+        self.squeeze_percentile = float(parameters.squeeze_percentile)
         self.max_squeeze_width_points = float(parameters.max_squeeze_width_points)
         self.breakout = float(parameters.breakout_points) * self.point
         self.min_momentum_points = float(parameters.min_momentum_points)
         self.min_atr_points = float(parameters.min_atr_points)
         self.max_atr_points = float(parameters.max_atr_points)
+        self.trade_direction = parameters.trade_direction
 
     def evaluate(
         self, candle: CandleInput, observed_at: datetime
@@ -291,7 +338,7 @@ class _FastBollingerSqueezeBreakoutEvaluator(FastGuardedEvaluator):
         bands = self.bollinger.update(close)
         momentum_value = self.momentum.update(close)
         atr_value = self.atr.update(candle)
-        squeeze_width_points = self.width_min.minimum()
+        prior_width_points = self.widths.latest()
         current_width_points: float | None = None
         if bands is not None:
             lower, upper = bands
@@ -304,27 +351,38 @@ class _FastBollingerSqueezeBreakoutEvaluator(FastGuardedEvaluator):
             result = SignalType.NO_TRADE, "INSUFFICIENT_COMPLETED_CANDLES"
         else:
             assert bands is not None and momentum_value is not None and atr_value is not None
-            assert squeeze_width_points is not None
+            assert prior_width_points is not None
             lower, upper = bands
             atr_points = atr_value / self.point
             momentum_points = momentum_value / self.point
-            squeezed = squeeze_width_points <= self.max_squeeze_width_points
+            squeeze_percentile_rank = self.widths.percentile_rank(prior_width_points)
+            assert squeeze_percentile_rank is not None
+            squeezed = (
+                prior_width_points <= self.max_squeeze_width_points
+                and squeeze_percentile_rank <= self.squeeze_percentile
+            )
             volatility_ok = self.min_atr_points <= atr_points <= self.max_atr_points
             if squeezed and volatility_ok:
                 if close >= upper + self.breakout and momentum_points >= self.min_momentum_points:
-                    result = SignalType.BUY, "BB_SQUEEZE_BREAKOUT_BUY"
+                    if self.trade_direction == "SELL_ONLY":
+                        result = SignalType.NO_TRADE, "BB_SQUEEZE_BREAKOUT_BUY_DISABLED"
+                    else:
+                        result = SignalType.BUY, "BB_SQUEEZE_BREAKOUT_BUY"
                 elif (
                     close <= lower - self.breakout
                     and momentum_points <= -self.min_momentum_points
                 ):
-                    result = SignalType.SELL, "BB_SQUEEZE_BREAKOUT_SELL"
+                    if self.trade_direction == "BUY_ONLY":
+                        result = SignalType.NO_TRADE, "BB_SQUEEZE_BREAKOUT_SELL_DISABLED"
+                    else:
+                        result = SignalType.SELL, "BB_SQUEEZE_BREAKOUT_SELL"
                 else:
                     result = SignalType.NO_TRADE, "BB_SQUEEZE_BREAKOUT_CONDITIONS_NOT_MET"
             else:
                 result = SignalType.NO_TRADE, "BB_SQUEEZE_BREAKOUT_CONDITIONS_NOT_MET"
 
         if current_width_points is not None:
-            self.width_min.update(current_width_points)
+            self.widths.update(current_width_points)
         return result
 
 

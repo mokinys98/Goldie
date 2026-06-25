@@ -1,6 +1,7 @@
+from collections import deque
 from datetime import datetime
 from decimal import Decimal
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -10,6 +11,8 @@ from ..strategy import BacktestGuards
 from .base import FastGuardedEvaluator, PreparedStrategy
 from .fields import decimal_parameter
 from .rolling import FastRollingAtr, FastRollingEma, FastRollingRsi
+
+ReclaimMode = Literal["FAST_EMA", "MEDIUM_EMA", "CLOSE_ABOVE_PREVIOUS_HIGH"]
 
 
 class EmaAtrPullbackContinuationParameters(BaseModel):
@@ -48,7 +51,31 @@ class EmaAtrPullbackContinuationParameters(BaseModel):
             "unit": "candles",
             "impact": "Higher values make trend regime slower and more selective.",
             "optimization_minimum": 34,
-            "optimization_maximum": 200,
+            "optimization_maximum": 120,
+        },
+    )
+    pullback_lookback: int = Field(
+        default=5,
+        ge=2,
+        le=10,
+        description="Number of recent candles allowed between EMA-zone pullback and reclaim.",
+        json_schema_extra={
+            "unit": "candles",
+            "impact": "Higher values allow delayed continuation entries after a prior pullback.",
+            "optimization_minimum": 2,
+            "optimization_maximum": 10,
+        },
+    )
+    reclaim_mode: ReclaimMode = Field(
+        default="FAST_EMA",
+        description="Condition used by the current candle to confirm continuation after pullback.",
+        json_schema_extra={
+            "unit": "mode",
+            "options": ["FAST_EMA", "MEDIUM_EMA", "CLOSE_ABOVE_PREVIOUS_HIGH"],
+            "impact": (
+                "FAST_EMA is stricter than MEDIUM_EMA; previous-high reclaim captures "
+                "price-action breakouts."
+            ),
         },
     )
     atr_period: int = Field(
@@ -71,7 +98,7 @@ class EmaAtrPullbackContinuationParameters(BaseModel):
         unit="points",
         impact="Higher values avoid weak trends with no continuation energy.",
         optimization_minimum="0",
-        optimization_maximum="300",
+        optimization_maximum="80",
     )
     max_atr_points: Decimal = decimal_parameter(
         "1000",
@@ -91,7 +118,7 @@ class EmaAtrPullbackContinuationParameters(BaseModel):
         unit="points",
         impact="Higher values require a stronger trend before pullback entries.",
         optimization_minimum="0",
-        optimization_maximum="300",
+        optimization_maximum="80",
     )
     pullback_tolerance_points: Decimal = decimal_parameter(
         "10",
@@ -100,8 +127,8 @@ class EmaAtrPullbackContinuationParameters(BaseModel):
         description="Allowed distance around the medium EMA for pullback touch.",
         unit="points",
         impact="Higher values accept looser pullbacks around the EMA area.",
-        optimization_minimum="0",
-        optimization_maximum="150",
+        optimization_minimum="10",
+        optimization_maximum="120",
     )
     rsi_period: int = Field(
         default=14,
@@ -122,8 +149,8 @@ class EmaAtrPullbackContinuationParameters(BaseModel):
         description="Minimum RSI for BUY continuation.",
         unit="RSI",
         impact="Higher values require stronger bullish momentum after pullback.",
-        optimization_minimum="40",
-        optimization_maximum="60",
+        optimization_minimum="35",
+        optimization_maximum="55",
     )
     buy_rsi_max: Decimal = decimal_parameter(
         "70",
@@ -132,7 +159,7 @@ class EmaAtrPullbackContinuationParameters(BaseModel):
         description="Maximum RSI for BUY continuation.",
         unit="RSI",
         impact="Lower values avoid overbought continuation entries.",
-        optimization_minimum="60",
+        optimization_minimum="65",
         optimization_maximum="80",
     )
     sell_rsi_min: Decimal = decimal_parameter(
@@ -143,7 +170,7 @@ class EmaAtrPullbackContinuationParameters(BaseModel):
         unit="RSI",
         impact="Higher values avoid oversold continuation shorts.",
         optimization_minimum="20",
-        optimization_maximum="40",
+        optimization_maximum="45",
     )
     sell_rsi_max: Decimal = decimal_parameter(
         "55",
@@ -152,8 +179,8 @@ class EmaAtrPullbackContinuationParameters(BaseModel):
         description="Maximum RSI for SELL continuation.",
         unit="RSI",
         impact="Lower values require stronger bearish momentum after pullback.",
-        optimization_minimum="40",
-        optimization_maximum="60",
+        optimization_minimum="45",
+        optimization_maximum="65",
     )
     require_reversal_candle: bool = Field(
         default=False,
@@ -177,6 +204,94 @@ class EmaAtrPullbackContinuationParameters(BaseModel):
         return self
 
 
+def _touched_zone(
+    *,
+    low: Decimal,
+    high: Decimal,
+    fast: Decimal,
+    medium: Decimal,
+    tolerance: Decimal,
+) -> bool:
+    return (
+        (low <= fast + tolerance and high >= fast - tolerance)
+        or (low <= medium + tolerance and high >= medium - tolerance)
+    )
+
+
+def _fast_touched_zone(
+    *,
+    low: float,
+    high: float,
+    fast: float,
+    medium: float,
+    tolerance: float,
+) -> bool:
+    return (
+        (low <= fast + tolerance and high >= fast - tolerance)
+        or (low <= medium + tolerance and high >= medium - tolerance)
+    )
+
+
+def _reclaimed_for_buy(
+    *,
+    mode: ReclaimMode,
+    close: Decimal,
+    fast: Decimal,
+    medium: Decimal,
+    previous_high: Decimal,
+) -> bool:
+    if mode == "MEDIUM_EMA":
+        return close >= medium
+    if mode == "CLOSE_ABOVE_PREVIOUS_HIGH":
+        return close > previous_high
+    return close >= fast
+
+
+def _reclaimed_for_sell(
+    *,
+    mode: ReclaimMode,
+    close: Decimal,
+    fast: Decimal,
+    medium: Decimal,
+    previous_low: Decimal,
+) -> bool:
+    if mode == "MEDIUM_EMA":
+        return close <= medium
+    if mode == "CLOSE_ABOVE_PREVIOUS_HIGH":
+        return close < previous_low
+    return close <= fast
+
+
+def _fast_reclaimed_for_buy(
+    *,
+    mode: ReclaimMode,
+    close: float,
+    fast: float,
+    medium: float,
+    previous_high: float | None,
+) -> bool:
+    if mode == "MEDIUM_EMA":
+        return close >= medium
+    if mode == "CLOSE_ABOVE_PREVIOUS_HIGH":
+        return previous_high is not None and close > previous_high
+    return close >= fast
+
+
+def _fast_reclaimed_for_sell(
+    *,
+    mode: ReclaimMode,
+    close: float,
+    fast: float,
+    medium: float,
+    previous_low: float | None,
+) -> bool:
+    if mode == "MEDIUM_EMA":
+        return close <= medium
+    if mode == "CLOSE_ABOVE_PREVIOUS_HIGH":
+        return previous_low is not None and close < previous_low
+    return close <= fast
+
+
 class EmaAtrPullbackContinuationStrategy(PreparedStrategy):
     name = "ema_atr_pullback_continuation"
     description = "Trend-stack continuation entry after an EMA-area pullback and reclaim."
@@ -194,7 +309,12 @@ class EmaAtrPullbackContinuationStrategy(PreparedStrategy):
 
     def required_candles(self, parameters: BaseModel) -> int:
         values = EmaAtrPullbackContinuationParameters.model_validate(parameters)
-        return max(values.slow_ema_period, values.atr_period + 1, values.rsi_period + 1)
+        return max(
+            values.slow_ema_period,
+            values.atr_period + 1,
+            values.rsi_period + 1,
+            values.pullback_lookback + 1,
+        )
 
     def evaluate(self, context: MarketContext, config: Any) -> SignalDecision:
         candles, raw, inputs, guard = self._start(context, config)
@@ -207,14 +327,18 @@ class EmaAtrPullbackContinuationStrategy(PreparedStrategy):
             )
 
         closes = [item.close for item in candles]
-        fast = ema_series(closes, parameters.fast_ema_period)[-1]
-        medium = ema_series(closes, parameters.medium_ema_period)[-1]
-        slow = ema_series(closes, parameters.slow_ema_period)[-1]
+        fast_values = ema_series(closes, parameters.fast_ema_period)
+        medium_values = ema_series(closes, parameters.medium_ema_period)
+        slow_values = ema_series(closes, parameters.slow_ema_period)
+        fast = fast_values[-1]
+        medium = medium_values[-1]
+        slow = slow_values[-1]
         atr_value = atr(candles, parameters.atr_period)
         rsi_value = rsi(closes, parameters.rsi_period)
         assert atr_value is not None and rsi_value is not None
 
         latest = candles[-1]
+        previous = candles[-2]
         tolerance = parameters.pullback_tolerance_points * context.point
         atr_points = atr_value / context.point
         bullish_trend = fast > medium > slow
@@ -225,8 +349,37 @@ class EmaAtrPullbackContinuationStrategy(PreparedStrategy):
         bullish_body = latest.close > latest.open
         bearish_body = latest.close < latest.open
 
-        buy_pullback = latest.low <= medium + tolerance and latest.close >= fast
-        sell_pullback = latest.high >= medium - tolerance and latest.close <= fast
+        lookback_start = len(candles) - parameters.pullback_lookback
+        buy_pullback = False
+        for index, candle in enumerate(candles[lookback_start:], start=lookback_start):
+            fast_index = index - parameters.fast_ema_period + 1
+            medium_index = index - parameters.medium_ema_period + 1
+            if fast_index < 0 or medium_index < 0:
+                continue
+            if _touched_zone(
+                low=candle.low,
+                high=candle.high,
+                fast=fast_values[fast_index],
+                medium=medium_values[medium_index],
+                tolerance=tolerance,
+            ):
+                buy_pullback = True
+                break
+        sell_pullback = buy_pullback
+        buy_reclaim = _reclaimed_for_buy(
+            mode=parameters.reclaim_mode,
+            close=latest.close,
+            fast=fast,
+            medium=medium,
+            previous_high=previous.high,
+        )
+        sell_reclaim = _reclaimed_for_sell(
+            mode=parameters.reclaim_mode,
+            close=latest.close,
+            fast=fast,
+            medium=medium,
+            previous_low=previous.low,
+        )
         buy_rsi_ok = parameters.buy_rsi_min <= rsi_value <= parameters.buy_rsi_max
         sell_rsi_ok = parameters.sell_rsi_min <= rsi_value <= parameters.sell_rsi_max
         buy_body_ok = not parameters.require_reversal_candle or bullish_body
@@ -241,12 +394,16 @@ class EmaAtrPullbackContinuationStrategy(PreparedStrategy):
             rsi=str(rsi_value),
             buy_pullback=buy_pullback,
             sell_pullback=sell_pullback,
+            buy_reclaim=buy_reclaim,
+            sell_reclaim=sell_reclaim,
+            reclaim_mode=parameters.reclaim_mode,
+            pullback_lookback=parameters.pullback_lookback,
             bullish_body=bullish_body,
             bearish_body=bearish_body,
         )
 
         if volatility_ok and trend_ok:
-            if bullish_trend and buy_pullback and buy_rsi_ok and buy_body_ok:
+            if bullish_trend and buy_pullback and buy_reclaim and buy_rsi_ok and buy_body_ok:
                 return self._finish(
                     SignalType.BUY,
                     "EMA_ATR_PULLBACK_CONTINUATION_BUY",
@@ -254,7 +411,7 @@ class EmaAtrPullbackContinuationStrategy(PreparedStrategy):
                     config,
                     guard,
                 )
-            if bearish_trend and sell_pullback and sell_rsi_ok and sell_body_ok:
+            if bearish_trend and sell_pullback and sell_reclaim and sell_rsi_ok and sell_body_ok:
                 return self._finish(
                     SignalType.SELL,
                     "EMA_ATR_PULLBACK_CONTINUATION_SELL",
@@ -283,6 +440,7 @@ class _FastEmaAtrPullbackContinuationEvaluator(FastGuardedEvaluator):
             parameters.slow_ema_period,
             parameters.atr_period + 1,
             parameters.rsi_period + 1,
+            parameters.pullback_lookback + 1,
         )
         super().__init__(guards=guards, required=required)
         self.parameters = parameters
@@ -312,6 +470,10 @@ class _FastEmaAtrPullbackContinuationEvaluator(FastGuardedEvaluator):
         self.buy_rsi_max = float(parameters.buy_rsi_max)
         self.sell_rsi_min = float(parameters.sell_rsi_min)
         self.sell_rsi_max = float(parameters.sell_rsi_max)
+        self.reclaim_mode = parameters.reclaim_mode
+        self.pullback_touches: deque[bool] = deque(maxlen=parameters.pullback_lookback)
+        self.previous_high: float | None = None
+        self.previous_low: float | None = None
 
     def evaluate(
         self, candle: CandleInput, observed_at: datetime
@@ -321,11 +483,25 @@ class _FastEmaAtrPullbackContinuationEvaluator(FastGuardedEvaluator):
         high = float(candle.high)
         low = float(candle.low)
         close = float(candle.close)
+        previous_high = self.previous_high
+        previous_low = self.previous_low
+        self.previous_high = high
+        self.previous_low = low
         fast, _ = self.fast.update(close)
         medium, _ = self.medium.update(close)
         slow, _ = self.slow.update(close)
         atr_value = self.atr.update(candle)
         rsi_value = self.rsi.update(close)
+        if fast is not None and medium is not None:
+            self.pullback_touches.append(
+                _fast_touched_zone(
+                    low=low,
+                    high=high,
+                    fast=fast,
+                    medium=medium,
+                    tolerance=self.pullback_tolerance,
+                )
+            )
         rejection = self.rejection(observed_at)
         if rejection:
             return SignalType.NO_TRADE, rejection
@@ -348,11 +524,31 @@ class _FastEmaAtrPullbackContinuationEvaluator(FastGuardedEvaluator):
         bearish_trend = self.count_condition("bearish_trend", fast < medium < slow)
         buy_pullback = self.count_condition(
             "buy_pullback",
-            low <= medium + self.pullback_tolerance and close >= fast,
+            any(self.pullback_touches),
         )
         sell_pullback = self.count_condition(
             "sell_pullback",
-            high >= medium - self.pullback_tolerance and close <= fast,
+            any(self.pullback_touches),
+        )
+        buy_reclaim = self.count_condition(
+            "buy_reclaim",
+            _fast_reclaimed_for_buy(
+                mode=self.reclaim_mode,
+                close=close,
+                fast=fast,
+                medium=medium,
+                previous_high=previous_high,
+            ),
+        )
+        sell_reclaim = self.count_condition(
+            "sell_reclaim",
+            _fast_reclaimed_for_sell(
+                mode=self.reclaim_mode,
+                close=close,
+                fast=fast,
+                medium=medium,
+                previous_low=previous_low,
+            ),
         )
         buy_rsi_ok = self.count_condition(
             "buy_rsi_ok",
@@ -376,6 +572,7 @@ class _FastEmaAtrPullbackContinuationEvaluator(FastGuardedEvaluator):
             and trend_ok
             and bullish_trend
             and buy_pullback
+            and buy_reclaim
             and buy_rsi_ok
             and buy_body_ok,
         )
@@ -385,6 +582,7 @@ class _FastEmaAtrPullbackContinuationEvaluator(FastGuardedEvaluator):
             and trend_ok
             and bearish_trend
             and sell_pullback
+            and sell_reclaim
             and sell_rsi_ok
             and sell_body_ok,
         )
