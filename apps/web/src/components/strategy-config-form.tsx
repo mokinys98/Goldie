@@ -228,6 +228,9 @@ function readTextFile(file: File): Promise<string> {
 
 function ParameterField({ name, metadata, register }: { name: string; metadata: StrategyParameterMetadata; register: Register }) {
   const label = metadata.title ?? name.replaceAll("_", " ");
+  if (metadata.enum?.length) {
+    return <SelectField label={label} path={`strategy.parameters.${name}`} metadata={metadata} register={register} />;
+  }
   if (metadata.type === "boolean") {
     return (
       <label className="checkbox-row">
@@ -244,6 +247,20 @@ function NumberField({ label, path, metadata, register, integer = false }: { lab
 }
 function TextField({ label, path, metadata, register }: { label: string; path: Parameters<Register>[0]; metadata?: StrategyParameterMetadata; register: Register }) {
   return <label><FieldHelp label={label} metadata={metadata} /><input {...register(path)} /></label>;
+}
+function SelectField({ label, path, metadata, register }: { label: string; path: Parameters<Register>[0]; metadata: StrategyParameterMetadata; register: Register }) {
+  return (
+    <label>
+      <FieldHelp label={label} metadata={metadata} />
+      <select aria-label={label} {...register(path)}>
+        {metadata.enum?.map((value) => (
+          <option key={String(value)} value={String(value)}>
+            {String(value)}
+          </option>
+        ))}
+      </select>
+    </label>
+  );
 }
 function TimeField({ label, path, metadata, register }: { label: string; path: Parameters<Register>[0]; metadata?: StrategyParameterMetadata; register: Register }) {
   return <label><FieldHelp label={label} metadata={metadata} /><input type="time" step="1" {...register(path)} /></label>;

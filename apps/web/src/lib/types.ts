@@ -61,6 +61,7 @@ export type StrategyParameterMetadata = {
   title?: string;
   description?: string;
   type?: "integer" | "number" | "boolean" | "string";
+  enum?: Array<string | number | boolean>;
   minimum?: number;
   maximum?: number;
   exclusiveMinimum?: number;

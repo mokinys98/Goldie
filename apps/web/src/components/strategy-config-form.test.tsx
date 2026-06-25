@@ -26,10 +26,15 @@ const strategies = [
     name: "future_strategy",
     description: "A strategy added after the UI was built.",
     required_candles: 12,
-    defaults: { window: 12, enabled: true },
+    defaults: { window: 12, enabled: true, trade_direction: "BOTH" },
     parameters: {
       window: { title: "Window", type: "integer", minimum: 2 },
       enabled: { title: "Enabled", type: "boolean" },
+      trade_direction: {
+        title: "Trade Direction",
+        type: "string",
+        enum: ["BOTH", "BUY_ONLY", "SELL_ONLY"],
+      },
     },
   },
 ];
@@ -121,5 +126,18 @@ describe("StrategyConfigForm JSON transfer", () => {
 
     expect(await screen.findByText("Unknown strategy: missing")).toBeInTheDocument();
     expect(screen.getByDisplayValue("basic_momentum")).toBeInTheDocument();
+  });
+
+  it("renders enum parameters as selects", async () => {
+    renderForm();
+    fireEvent.change(await screen.findByDisplayValue("basic_momentum"), {
+      target: { value: "future_strategy" },
+    });
+
+    const direction = await screen.findByLabelText("Trade Direction");
+    expect(direction.tagName).toBe("SELECT");
+    expect(direction).toHaveValue("BOTH");
+    fireEvent.change(direction, { target: { value: "SELL_ONLY" } });
+    expect(direction).toHaveValue("SELL_ONLY");
   });
 });

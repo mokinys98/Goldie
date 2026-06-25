@@ -322,6 +322,20 @@ function StrategyParameter({
   register: ReturnType<typeof useForm<BotConfig>>["register"];
 }) {
   const label = metadata.title ?? name.replaceAll("_", " ");
+  if (metadata.enum?.length) {
+    return (
+      <label>
+        <FieldHelp label={label} metadata={metadata} />
+        <select aria-label={label} {...register(`strategy.parameters.${name}`)}>
+          {metadata.enum.map((value) => (
+            <option key={String(value)} value={String(value)}>
+              {String(value)}
+            </option>
+          ))}
+        </select>
+      </label>
+    );
+  }
   if (metadata.type === "boolean") {
     return (
       <label className="checkbox-row">

@@ -37,6 +37,19 @@ const strategies = [
       require_crossover: { title: "Require Crossover", type: "boolean" },
     },
   },
+  {
+    name: "fvg_ma_volume_profile",
+    description: "FVG strategy",
+    required_candles: 50,
+    defaults: { trade_direction: "BOTH" },
+    parameters: {
+      trade_direction: {
+        title: "Trade Direction",
+        type: "string",
+        enum: ["BOTH", "BUY_ONLY", "SELL_ONLY"],
+      },
+    },
+  },
 ];
 
 function renderEditor() {
@@ -88,5 +101,16 @@ describe("ConfigEditor", () => {
         expect.objectContaining({ method: "POST" }),
       );
     });
+  });
+
+  it("renders enum strategy parameters as selects", async () => {
+    renderEditor();
+    const select = await screen.findByLabelText("Strategy");
+    await screen.findByRole("option", { name: "fvg_ma_volume_profile" });
+    fireEvent.change(select, { target: { value: "fvg_ma_volume_profile" } });
+
+    const direction = await screen.findByLabelText("Trade Direction");
+    expect(direction.tagName).toBe("SELECT");
+    expect(direction).toHaveValue("BOTH");
   });
 });
