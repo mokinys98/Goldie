@@ -324,14 +324,6 @@ export default function OptimizationDetailPage() {
           value={data.summary.failed_trials ?? data.progress.failed_trials ?? 0}
         />
       </div>
-      <div className="panel collector-section">
-        <h2>Objective score</h2>
-        <div className="key-values">
-          <div><dt>Objective</dt><dd>{data.objective ?? "BALANCED"}</dd></div>
-          <div><dt>Formula</dt><dd>{objectiveFormula}</dd></div>
-          <div><dt>Best row</dt><dd>{bestScoreSource(data)}</dd></div>
-        </div>
-      </div>
       {researchQuality && (
         <ResearchReadinessPanel quality={researchQuality} />
       )}
@@ -355,31 +347,33 @@ export default function OptimizationDetailPage() {
           />
         </div>
       )}
-      {(data.summary.search_period || data.summary.validation_period) && (
-        <div className="panel collector-section">
-          <h2>Optimization periods</h2>
-          <div className="key-values">
-            {data.summary.search_period && (
-              <div><dt>Strategy search</dt><dd>{formatPeriod(data.summary.search_period)}</dd></div>
-            )}
-            {data.summary.validation_period && (
-              <div><dt>Fixed config validation</dt><dd>{formatPeriod(data.summary.validation_period)}</dd></div>
-            )}
+      <div className="split-layout collector-section">
+        {(data.summary.search_period || data.summary.validation_period) && (
+          <div className="panel collector-section">
+            <h2>Optimization periods</h2>
+            <div className="key-values">
+              {data.summary.search_period && (
+                <div><dt>Strategy search</dt><dd>{formatPeriod(data.summary.search_period)}</dd></div>
+              )}
+              {data.summary.validation_period && (
+                <div><dt>Fixed config validation</dt><dd>{formatPeriod(data.summary.validation_period)}</dd></div>
+              )}
+            </div>
           </div>
-        </div>
-      )}
-      <div className="panel collector-section">
-        <h2>Performance timings</h2>
-        <div className="key-values">
-          <div><dt>Candle load</dt><dd>{formatSeconds(timings?.candle_load_seconds)}</dd></div>
-          <div><dt>Optuna sampling</dt><dd>{formatSeconds(timings?.optuna_sampling_seconds)}</dd></div>
-          <div><dt>Backtests</dt><dd>{formatSeconds(timings?.backtest_seconds)}</dd></div>
-          <div><dt>Database commits</dt><dd>{formatSeconds(timings?.database_commit_seconds)}</dd></div>
-          <div><dt>Total</dt><dd>{formatSeconds(timings?.total_seconds)}</dd></div>
+        )}
+        <div className="panel collector-section">
+          <h2>Performance timings</h2>
+          <div className="key-values">
+            <div><dt>Candle load</dt><dd>{formatSeconds(timings?.candle_load_seconds)}</dd></div>
+            <div><dt>Optuna sampling</dt><dd>{formatSeconds(timings?.optuna_sampling_seconds)}</dd></div>
+            <div><dt>Backtests</dt><dd>{formatSeconds(timings?.backtest_seconds)}</dd></div>
+            <div><dt>Database commits</dt><dd>{formatSeconds(timings?.database_commit_seconds)}</dd></div>
+            <div><dt>Total</dt><dd>{formatSeconds(timings?.total_seconds)}</dd></div>
+          </div>
         </div>
       </div>
       {(data.summary.data_profile || data.summary.robustness || data.summary.parameter_insights) && (
-        <div className="split-layout collector-section">
+        <div className="split-layout collector-section" style={{ gridTemplateColumns: 'repeat(3, 1fr)'}}>
           {data.summary.data_profile && (
             <JsonPanel title="Data profile" value={data.summary.data_profile} />
           )}
@@ -391,7 +385,7 @@ export default function OptimizationDetailPage() {
           )}
         </div>
       )}
-      <div className="split-layout collector-section">
+      <div className="split-layout collector-section" style={{ gridTemplateColumns: 'repeat(4, 1fr)'}}>
         <div className="panel">
           <h2>Best parameters</h2>
           {!Object.keys(data.best_candidate.sampled_parameters ?? {}).length ? (
@@ -539,7 +533,7 @@ function JsonPanel({ title, value }: { title: string; value: unknown }) {
 
 function ResearchReadinessPanel({ quality }: { quality: ResearchQualityGates }) {
   return (
-    <div className="panel collector-section">
+    <div className="ResearchReadinessPanel collector-section">
       <div className="section-title">
         <div>
           <h2>Research readiness</h2>

@@ -166,15 +166,25 @@ def sample_parameters(
     defaults: dict[str, Any],
 ) -> dict[str, Any]:
     sampled = copy.deepcopy(defaults)
+    parameter_names = {parameter["name"] for parameter in search_space}
     dependencies = {
         "medium_ema_period": "fast_ema_period",
         "slow_ema_period": "medium_ema_period",
-        "sell_rsi_min": "buy_rsi_max",
-        "sell_rsi_max": "buy_rsi_min",
         "max_atr_points": "min_atr_points",
         "rsi_overbought": "rsi_oversold",
         "stochastic_overbought": "stochastic_oversold",
     }
+    if {"buy_rsi_min", "buy_rsi_max"} <= parameter_names:
+        dependencies["buy_rsi_max"] = "buy_rsi_min"
+    if {"sell_rsi_min", "sell_rsi_max"} <= parameter_names:
+        dependencies["sell_rsi_max"] = "sell_rsi_min"
+    elif {"buy_rsi_max", "sell_rsi_min"} <= parameter_names:
+        dependencies["sell_rsi_min"] = "buy_rsi_max"
+    if (
+        {"sell_rsi_max", "buy_rsi_min"} <= parameter_names
+        and "sell_rsi_min" not in parameter_names
+    ):
+        dependencies["sell_rsi_max"] = "buy_rsi_min"
     positions = {parameter["name"]: index for index, parameter in enumerate(search_space)}
 
     def dependency_order(parameter: dict[str, Any]) -> tuple[int, int]:
@@ -215,9 +225,29 @@ def sample_parameters(
             preceding_period = sampled.get("medium_ema_period", sampled.get("fast_ema_period"))
             if preceding_period is not None:
                 lower = max(lower, int(preceding_period) + 1)
-        elif name == "sell_rsi_min" and "buy_rsi_max" in sampled:
+        elif (
+            name == "buy_rsi_max"
+            and "buy_rsi_min" in sampled
+            and "buy_rsi_min" in parameter_names
+        ):
+            lower = max(lower, sampled["buy_rsi_min"])
+        elif (
+            name == "sell_rsi_min"
+            and "buy_rsi_max" in sampled
+            and "sell_rsi_max" not in parameter_names
+        ):
             lower = max(lower, sampled["buy_rsi_max"])
-        elif name == "sell_rsi_max" and "buy_rsi_min" in sampled:
+        elif (
+            name == "sell_rsi_max"
+            and "sell_rsi_min" in sampled
+            and "sell_rsi_min" in parameter_names
+        ):
+            lower = max(lower, sampled["sell_rsi_min"])
+        elif (
+            name == "sell_rsi_max"
+            and "buy_rsi_min" in sampled
+            and "sell_rsi_min" not in parameter_names
+        ):
             upper = min(upper, sampled["buy_rsi_min"])
         elif name == "max_atr_points" and "min_atr_points" in sampled:
             lower = max(lower, sampled["min_atr_points"])

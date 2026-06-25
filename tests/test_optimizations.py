@@ -296,6 +296,46 @@ def test_sample_parameters_respects_dependent_strategy_bounds() -> None:
     assert sampled["fast_ema_period"] < sampled["medium_ema_period"] < sampled["slow_ema_period"]
 
 
+def test_sample_parameters_respects_independent_rsi_band_bounds() -> None:
+    sampled = sample_parameters(
+        BoundaryTrial(),
+        search_space=[
+            {"name": "sell_rsi_max", "type": "number", "minimum": 40, "maximum": 60},
+            {"name": "sell_rsi_min", "type": "number", "minimum": 20, "maximum": 40},
+            {"name": "buy_rsi_max", "type": "number", "minimum": 60, "maximum": 80},
+            {"name": "buy_rsi_min", "type": "number", "minimum": 40, "maximum": 60},
+        ],
+        defaults={},
+    )
+
+    assert sampled["buy_rsi_min"] <= sampled["buy_rsi_max"]
+    assert sampled["sell_rsi_min"] <= sampled["sell_rsi_max"]
+
+
+def test_ema_atr_pullback_continuation_search_samples_are_always_valid() -> None:
+    from goldie_domain import BotConfiguration, get_strategy
+
+    strategy = get_strategy("ema_atr_pullback_continuation")
+    defaults = strategy.parameters_model().model_dump(mode="json")
+    config = BotConfiguration.model_validate(
+        {
+            "strategy": {
+                "name": "ema_atr_pullback_continuation",
+                "parameters": defaults,
+            }
+        }
+    )
+    search_space = build_search_space(config)
+
+    for index in range(101):
+        sampled = sample_parameters(
+            FractionTrial(index / 100),
+            search_space=search_space,
+            defaults=defaults,
+        )
+        strategy.parameters_model.model_validate(sampled)
+
+
 def test_sample_parameters_respects_atr_bounds_regardless_of_catalog_order() -> None:
     sampled = sample_parameters(
         BoundaryTrial(),

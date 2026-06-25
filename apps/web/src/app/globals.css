@@ -61,9 +61,9 @@ button { cursor: pointer; }
 .download-menu-panel button:disabled { opacity: .55; cursor: not-allowed; }
 .download-menu-divider { display: block; height: 1px; margin: 10px 12px; background: var(--line); }
 
-.panel, .metric-card, .table-wrap, .empty-state { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; }
-.panel { padding: 22px; }
-.panel h2 { margin: 0 0 16px; font-size: 17px; }
+.panel, .ResearchReadinessPanel, .metric-card, .table-wrap, .empty-state { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; }
+.panel, .ResearchReadinessPanel { padding: 22px; }
+.panel h2, .ResearchReadinessPanel h2 { margin: 0 0 16px; font-size: 17px; }
 .metric-card { padding: 18px; display: flex; flex-direction: column; gap: 8px; }
 .metric-card span { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .08em; }
 .metric-card strong { font-size: 21px; }
@@ -74,6 +74,12 @@ table { width: 100%; border-collapse: collapse; }
 th, td { padding: 14px 16px; border-bottom: 1px solid var(--line); text-align: left; white-space: nowrap; font-size: 13px; }
 th { color: var(--muted); text-transform: uppercase; letter-spacing: .06em; font-size: 10px; }
 tr:last-child td { border-bottom: 0; }
+.ResearchReadinessPanel .table-wrap { overflow: visible; }
+.ResearchReadinessPanel table { table-layout: fixed; }
+.ResearchReadinessPanel th, .ResearchReadinessPanel td { white-space: normal; overflow-wrap: anywhere; word-break: normal; }
+.ResearchReadinessPanel th:nth-child(1) { width: 18%; }
+.ResearchReadinessPanel th:nth-child(2), .ResearchReadinessPanel th:nth-child(3) { width: 12%; }
+.ResearchReadinessPanel th:nth-child(4), .ResearchReadinessPanel th:nth-child(5) { width: 29%; }
 .table-link { color: var(--gold-bright); font-weight: 750; }
 .table-subtitle { display: block; color: var(--muted); margin-top: 4px; }
 
