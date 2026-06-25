@@ -116,6 +116,21 @@ class _FvgZone:
 
 
 @dataclass(frozen=True)
+class _FastCandle:
+    high: float
+    low: float
+    close: float
+    tick_volume: float
+
+
+@dataclass(frozen=True)
+class _FastFvgZone:
+    direction: SignalType
+    lower: float
+    upper: float
+
+
+@dataclass(frozen=True)
 class _VolumeProfile:
     poc: Decimal
     hvn: tuple[Decimal, ...]
@@ -200,12 +215,73 @@ def _zone_touched(candle: CandleInput, zone: _FvgZone) -> bool:
     return candle.low <= zone.upper and candle.high >= zone.lower
 
 
+def _zone_touched_fast(candle: _FastCandle, zone: _FastFvgZone) -> bool:
+    return candle.low <= zone.upper and candle.high >= zone.lower
+
+
 def _near_profile_level(
     close: Decimal, profile: _VolumeProfile | None, tolerance: Decimal
 ) -> bool:
     if profile is None:
         return False
     return any(abs(close - level) <= tolerance for level in (profile.poc, *profile.hvn))
+
+
+def _latest_fvg_fast(
+    candles: deque[_FastCandle],
+    lookback: int,
+) -> _FastFvgZone | None:
+    start = max(2, len(candles) - 1 - lookback)
+    for index in range(len(candles) - 2, start - 1, -1):
+        left = candles[index - 2]
+        right = candles[index]
+        if left.high < right.low:
+            return _FastFvgZone(direction=SignalType.BUY, lower=left.high, upper=right.low)
+        if left.low > right.high:
+            return _FastFvgZone(direction=SignalType.SELL, lower=right.high, upper=left.low)
+    return None
+
+
+def _near_profile_level_fast(
+    candles: deque[_FastCandle],
+    *,
+    lookback: int,
+    bins: int,
+    close: float,
+    tolerance: float,
+) -> bool:
+    start = max(0, len(candles) - lookback)
+    profile_low = min(candles[index].low for index in range(start, len(candles)))
+    profile_high = max(candles[index].high for index in range(start, len(candles)))
+    width = profile_high - profile_low
+    if width <= 0:
+        return False
+    bin_width = width / bins
+    volumes = [0.0 for _ in range(bins)]
+    for index in range(start, len(candles)):
+        candle = candles[index]
+        volume = candle.tick_volume
+        if volume <= 0:
+            continue
+        first = int((candle.low - profile_low) / bin_width)
+        last = int((candle.high - profile_low) / bin_width)
+        first = max(0, min(bins - 1, first))
+        last = max(0, min(bins - 1, last))
+        touched = last - first + 1
+        share = volume / touched
+        for bin_index in range(first, last + 1):
+            volumes[bin_index] += share
+    poc_volume = max(volumes)
+    if poc_volume <= 0:
+        return False
+    hvn_threshold = poc_volume * 0.7
+    for index, volume in enumerate(volumes):
+        if volume < hvn_threshold:
+            continue
+        center = profile_low + bin_width * (index + 0.5)
+        if abs(close - center) <= tolerance:
+            return True
+    return False
 
 
 def _decision(
@@ -292,6 +368,38 @@ class FvgMaVolumeProfileStrategy(PreparedStrategy):
         return self._finish(signal, reason, context, config, guard)
 
 
+class _FastRollingSma:
+    def __init__(self, period: int) -> None:
+        self.period = period
+        self.values: deque[float] = deque(maxlen=period)
+        self.total = 0.0
+
+    def update(self, value: float) -> float | None:
+        if len(self.values) == self.period:
+            self.total -= self.values[0]
+        self.values.append(value)
+        self.total += value
+        return self.total / self.period if len(self.values) == self.period else None
+
+
+class _FastVolumeSpike:
+    def __init__(self, *, period: int, multiplier: float) -> None:
+        self.period = period
+        self.multiplier = multiplier
+        self.previous: deque[float] = deque(maxlen=period)
+        self.total = 0.0
+
+    def update(self, volume: float) -> bool:
+        spike = False
+        if len(self.previous) == self.period:
+            average = self.total / self.period
+            spike = average > 0 and volume >= average * self.multiplier
+            self.total -= self.previous[0]
+        self.previous.append(volume)
+        self.total += volume
+        return spike
+
+
 class FastFvgMaVolumeProfileEvaluator(FastGuardedEvaluator):
     def __init__(
         self,
@@ -301,20 +409,68 @@ class FastFvgMaVolumeProfileEvaluator(FastGuardedEvaluator):
         guards: BacktestGuards,
     ) -> None:
         super().__init__(guards=guards, required=_required_candles(parameters))
-        self.parameters = parameters
-        self.point = point
-        self.candles: deque[CandleInput] = deque(maxlen=self.required)
+        point_value = float(point)
+        self.fvg_lookback = parameters.fvg_lookback
+        self.profile_lookback = parameters.volume_profile_lookback
+        self.profile_bins = parameters.volume_profile_bins
+        self.require_volume_spike = parameters.require_volume_spike
+        self.trade_direction = parameters.trade_direction
+        self.tolerance = float(parameters.poc_tolerance_points) * point_value
+        self.trend_sma = _FastRollingSma(parameters.sma_period)
+        self.volume_spike = _FastVolumeSpike(
+            period=parameters.volume_spike_period,
+            multiplier=float(parameters.volume_spike_multiplier),
+        )
+        self.candles: deque[_FastCandle] = deque(
+            maxlen=max(parameters.volume_profile_lookback, parameters.fvg_lookback + 3)
+        )
 
     def evaluate(self, candle: CandleInput, observed_at: datetime) -> tuple[SignalType, str]:
         self.count += 1
-        self.candles.append(candle)
+        current = _FastCandle(
+            high=float(candle.high),
+            low=float(candle.low),
+            close=float(candle.close),
+            tick_volume=float(candle.tick_volume),
+        )
+        self.candles.append(current)
+        trend_sma = self.trend_sma.update(current.close)
+        spike = self.volume_spike.update(current.tick_volume)
         rejection = self.rejection(observed_at)
         if rejection:
             return SignalType.NO_TRADE, rejection
         if self.count < self.required:
             return SignalType.NO_TRADE, "INSUFFICIENT_COMPLETED_CANDLES"
-        return _decision(
-            candles=list(self.candles),
-            parameters=self.parameters,
-            point=self.point,
-        )
+        zone = _latest_fvg_fast(self.candles, self.fvg_lookback)
+        if trend_sma is None or zone is None or not _zone_touched_fast(current, zone):
+            return SignalType.NO_TRADE, "FVG_MA_VOLUME_PROFILE_CONDITIONS_NOT_MET"
+
+        if zone.direction == SignalType.BUY:
+            trend_matches = current.close > trend_sma
+            disabled_direction = "SELL_ONLY"
+            disabled_reason = "FVG_MA_VOLUME_PROFILE_BUY_DISABLED"
+            signal = SignalType.BUY
+            signal_reason = "FVG_MA_VOLUME_PROFILE_BUY"
+        else:
+            trend_matches = current.close < trend_sma
+            disabled_direction = "BUY_ONLY"
+            disabled_reason = "FVG_MA_VOLUME_PROFILE_SELL_DISABLED"
+            signal = SignalType.SELL
+            signal_reason = "FVG_MA_VOLUME_PROFILE_SELL"
+        if not trend_matches:
+            return SignalType.NO_TRADE, "FVG_MA_VOLUME_PROFILE_CONDITIONS_NOT_MET"
+
+        confirmed = spike
+        if not confirmed and not self.require_volume_spike:
+            confirmed = _near_profile_level_fast(
+                self.candles,
+                lookback=self.profile_lookback,
+                bins=self.profile_bins,
+                close=current.close,
+                tolerance=self.tolerance,
+            )
+        if not confirmed:
+            return SignalType.NO_TRADE, "FVG_MA_VOLUME_PROFILE_CONDITIONS_NOT_MET"
+        if self.trade_direction == disabled_direction:
+            return SignalType.NO_TRADE, disabled_reason
+        return signal, signal_reason

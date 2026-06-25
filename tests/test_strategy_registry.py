@@ -333,6 +333,54 @@ def test_fvg_ma_volume_profile_generates_buy_and_sell_signals() -> None:
     assert sell.inputs["fvg_direction"] == "SELL"
 
 
+def test_fvg_ma_volume_profile_fast_evaluator_matches_decision() -> None:
+    strategy = get_strategy("fvg_ma_volume_profile")
+    config = fvg_config()
+    markets = [
+        fvg_market(
+            [
+                ("9", "9.5", "8.5", "9", 100),
+                ("10", "10.5", "9.5", "10", 100),
+                ("11", "11.5", "10.5", "11", 100),
+                ("12", "12.0", "11.5", "12", 100),
+                ("13", "14.5", "12.5", "13", 100),
+                ("15", "15.5", "14.0", "15", 100),
+                ("14.4", "14.5", "13.5", "14.2", 100),
+            ]
+        ),
+        fvg_market(
+            [
+                ("16", "16.5", "15.5", "16", 100),
+                ("15", "15.5", "14.5", "15", 100),
+                ("14", "14.5", "13.5", "14", 100),
+                ("13", "13.5", "13.0", "13", 100),
+                ("12", "13.2", "11.5", "12", 100),
+                ("10", "11.0", "9.5", "10", 100),
+                ("10.7", "11.5", "10.2", "10.8", 100),
+            ]
+        ),
+    ]
+    markets[1].bid = Decimal("10.7")
+    markets[1].ask = Decimal("10.8")
+
+    for item in markets:
+        evaluator = strategy.create_fast_backtest_evaluator(
+            config,
+            point=item.point,
+            spread_points=(item.ask - item.bid) / item.point,
+        )
+        signal = reason = None
+        for candle in item.candles:
+            signal, reason = evaluator.evaluate(
+                candle,
+                candle.opened_at + timedelta(minutes=1),
+            )
+        decision = strategy.evaluate(item, config)
+
+        assert signal == decision.signal
+        assert reason == decision.reason_code
+
+
 def test_fvg_ma_volume_profile_direction_filter_and_insufficient_history() -> None:
     strategy = get_strategy("fvg_ma_volume_profile")
     buy_market = fvg_market(

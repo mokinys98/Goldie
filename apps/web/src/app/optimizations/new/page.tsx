@@ -242,12 +242,6 @@ export default function NewOptimizationPage() {
               <div><dt>timeout_s</dt><dd>{selectedProfile.limitFillTimeout}</dd></div>
               <div><dt>Min_qty_check</dt><dd>{selectedProfile.minQtyThreshold}</dd></div>
               <div><dt>check</dt><dd>{String(selectedProfile.minQtyCheck)}</dd></div>
-              {selectedProfile.datasetEstimate && (
-                <div><dt>Dataset</dt><dd>{selectedProfile.datasetEstimate}</dd></div>
-              )}
-              {selectedProfile.runtimeEstimate && (
-                <div><dt>Runtime</dt><dd>{selectedProfile.runtimeEstimate}</dd></div>
-              )}
             </div>
           </div>
         )}
