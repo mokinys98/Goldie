@@ -463,7 +463,7 @@ def test_fvg_ma_volume_profile_parameters_defaults_bounds_and_required_candles()
         ),
     ],
 )
-def test_combo_algorithms_generate_expected_signal(
+def test_split_strategy_modules_generate_expected_signal(
     name: str,
     parameters: dict,
     closes: list[str],
