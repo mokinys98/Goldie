@@ -6,7 +6,11 @@ import time
 from datetime import UTC, datetime, timedelta
 
 from .client import GoldieApiClient
-from .provider import OandaConfigurationError, OandaProvider
+from .provider import (
+    OandaConfigurationError,
+    ProviderConfigurationError,
+    create_provider,
+)
 from .settings import CollectorSettings
 
 logging.basicConfig(
@@ -18,6 +22,21 @@ logger = logging.getLogger("goldie-market-data-collector")
 backfill_locks: dict[str, threading.Lock] = {}
 backfill_locks_guard = threading.Lock()
 LIVE_CATCHUP_MAX_MINUTES = 5000
+
+
+def settings_key(settings: CollectorSettings) -> str:
+    return (
+        f"{settings.provider}:{settings.provider_environment}:"
+        f"{settings.provider_symbol}"
+    )
+
+
+def instrument_key(instrument: dict) -> str:
+    return (
+        f"{instrument.get('provider', 'oanda')}:"
+        f"{instrument.get('environment', 'practice')}:"
+        f"{instrument['provider_symbol']}"
+    )
 
 
 def backfill_lock(symbol: str) -> threading.Lock:
@@ -33,7 +52,7 @@ def parse_time(value: str) -> datetime:
 def run_backfill(
     settings: CollectorSettings,
     client: GoldieApiClient,
-    provider: OandaProvider,
+    provider,
     start: datetime,
     end: datetime,
     *,
@@ -112,7 +131,7 @@ class InstrumentWorker:
             try:
                 self._run()
                 attempt = 0
-            except OandaConfigurationError as exc:
+            except (OandaConfigurationError, ProviderConfigurationError) as exc:
                 self.status = "ERROR"
                 self.last_error = str(exc)
                 logger.error("%s configuration error: %s", self.settings.provider_symbol, exc)
@@ -136,10 +155,10 @@ class InstrumentWorker:
     def _run(self) -> None:
         client = GoldieApiClient(self.settings)
         client.set_collector_id(self.collector_id)
-        provider = OandaProvider(self.settings)
+        provider = create_provider(self.settings)
         latest_candle_at = client.register(self.settings)
         self.feed_id = str(client.feed_id)
-        self.on_registered(self.settings.provider_symbol, self.feed_id)
+        self.on_registered(settings_key(self.settings), self.feed_id)
         instrument = provider.validate_instrument()
         client.instrument(instrument)
         now = datetime.now(UTC)
@@ -158,7 +177,9 @@ class InstrumentWorker:
             self.status,
             {
                 "read_only": True,
-                "provider": "oanda",
+                "provider": self.settings.provider,
+                "provider_symbol": self.settings.provider_symbol,
+                "supports_quotes": provider.supports_quotes,
                 "latest_quote_at": self.latest_quote_at,
                 "error": self.last_error,
             },
@@ -173,7 +194,10 @@ class InstrumentWorker:
                 monotonic = time.monotonic()
                 if provider.stream_error is not None:
                     raise provider.stream_error
-                if monotonic - last_quote_sent >= self.settings.quote_interval_seconds:
+                if (
+                    provider.supports_quotes
+                    and monotonic - last_quote_sent >= self.settings.quote_interval_seconds
+                ):
                     quote = provider.latest_quote()
                     if quote is not None and (
                         last_quote_observed_at is None
@@ -201,11 +225,13 @@ class InstrumentWorker:
                     client.heartbeat(
                         self.status,
                         {
-                            "read_only": True,
-                            "provider": "oanda",
-                            "latest_quote_at": self.latest_quote_at,
-                            "error": self.last_error,
-                        },
+                        "read_only": True,
+                        "provider": self.settings.provider,
+                        "provider_symbol": self.settings.provider_symbol,
+                        "supports_quotes": provider.supports_quotes,
+                        "latest_quote_at": self.latest_quote_at,
+                        "error": self.last_error,
+                    },
                     )
                     last_heartbeat = monotonic
                 self.stop_event.wait(0.25)
@@ -228,12 +254,12 @@ class CollectorSupervisor:
         self.last_error: str | None = None
         self.backfill_threads: dict[str, threading.Thread] = {}
 
-    def on_registered(self, symbol: str, feed_id: str) -> None:
-        self.feed_symbols[feed_id] = symbol
+    def on_registered(self, key: str, feed_id: str) -> None:
+        self.feed_symbols[feed_id] = key
 
     def effective_settings(
         self,
-        symbol: str,
+        instrument: dict | str,
         configuration: dict,
         overrides: dict,
     ) -> CollectorSettings:
@@ -249,7 +275,22 @@ class CollectorSupervisor:
             )
         }
         values.update(overrides)
-        instrument_settings = self.base_settings.for_instrument(symbol)
+        if isinstance(instrument, str):
+            provider = self.base_settings.provider
+            environment = self.base_settings.provider_environment
+            symbol = instrument
+        else:
+            provider = instrument.get("provider", self.base_settings.provider)
+            environment = instrument.get(
+                "environment",
+                "spot" if provider == "binance_spot" else self.base_settings.provider_environment,
+            )
+            symbol = instrument["provider_symbol"]
+        instrument_settings = self.base_settings.for_instrument(
+            symbol,
+            provider=provider,
+            environment=environment,
+        )
         return CollectorSettings.model_validate(
             instrument_settings.model_dump() | values
         )
@@ -260,33 +301,33 @@ class CollectorSupervisor:
         version = int(configuration["version"])
         desired: dict[str, CollectorSettings] = {}
         for instrument in control["instruments"]:
-            symbol = instrument["provider_symbol"]
+            key = instrument_key(instrument)
             feed_id = instrument.get("market_feed_id")
             if feed_id:
-                self.feed_symbols[feed_id] = symbol
+                self.feed_symbols[feed_id] = key
             feed_paused = instrument.get("feed_status") == "PAUSED"
             if (
                 instrument["enabled"]
                 and not feed_paused
-                and symbol not in self.paused
+                and key not in self.paused
                 and not self.globally_paused
             ):
-                desired[symbol] = self.effective_settings(
-                    symbol,
+                desired[key] = self.effective_settings(
+                    instrument,
                     configuration,
                     instrument.get("overrides") or {},
                 )
-        for symbol, worker in list(self.workers.items()):
-            replacement = desired.get(symbol)
+        for key, worker in list(self.workers.items()):
+            replacement = desired.get(key)
             if replacement is None or worker.settings != replacement:
                 worker.stop()
-                del self.workers[symbol]
-        for symbol, settings in desired.items():
-            if symbol not in self.workers:
+                del self.workers[key]
+        for key, settings in desired.items():
+            if key not in self.workers:
                 worker = InstrumentWorker(settings, self.on_registered, self.instance_id)
-                self.workers[symbol] = worker
+                self.workers[key] = worker
                 worker.start()
-                logger.info("Started collector worker for %s", symbol)
+                logger.info("Started collector worker for %s", key)
         self.applied_version = version
 
     def target_symbols(self, command: dict) -> list[str]:
@@ -294,17 +335,28 @@ class CollectorSupervisor:
         if feed_id:
             symbol = self.feed_symbols.get(feed_id)
             return [symbol] if symbol else []
-        return list(self.workers) or self.base_settings.instrument_symbols
+        return list(self.workers) or [
+            f"{item['provider']}:{item['environment']}:{item['provider_symbol']}"
+            for item in self.base_settings.instrument_specs
+        ]
 
-    def execute_backfill(self, command: dict, symbol: str) -> None:
+    def execute_backfill(self, command: dict, key: str) -> None:
         command_id = command["id"]
         try:
-            worker = self.workers.get(symbol)
-            settings = worker.settings if worker else self.base_settings.for_instrument(symbol)
+            worker = self.workers.get(key)
+            if worker:
+                settings = worker.settings
+            else:
+                provider, environment, symbol = key.split(":", 2)
+                settings = self.base_settings.for_instrument(
+                    symbol,
+                    provider=provider,
+                    environment=environment,
+                )
             client = GoldieApiClient(settings)
             client.set_collector_id(self.instance_id)
             client.register(settings)
-            provider = OandaProvider(settings)
+            provider = create_provider(settings)
             provider.validate_instrument()
             run_backfill(
                 settings,
@@ -322,7 +374,7 @@ class CollectorSupervisor:
                 error=f"{type(exc).__name__}: {exc}",
             )
         finally:
-            self.backfill_threads.pop(symbol, None)
+            self.backfill_threads.pop(key, None)
 
     def handle_command(self, command: dict) -> None:
         command_id = command["id"]
@@ -420,9 +472,9 @@ class CollectorSupervisor:
                 control = self.control_client.poll_control(self.instance_id)
                 for instrument in control["instruments"]:
                     if instrument.get("market_feed_id"):
-                        self.feed_symbols[instrument["market_feed_id"]] = instrument[
-                            "provider_symbol"
-                        ]
+                        self.feed_symbols[instrument["market_feed_id"]] = instrument_key(
+                            instrument
+                        )
                 self.reconcile(control)
                 for command in control["commands"]:
                     self.handle_command(command)

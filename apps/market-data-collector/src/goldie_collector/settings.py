@@ -5,6 +5,7 @@ DEFAULT_INSTRUMENTS = (
     "EUR_USD,GBP_USD,USD_JPY,USD_CHF,USD_CAD,"
     "AUD_USD,NZD_USD,EUR_GBP,EUR_JPY,GBP_JPY"
 )
+DEFAULT_BINANCE_SPOT_INSTRUMENTS = "BTCUSDT,ETHUSDT"
 
 
 class CollectorSettings(BaseSettings):
@@ -26,11 +27,12 @@ class CollectorSettings(BaseSettings):
         validation_alias=AliasChoices("INGESTION_TRANSPORT", "GOLDIE_INGESTION_TRANSPORT"),
     )
     agent_name: str = "railway-oanda-collector"
-    provider: str = Field(default="oanda", pattern="^oanda$")
-    provider_environment: str = Field(default="practice", pattern="^(practice|live)$")
+    provider: str = Field(default="oanda", pattern="^(oanda|binance_spot)$")
+    provider_environment: str = Field(default="practice", pattern="^(practice|live|spot)$")
     instruments: str = DEFAULT_INSTRUMENTS
+    binance_spot_instruments: str = DEFAULT_BINANCE_SPOT_INSTRUMENTS
     canonical_symbol: str = Field(default="EURUSD", pattern="^[A-Z0-9]{3,32}$")
-    provider_symbol: str = Field(default="EUR_USD", pattern="^[A-Z0-9]+_[A-Z0-9]+$")
+    provider_symbol: str = Field(default="EUR_USD", pattern="^[A-Z0-9_]{3,64}$")
     quote_interval_seconds: float = Field(default=5.0, ge=1, le=60)
     candle_poll_seconds: float = Field(default=15.0, ge=5, le=300)
     heartbeat_seconds: float = Field(default=10.0, ge=5, le=300)
@@ -57,15 +59,28 @@ class CollectorSettings(BaseSettings):
             raise ValueError("At most 20 OANDA instruments are supported per collector")
         return ",".join(symbols)
 
+    @field_validator("binance_spot_instruments")
+    @classmethod
+    def validate_binance_spot_instruments(cls, value: str) -> str:
+        symbols = cls.parse_instruments(value, require_separator=False)
+        if not symbols:
+            return ""
+        if len(symbols) > 20:
+            raise ValueError("At most 20 Binance spot instruments are supported per collector")
+        return ",".join(symbols)
+
     @staticmethod
-    def parse_instruments(value: str) -> list[str]:
+    def parse_instruments(value: str, *, require_separator: bool = True) -> list[str]:
         symbols: list[str] = []
         for item in value.split(","):
             symbol = item.strip().upper()
             if not symbol:
                 continue
             parts = symbol.split("_")
-            if len(parts) != 2 or not all(part.isalnum() for part in parts):
+            if (
+                require_separator
+                and (len(parts) != 2 or not all(part.isalnum() for part in parts))
+            ) or (not require_separator and not symbol.replace("_", "").isalnum()):
                 raise ValueError(f"Invalid OANDA instrument: {symbol}")
             if symbol not in symbols:
                 symbols.append(symbol)
@@ -75,11 +90,50 @@ class CollectorSettings(BaseSettings):
     def instrument_symbols(self) -> list[str]:
         return self.parse_instruments(self.instruments)
 
-    def for_instrument(self, provider_symbol: str) -> "CollectorSettings":
+    @property
+    def instrument_specs(self) -> list[dict[str, str]]:
+        specs = [
+            {
+                "provider": "oanda",
+                "environment": self.provider_environment
+                if self.provider == "oanda"
+                else "practice",
+                "provider_symbol": symbol,
+            }
+            for symbol in self.instrument_symbols
+        ]
+        specs.extend(
+            {
+                "provider": "binance_spot",
+                "environment": "spot",
+                "provider_symbol": symbol,
+            }
+            for symbol in self.parse_instruments(
+                self.binance_spot_instruments,
+                require_separator=False,
+            )
+        )
+        return specs
+
+    def for_instrument(
+        self,
+        provider_symbol: str,
+        *,
+        provider: str | None = None,
+        environment: str | None = None,
+    ) -> "CollectorSettings":
+        selected_provider = provider or self.provider
+        selected_environment = environment or (
+            "spot" if selected_provider == "binance_spot" else self.provider_environment
+        )
         return self.model_copy(
             update={
+                "provider": selected_provider,
+                "provider_environment": selected_environment,
                 "provider_symbol": provider_symbol,
                 "canonical_symbol": provider_symbol.replace("_", ""),
-                "agent_name": f"{self.agent_name}-{provider_symbol.lower()}",
+                "agent_name": (
+                    f"{self.agent_name}-{selected_provider}-{provider_symbol.lower()}"
+                ),
             }
         )

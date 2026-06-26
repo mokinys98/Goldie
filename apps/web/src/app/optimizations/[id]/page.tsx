@@ -432,6 +432,10 @@ export default function OptimizationDetailPage() {
               <dt>max_spread_points</dt>
               <dd>{String(configSnapshot.filters.max_spread_points)}</dd>
             </div>
+            <div>
+              <dt>stale_after_seconds</dt>
+              <dd>{String(configSnapshot.filters.stale_after_seconds)}</dd>
+            </div>
           </div>
         </div>
         <div className="panel">

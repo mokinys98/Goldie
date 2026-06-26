@@ -87,7 +87,11 @@ class GoldieApiClient:
                 "canonical_symbol": settings.canonical_symbol,
                 "provider_symbol": settings.provider_symbol,
                 "agent_name": settings.agent_name,
-                "details": {"read_only": True, "runtime": "railway"},
+                "details": {
+                    "read_only": True,
+                    "runtime": "railway",
+                    "provider": settings.provider,
+                },
             },
         )
         self.feed_id = uuid.UUID(result["feed"]["id"])
@@ -117,7 +121,7 @@ class GoldieApiClient:
                     "backfill_batch_size": settings.backfill_batch_size,
                     "configuration_retry_seconds": settings.configuration_retry_seconds,
                 },
-                "instruments": settings.instrument_symbols,
+                "instruments": settings.instrument_specs,
             },
         )
         self.set_collector_id(result["instance"]["id"])

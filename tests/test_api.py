@@ -87,6 +87,44 @@ def test_agent_token_is_required() -> None:
         assert response.status_code == 401
 
 
+def test_binance_collector_instrument_and_feed_registration() -> None:
+    Base.metadata.drop_all(engine)
+    Base.metadata.create_all(engine)
+    with TestClient(app) as client:
+        headers = login(client)
+        instrument = client.post(
+            "/api/v1/collector/instruments",
+            headers=headers,
+            json={
+                "provider": "binance_spot",
+                "environment": "spot",
+                "provider_symbol": "BTCUSDT",
+            },
+        )
+        assert instrument.status_code == 201
+        assert instrument.json()["provider"] == "binance_spot"
+        assert instrument.json()["environment"] == "spot"
+
+        feed = client.post(
+            "/api/v1/market-feeds/register",
+            headers={"X-Agent-Token": "test-agent-token"},
+            json={
+                "provider": "binance_spot",
+                "environment": "spot",
+                "canonical_symbol": "BTCUSDT",
+                "provider_symbol": "BTCUSDT",
+                "agent_name": "collector-binance-spot-btcusdt",
+            },
+        )
+        assert feed.status_code == 201
+        assert feed.json()["feed"]["provider"] == "binance_spot"
+
+        settings = client.get("/api/v1/collector/settings", headers=headers)
+        assert settings.status_code == 200
+        rows = settings.json()["instruments"]
+        assert rows[0]["market_feed_id"] == feed.json()["feed"]["id"]
+
+
 def test_strategy_catalog_endpoint() -> None:
     Base.metadata.drop_all(engine)
     Base.metadata.create_all(engine)

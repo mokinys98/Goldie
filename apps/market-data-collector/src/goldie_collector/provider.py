@@ -23,6 +23,10 @@ class OandaConfigurationError(RuntimeError):
     pass
 
 
+class ProviderConfigurationError(RuntimeError):
+    pass
+
+
 class MarketDataProvider(Protocol):
     def validate_instrument(self) -> Instrument: ...
     def start(self) -> None: ...
@@ -30,6 +34,8 @@ class MarketDataProvider(Protocol):
     def latest_quote(self) -> Quote | None: ...
     def candles(self, start: datetime, end: datetime) -> list[Candle]: ...
     def market_is_closed(self, now: datetime | None = None) -> bool: ...
+    @property
+    def supports_quotes(self) -> bool: ...
 
 
 class OandaProvider:
@@ -42,6 +48,10 @@ class OandaProvider:
         self._thread: threading.Thread | None = None
         self._stream_response: requests.Response | None = None
         self.stream_error: Exception | None = None
+
+    @property
+    def supports_quotes(self) -> bool:
+        return True
 
     def _get(self, path: str, **params) -> dict:
         response = requests.get(
@@ -264,3 +274,135 @@ class OandaProvider:
         return weekday == 5 or (weekday == 4 and value.hour >= 22) or (
             weekday == 6 and value.hour < 22
         )
+
+
+class BinanceSpotProvider:
+    base_url = "https://api.binance.com"
+
+    def __init__(self, settings: CollectorSettings) -> None:
+        self.settings = settings
+        self.stream_error: Exception | None = None
+
+    @property
+    def supports_quotes(self) -> bool:
+        return False
+
+    def _get(self, path: str, **params) -> dict | list:
+        response = requests.get(
+            f"{self.base_url}{path}",
+            params=params,
+            timeout=self.settings.request_timeout_seconds,
+        )
+        try:
+            response.raise_for_status()
+        except requests.HTTPError as exc:
+            try:
+                payload = response.json()
+            except ValueError:
+                payload = {}
+            message = payload.get("msg") if isinstance(payload, dict) else None
+            detail = f": {message}" if message else ""
+            raise ProviderConfigurationError(
+                f"Binance returned HTTP {response.status_code} for {path}{detail}"
+            ) from exc
+        return response.json()
+
+    def validate_instrument(self) -> Instrument:
+        payload = self._get("/api/v3/exchangeInfo", symbol=self.settings.provider_symbol)
+        symbols = payload.get("symbols", []) if isinstance(payload, dict) else []
+        item = symbols[0] if symbols else None
+        if not item or item.get("status") != "TRADING":
+            raise ProviderConfigurationError(
+                f"{self.settings.provider_symbol} is not a trading Binance spot symbol"
+            )
+        return Instrument(
+            canonical_symbol=self.settings.canonical_symbol,
+            provider_symbol=self.settings.provider_symbol,
+            display_precision=8,
+            pip_location=-8,
+            minimum_trade_size=None,
+            trade_units_precision=8,
+            margin_rate=None,
+            provider_metadata={
+                "base_asset": item.get("baseAsset"),
+                "quote_asset": item.get("quoteAsset"),
+                "permissions": item.get("permissions", []),
+            },
+        )
+
+    @staticmethod
+    def parse_kline(item: list, *, now: datetime | None = None) -> Candle | None:
+        if len(item) < 7:
+            return None
+        close_time_ms = int(item[6])
+        now_ms = int((now or datetime.now(UTC)).timestamp() * 1000)
+        if close_time_ms >= now_ms:
+            return None
+        return Candle(
+            opened_at=datetime.fromtimestamp(int(item[0]) / 1000, tz=UTC),
+            open=Decimal(str(item[1])),
+            high=Decimal(str(item[2])),
+            low=Decimal(str(item[3])),
+            close=Decimal(str(item[4])),
+            volume=int(item[8]) if len(item) > 8 else int(Decimal(str(item[5]))),
+            complete=True,
+        )
+
+    def start(self) -> None:
+        return None
+
+    def close(self) -> None:
+        return None
+
+    def latest_quote(self) -> Quote | None:
+        return None
+
+    def candles(self, start: datetime, end: datetime) -> list[Candle]:
+        current = start.astimezone(UTC).replace(second=0, microsecond=0)
+        boundary = end.astimezone(UTC).replace(second=0, microsecond=0)
+        result: list[Candle] = []
+        while current < boundary:
+            payload = self._get(
+                "/api/v3/klines",
+                symbol=self.settings.provider_symbol,
+                interval="1m",
+                startTime=int(current.timestamp() * 1000),
+                endTime=int(boundary.timestamp() * 1000) - 1,
+                limit=1000,
+            )
+            if not isinstance(payload, list):
+                break
+            batch = [
+                candle
+                for item in payload
+                if (candle := self.parse_kline(item)) is not None
+                and candle.opened_at < boundary
+            ]
+            if not batch:
+                break
+            result.extend(batch)
+            next_start = batch[-1].opened_at + timedelta(minutes=1)
+            if next_start <= current:
+                break
+            current = next_start
+            if len(payload) < 1000:
+                break
+        return result
+
+    def market_is_closed(self, now: datetime | None = None) -> bool:
+        return False
+
+
+PROVIDERS: dict[str, type[MarketDataProvider]] = {
+    "oanda": OandaProvider,
+    "binance_spot": BinanceSpotProvider,
+}
+
+
+def create_provider(settings: CollectorSettings) -> MarketDataProvider:
+    provider_class = PROVIDERS.get(settings.provider)
+    if provider_class is None:
+        raise ProviderConfigurationError(
+            f"Unsupported market data provider: {settings.provider}"
+        )
+    return provider_class(settings)

@@ -7,6 +7,7 @@ import pytest
 from goldie_collector.__main__ import CollectorSupervisor, InstrumentWorker
 from goldie_collector.client import GoldieApiClient
 from goldie_collector.provider import (
+    BinanceSpotProvider,
     OandaApiError,
     OandaConfigurationError,
     OandaProvider,
@@ -232,7 +233,12 @@ def test_collector_settings_parse_multiple_instruments() -> None:
     usd_jpy = settings.for_instrument("USD_JPY")
     assert usd_jpy.provider_symbol == "USD_JPY"
     assert usd_jpy.canonical_symbol == "USDJPY"
-    assert usd_jpy.agent_name.endswith("-usd_jpy")
+    assert usd_jpy.agent_name.endswith("-oanda-usd_jpy")
+    assert {
+        "provider": "binance_spot",
+        "environment": "spot",
+        "provider_symbol": "BTCUSDT",
+    } in settings.instrument_specs
 
 
 def test_collector_settings_reject_invalid_instrument() -> None:
@@ -318,6 +324,10 @@ def test_instrument_worker_starts_stream_before_candle_catchup(monkeypatch) -> N
         def __init__(self, _settings):
             self.started = False
 
+        @property
+        def supports_quotes(self):
+            return True
+
         def validate_instrument(self):
             return SimpleNamespace()
 
@@ -340,7 +350,7 @@ def test_instrument_worker_starts_stream_before_candle_catchup(monkeypatch) -> N
             events.append("close")
 
     monkeypatch.setattr("goldie_collector.__main__.GoldieApiClient", FakeClient)
-    monkeypatch.setattr("goldie_collector.__main__.OandaProvider", FakeProvider)
+    monkeypatch.setattr("goldie_collector.__main__.create_provider", FakeProvider)
     settings = CollectorSettings(
         api_url="https://goldie-api.example",
         agent_token="agent-token",
@@ -354,3 +364,65 @@ def test_instrument_worker_starts_stream_before_candle_catchup(monkeypatch) -> N
 
     assert events.index("stream-start") < events.index("candles-started:True")
     assert "heartbeat:ONLINE" in events
+
+
+def test_binance_kline_is_normalized() -> None:
+    candle = BinanceSpotProvider.parse_kline(
+        [
+            1751400000000,
+            "100.10",
+            "101.20",
+            "99.90",
+            "100.80",
+            "12.345",
+            1751400059999,
+            "0",
+            42,
+        ],
+        now=datetime(2025, 7, 2, tzinfo=UTC),
+    )
+
+    assert candle is not None
+    assert candle.opened_at == datetime(2025, 7, 1, 20, 0, tzinfo=UTC)
+    assert candle.open == Decimal("100.10")
+    assert candle.high == Decimal("101.20")
+    assert candle.low == Decimal("99.90")
+    assert candle.close == Decimal("100.80")
+    assert candle.volume == 42
+
+
+def test_binance_provider_paginates_klines(monkeypatch) -> None:
+    settings = CollectorSettings(
+        api_url="https://goldie-api.example",
+        agent_token="agent-token",
+        oanda_api_token="oanda-token",
+        oanda_account_id="practice-account",
+        provider="binance_spot",
+        provider_environment="spot",
+        provider_symbol="BTCUSDT",
+        canonical_symbol="BTCUSDT",
+    )
+    provider = BinanceSpotProvider(settings)
+    calls: list[dict] = []
+
+    def fake_get(_path, **params):
+        calls.append(params)
+        start = int(params["startTime"])
+        if len(calls) == 1:
+            return [
+                [start, "1", "1", "1", "1", "0", start + 59_999, "0", 1],
+                [start + 60_000, "2", "2", "2", "2", "0", start + 119_999, "0", 2],
+            ]
+        return []
+
+    monkeypatch.setattr(provider, "_get", fake_get)
+
+    rows = provider.candles(
+        datetime(2025, 7, 1, 21, 0, tzinfo=UTC),
+        datetime(2025, 7, 1, 21, 3, tzinfo=UTC),
+    )
+
+    assert [row.opened_at.minute for row in rows] == [0, 1]
+    assert calls[0]["symbol"] == "BTCUSDT"
+    assert calls[0]["interval"] == "1m"
+    assert calls[0]["limit"] == 1000

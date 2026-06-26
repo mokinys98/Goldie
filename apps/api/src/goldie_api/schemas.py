@@ -192,13 +192,17 @@ class BotStatus(BaseModel):
     data_state: str
 
 
+PROVIDER_PATTERN = "^(oanda|binance_spot)$"
+PROVIDER_SYMBOL_PATTERN = "^[A-Z0-9_]{3,64}$"
+
+
 class MarketFeedRegister(BaseModel):
-    provider: str = Field(pattern="^oanda$")
-    environment: str = Field(default="practice", pattern="^(practice|live)$")
+    provider: str = Field(pattern=PROVIDER_PATTERN)
+    environment: str = Field(default="practice", pattern="^(practice|live|spot)$")
     canonical_symbol: str = Field(default="EURUSD", pattern="^[A-Z0-9]{3,32}$")
     provider_symbol: str = Field(
         default="EUR_USD",
-        pattern="^[A-Z0-9]+_[A-Z0-9]+$",
+        pattern=PROVIDER_SYMBOL_PATTERN,
     )
     agent_name: str = Field(default="railway-oanda-collector", min_length=1, max_length=120)
     details: dict = Field(default_factory=dict)
@@ -230,7 +234,7 @@ class FeedHeartbeatRequest(HeartbeatRequest):
 class InstrumentSpecificationIn(BaseModel):
     agent_id: uuid.UUID
     canonical_symbol: str = Field(pattern="^[A-Z0-9]{3,32}$")
-    provider_symbol: str = Field(pattern="^[A-Z0-9]+_[A-Z0-9]+$")
+    provider_symbol: str = Field(pattern=PROVIDER_SYMBOL_PATTERN)
     display_precision: int = Field(ge=0, le=10)
     pip_location: int = Field(ge=-10, le=10)
     minimum_trade_size: Decimal | None = Field(default=None, gt=0)
@@ -301,13 +305,21 @@ class CollectorInstrumentSettingsUpdate(BaseModel):
 
 
 class CollectorInstrumentCreate(BaseModel):
-    provider_symbol: str = Field(pattern="^[A-Z0-9]+_[A-Z0-9]+$")
+    provider: str = Field(default="oanda", pattern=PROVIDER_PATTERN)
+    environment: str = Field(default="practice", pattern="^(practice|live|spot)$")
+    provider_symbol: str = Field(pattern=PROVIDER_SYMBOL_PATTERN)
+
+
+class CollectorInstrumentSeed(BaseModel):
+    provider: str = Field(default="oanda", pattern=PROVIDER_PATTERN)
+    environment: str = Field(default="practice", pattern="^(practice|live|spot)$")
+    provider_symbol: str = Field(pattern=PROVIDER_SYMBOL_PATTERN)
 
 
 class CollectorInstanceRegister(BaseModel):
     name: str = Field(min_length=1, max_length=120)
     defaults: CollectorSettingsValues
-    instruments: list[str] = Field(min_length=1, max_length=20)
+    instruments: list[CollectorInstrumentSeed | str] = Field(min_length=1, max_length=40)
 
 
 class CollectorInstanceHeartbeat(BaseModel):

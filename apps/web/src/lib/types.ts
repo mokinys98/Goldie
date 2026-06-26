@@ -229,6 +229,8 @@ export type CollectorConfiguration = {
 
 export type CollectorInstrumentSettings = {
   id?: string;
+  provider: string;
+  environment: string;
   provider_symbol: string;
   canonical_symbol: string;
   enabled: boolean;

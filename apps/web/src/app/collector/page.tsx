@@ -14,6 +14,7 @@ import { StatusPill } from "@/components/status-pill";
 export default function CollectorPage() {
   const client = useQueryClient();
   const [error, setError] = useState("");
+  const [newProvider, setNewProvider] = useState("binance_spot");
   const [newSymbol, setNewSymbol] = useState("");
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("");
@@ -117,7 +118,11 @@ export default function CollectorPage() {
     try {
       await api("/api/v1/collector/instruments", {
         method: "POST",
-        body: JSON.stringify({ provider_symbol: symbol }),
+        body: JSON.stringify({
+          provider: newProvider,
+          environment: newProvider === "binance_spot" ? "spot" : "practice",
+          provider_symbol: symbol,
+        }),
       });
       setNewSymbol("");
       await client.invalidateQueries({ queryKey: ["collector-settings"] });
@@ -139,7 +144,8 @@ export default function CollectorPage() {
     (!normalizedSearch
       || feed.provider_symbol.toLocaleLowerCase().includes(normalizedSearch)
       || feed.canonical_symbol.toLocaleLowerCase().includes(normalizedSearch)
-      || feed.environment.toLocaleLowerCase().includes(normalizedSearch))
+      || feed.environment.toLocaleLowerCase().includes(normalizedSearch)
+      || feed.provider.toLocaleLowerCase().includes(normalizedSearch))
     && (!statusFilter || feed.status === statusFilter)
     && (!environmentFilter || feed.environment === environmentFilter)
     && (!botUsageFilter
@@ -160,7 +166,7 @@ export default function CollectorPage() {
         <div>
           <span className="eyebrow">MARKET DATA CONTROL</span>
           <h1>Collector</h1>
-          <p>OANDA read-only ingestion, health, configuration and data operations.</p>
+          <p>Read-only market data ingestion, health, configuration and data operations.</p>
         </div>
         <div className="button-row">
           <StatusPill value={data?.instance?.status ?? (isLoading ? "LOADING" : "OFFLINE")} />
@@ -237,12 +243,20 @@ export default function CollectorPage() {
         <div className="section-title">
           <div>
             <h2>Instruments</h2>
-            <p>New instruments are validated by OANDA when the collector starts them.</p>
+            <p>New instruments are validated by their provider when the collector starts them.</p>
           </div>
           <div className="inline-form">
+            <select
+              aria-label="Provider"
+              value={newProvider}
+              onChange={(event) => setNewProvider(event.target.value)}
+            >
+              <option value="binance_spot">Binance Spot</option>
+              <option value="oanda">OANDA</option>
+            </select>
             <input
-              aria-label="OANDA instrument"
-              placeholder="XAU_USD"
+              aria-label="Provider instrument"
+              placeholder={newProvider === "binance_spot" ? "BTCUSDT" : "XAU_USD"}
               value={newSymbol}
               onChange={(event) => setNewSymbol(event.target.value)}
             />
@@ -286,7 +300,9 @@ export default function CollectorPage() {
                       <Link className="table-link" href={`/collector/${feed.id}`}>
                         {feed.provider_symbol}
                       </Link>
-                      <span className="table-subtitle">{feed.environment}</span>
+                      <span className="table-subtitle">
+                        {feed.provider} / {feed.environment}
+                      </span>
                     </td>
                     <td><StatusPill value={feed.status} /></td>
                     <td>

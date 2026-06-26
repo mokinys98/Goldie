@@ -172,9 +172,19 @@ class CollectorConfiguration(Base, TimestampMixin):
 
 class CollectorInstrumentConfiguration(Base, TimestampMixin):
     __tablename__ = "collector_instrument_configurations"
+    __table_args__ = (
+        UniqueConstraint(
+            "provider",
+            "environment",
+            "provider_symbol",
+            name="uq_collector_instrument_provider_symbol",
+        ),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
-    provider_symbol: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    provider: Mapped[str] = mapped_column(String(32), default="oanda", index=True)
+    environment: Mapped[str] = mapped_column(String(32), default="practice")
+    provider_symbol: Mapped[str] = mapped_column(String(64), index=True)
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     overrides: Mapped[dict] = mapped_column(JSON, default=dict)
 

@@ -57,6 +57,14 @@ ALLOWED_OVERRIDE_KEYS = {
 }
 
 
+def feed_key(provider: str, environment: str, provider_symbol: str) -> tuple[str, str, str]:
+    return provider, environment, provider_symbol
+
+
+def instrument_key(row: CollectorInstrumentConfiguration) -> tuple[str, str, str]:
+    return feed_key(row.provider, row.environment, row.provider_symbol)
+
+
 def configuration_values(row: CollectorConfiguration) -> dict:
     return {
         key: getattr(row, key)
@@ -97,6 +105,8 @@ def serialize_configuration(row: CollectorConfiguration) -> dict:
 def serialize_instrument(row: CollectorInstrumentConfiguration, feed: MarketFeed | None) -> dict:
     return {
         "id": str(row.id),
+        "provider": row.provider,
+        "environment": row.environment,
         "provider_symbol": row.provider_symbol,
         "enabled": row.enabled,
         "overrides": row.overrides,
@@ -415,11 +425,14 @@ def read_settings(
 ) -> dict:
     configuration = get_configuration(db)
     feeds = {
-        feed.provider_symbol: feed for feed in db.scalars(select(MarketFeed))
+        feed_key(feed.provider, feed.environment, feed.provider_symbol): feed
+        for feed in db.scalars(select(MarketFeed))
     }
     instruments = list(
         db.scalars(
             select(CollectorInstrumentConfiguration).order_by(
+                CollectorInstrumentConfiguration.provider,
+                CollectorInstrumentConfiguration.environment,
                 CollectorInstrumentConfiguration.provider_symbol
             )
         )
@@ -427,7 +440,7 @@ def read_settings(
     return {
         "configuration": serialize_configuration(configuration),
         "instruments": [
-            serialize_instrument(row, feeds.get(row.provider_symbol)) for row in instruments
+            serialize_instrument(row, feeds.get(instrument_key(row))) for row in instruments
         ],
     }
 
@@ -487,11 +500,17 @@ def update_instrument_settings(
     CollectorSettingsValues.model_validate(effective)
     row = db.scalar(
         select(CollectorInstrumentConfiguration).where(
+            CollectorInstrumentConfiguration.provider == feed.provider,
+            CollectorInstrumentConfiguration.environment == feed.environment,
             CollectorInstrumentConfiguration.provider_symbol == feed.provider_symbol
         )
     )
     if row is None:
-        row = CollectorInstrumentConfiguration(provider_symbol=feed.provider_symbol)
+        row = CollectorInstrumentConfiguration(
+            provider=feed.provider,
+            environment=feed.environment,
+            provider_symbol=feed.provider_symbol,
+        )
         db.add(row)
     row.enabled = payload.enabled
     row.overrides = payload.overrides
@@ -525,12 +544,16 @@ def create_instrument(
 ) -> dict:
     existing = db.scalar(
         select(CollectorInstrumentConfiguration).where(
+            CollectorInstrumentConfiguration.provider == payload.provider,
+            CollectorInstrumentConfiguration.environment == payload.environment,
             CollectorInstrumentConfiguration.provider_symbol == payload.provider_symbol
         )
     )
     if existing:
         raise HTTPException(status_code=409, detail="Instrument already exists")
     row = CollectorInstrumentConfiguration(
+        provider=payload.provider,
+        environment=payload.environment,
         provider_symbol=payload.provider_symbol,
         enabled=True,
         overrides={},
@@ -553,6 +576,8 @@ def create_instrument(
         {
             "event_type": "collector.configuration",
             "occurred_at": datetime.now(UTC).isoformat(),
+            "provider": row.provider,
+            "environment": row.environment,
             "provider_symbol": row.provider_symbol,
         }
     )
@@ -576,6 +601,8 @@ def feed_detail(
     )
     instrument = db.scalar(
         select(CollectorInstrumentConfiguration).where(
+            CollectorInstrumentConfiguration.provider == feed.provider,
+            CollectorInstrumentConfiguration.environment == feed.environment,
             CollectorInstrumentConfiguration.provider_symbol == feed.provider_symbol
         )
     )
@@ -623,6 +650,8 @@ def feed_detail(
                 "provider_symbol": feed.provider_symbol,
                 "enabled": True,
                 "overrides": {},
+                "provider": feed.provider,
+                "environment": feed.environment,
                 "market_feed_id": str(feed.id),
                 "canonical_symbol": feed.canonical_symbol,
             }
@@ -894,15 +923,20 @@ def register_instance(
     if configuration is None:
         configuration = CollectorConfiguration(version=1, **payload.defaults.model_dump())
         db.add(configuration)
-    existing = {
-        row.provider_symbol: row
-        for row in db.scalars(select(CollectorInstrumentConfiguration))
-    }
-    for symbol in payload.instruments:
-        if symbol not in existing:
+    existing = {instrument_key(row): row for row in db.scalars(select(CollectorInstrumentConfiguration))}
+    for item in payload.instruments:
+        seed = (
+            {"provider": "oanda", "environment": "practice", "provider_symbol": item}
+            if isinstance(item, str)
+            else item.model_dump()
+        )
+        key = feed_key(seed["provider"], seed["environment"], seed["provider_symbol"])
+        if key not in existing:
             db.add(
                 CollectorInstrumentConfiguration(
-                    provider_symbol=symbol,
+                    provider=seed["provider"],
+                    environment=seed["environment"],
+                    provider_symbol=seed["provider_symbol"],
                     enabled=True,
                     overrides={},
                 )
@@ -955,7 +989,8 @@ def poll_control(
         raise HTTPException(status_code=404, detail="Collector instance not found")
     configuration = get_configuration(db)
     feeds = {
-        feed.provider_symbol: feed for feed in db.scalars(select(MarketFeed))
+        feed_key(feed.provider, feed.environment, feed.provider_symbol): feed
+        for feed in db.scalars(select(MarketFeed))
     }
     instruments = list(db.scalars(select(CollectorInstrumentConfiguration)))
     statement = (
@@ -980,7 +1015,7 @@ def poll_control(
     return {
         "configuration": serialize_configuration(configuration),
         "instruments": [
-            serialize_instrument(row, feeds.get(row.provider_symbol)) for row in instruments
+            serialize_instrument(row, feeds.get(instrument_key(row))) for row in instruments
         ],
         "commands": [serialize_command(command) for command in commands],
     }
