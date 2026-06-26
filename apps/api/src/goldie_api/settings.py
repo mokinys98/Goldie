@@ -1,7 +1,7 @@
 from decimal import Decimal
 from functools import lru_cache
 
-from pydantic import field_validator
+from pydantic import AliasChoices, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -23,6 +23,19 @@ class Settings(BaseSettings):
     db_pool_size: int = 5
     db_max_overflow: int = 5
     ingestion_concurrency: int = 4
+    provider_request_timeout_seconds: float = 30
+    oanda_api_token: str = Field(
+        default="",
+        validation_alias=AliasChoices("OANDA_API_TOKEN", "GOLDIE_OANDA_API_TOKEN"),
+    )
+    oanda_account_id: str = Field(
+        default="",
+        validation_alias=AliasChoices("OANDA_ACCOUNT_ID", "GOLDIE_OANDA_ACCOUNT_ID"),
+    )
+    oanda_rest_url: str = Field(
+        default="https://api-fxpractice.oanda.com",
+        validation_alias=AliasChoices("OANDA_REST_URL", "GOLDIE_OANDA_REST_URL"),
+    )
 
     @field_validator("database_url", mode="before")
     @classmethod

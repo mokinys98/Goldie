@@ -3,6 +3,9 @@ import io
 import json
 import uuid
 from datetime import UTC, datetime, timedelta
+from urllib.error import HTTPError, URLError
+from urllib.parse import urlencode
+from urllib.request import Request, urlopen
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.encoders import jsonable_encoder
@@ -67,6 +70,10 @@ ALLOWED_OVERRIDE_KEYS = {
     "configuration_retry_seconds",
 }
 ACTIVE_JOB_STATUSES = {"PENDING", "RUNNING", "CANCEL_REQUESTED"}
+PROVIDER_LABELS = {
+    "binance_spot": "Binance Spot",
+    "oanda": "OANDA",
+}
 
 
 def feed_key(provider: str, environment: str, provider_symbol: str) -> tuple[str, str, str]:
@@ -176,6 +183,77 @@ def serialize_command(row: CollectorCommand) -> dict:
             "updated_at": row.updated_at,
         }
     )
+
+
+def provider_environment(provider: str) -> str:
+    return "spot" if provider == "binance_spot" else "practice"
+
+
+def fetch_provider_json(
+    url: str,
+    *,
+    params: dict[str, str] | None = None,
+    headers: dict[str, str] | None = None,
+) -> dict:
+    settings = get_settings()
+    target_url = f"{url}?{urlencode(params)}" if params else url
+    request = Request(target_url, headers=headers or {})
+    try:
+        with urlopen(request, timeout=settings.provider_request_timeout_seconds) as response:
+            payload = response.read().decode("utf-8")
+    except (HTTPError, URLError, TimeoutError) as exc:
+        raise HTTPException(
+            status_code=502,
+            detail="Provider instruments are unavailable",
+        ) from exc
+    try:
+        return json.loads(payload)
+    except json.JSONDecodeError as exc:
+        raise HTTPException(
+            status_code=502,
+            detail="Provider returned invalid instrument data",
+        ) from exc
+
+
+def fetch_provider_instruments(provider: str) -> list[dict[str, str]]:
+    settings = get_settings()
+    if provider == "binance_spot":
+        payload = fetch_provider_json("https://api.binance.com/api/v3/exchangeInfo")
+        rows = payload.get("symbols", []) if isinstance(payload, dict) else []
+        return [
+            {
+                "provider_symbol": str(item["symbol"]),
+                "display_name": (
+                    f"{item.get('baseAsset', '')}/{item.get('quoteAsset', '')}".strip("/")
+                    or str(item["symbol"])
+                ),
+            }
+            for item in rows
+            if item.get("symbol") and item.get("status") == "TRADING"
+        ]
+    if provider == "oanda":
+        if not settings.oanda_api_token or not settings.oanda_account_id:
+            raise HTTPException(
+                status_code=503,
+                detail="OANDA credentials are not configured for provider instruments",
+            )
+        payload = fetch_provider_json(
+            (
+                f"{settings.oanda_rest_url.rstrip('/')}/v3/accounts/"
+                f"{settings.oanda_account_id}/instruments"
+            ),
+            headers={"Authorization": f"Bearer {settings.oanda_api_token}"},
+        )
+        rows = payload.get("instruments", [])
+        return [
+            {
+                "provider_symbol": str(item["name"]),
+                "display_name": str(item.get("displayName") or item["name"]),
+            }
+            for item in rows
+            if item.get("name")
+        ]
+    raise HTTPException(status_code=422, detail="Unsupported provider")
 
 
 def effective_instance_status(instance: CollectorInstance | None) -> str:
@@ -551,6 +629,23 @@ def update_instrument_settings(
         }
     )
     return serialize_instrument(row, feed)
+
+
+@router.get("/provider-instruments")
+def list_provider_instruments(
+    provider: str = Query(pattern="^(oanda|binance_spot)$"),
+    _: User = Depends(get_current_user),
+) -> dict:
+    instruments = sorted(
+        fetch_provider_instruments(provider),
+        key=lambda item: item["provider_symbol"],
+    )
+    return {
+        "provider": provider,
+        "provider_label": PROVIDER_LABELS[provider],
+        "environment": provider_environment(provider),
+        "instruments": instruments,
+    }
 
 
 @router.post("/instruments", status_code=201)

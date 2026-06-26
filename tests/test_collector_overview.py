@@ -94,3 +94,26 @@ def test_overview_query_count_does_not_grow_with_feeds(monkeypatch, feed_count: 
     assert len(result["feeds"]) == feed_count
     assert result["feeds"][0]["earliest_candle_at"] != result["feeds"][0]["latest_candle_at"]
     assert statements <= 9
+
+
+def test_provider_instruments_uses_selected_provider(monkeypatch) -> None:
+    monkeypatch.setattr(
+        collector,
+        "fetch_provider_instruments",
+        lambda provider: [
+            {"provider_symbol": "ETHUSDT", "display_name": "ETH/USDT"},
+            {"provider_symbol": "BTCUSDT", "display_name": "BTC/USDT"},
+        ],
+    )
+
+    result = collector.list_provider_instruments("binance_spot", None)
+
+    assert result == {
+        "provider": "binance_spot",
+        "provider_label": "Binance Spot",
+        "environment": "spot",
+        "instruments": [
+            {"provider_symbol": "BTCUSDT", "display_name": "BTC/USDT"},
+            {"provider_symbol": "ETHUSDT", "display_name": "ETH/USDT"},
+        ],
+    }

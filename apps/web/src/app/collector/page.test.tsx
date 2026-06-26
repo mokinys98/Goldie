@@ -126,6 +126,10 @@ describe("CollectorPage", () => {
   it("renders worker metrics and feed diagnostics", async () => {
     renderPage();
     expect(await screen.findByText("EUR_USD")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Add new" })).toHaveAttribute(
+      "href",
+      "/collector/new",
+    );
     expect(screen.getByText("120")).toBeInTheDocument();
     expect(screen.getByText("0.00020")).toBeInTheDocument();
     expect(screen.getByText("Earliest M1")).toBeInTheDocument();

@@ -301,6 +301,16 @@ export type CollectorSettingsResponse = {
   instruments: CollectorInstrumentSettings[];
 };
 
+export type CollectorProviderInstruments = {
+  provider: string;
+  provider_label: string;
+  environment: string;
+  instruments: Array<{
+    provider_symbol: string;
+    display_name: string;
+  }>;
+};
+
 export type CollectorFeedDetail = {
   feed: CollectorFeedSummary;
   agent: Record<string, unknown> | null;

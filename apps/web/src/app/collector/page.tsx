@@ -14,8 +14,6 @@ import { StatusPill } from "@/components/status-pill";
 export default function CollectorPage() {
   const client = useQueryClient();
   const [error, setError] = useState("");
-  const [newProvider, setNewProvider] = useState("binance_spot");
-  const [newSymbol, setNewSymbol] = useState("");
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("");
   const [environmentFilter, setEnvironmentFilter] = useState("");
@@ -108,26 +106,6 @@ export default function CollectorPage() {
       await client.invalidateQueries({ queryKey: ["collector-overview"] });
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Command failed");
-    }
-  };
-
-  const addInstrument = async () => {
-    const symbol = newSymbol.trim().toUpperCase();
-    if (!symbol) return;
-    setError("");
-    try {
-      await api("/api/v1/collector/instruments", {
-        method: "POST",
-        body: JSON.stringify({
-          provider: newProvider,
-          environment: newProvider === "binance_spot" ? "spot" : "practice",
-          provider_symbol: symbol,
-        }),
-      });
-      setNewSymbol("");
-      await client.invalidateQueries({ queryKey: ["collector-settings"] });
-    } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "Could not add instrument");
     }
   };
 
@@ -263,25 +241,7 @@ export default function CollectorPage() {
             <h2>Instruments</h2>
             <p>New instruments are validated by their provider when the collector starts them.</p>
           </div>
-          <div className="inline-form">
-            <select
-              aria-label="Provider"
-              value={newProvider}
-              onChange={(event) => setNewProvider(event.target.value)}
-            >
-              <option value="binance_spot">Binance Spot</option>
-              <option value="oanda">OANDA</option>
-            </select>
-            <input
-              aria-label="Provider instrument"
-              placeholder={newProvider === "binance_spot" ? "BTCUSDT" : "XAU_USD"}
-              value={newSymbol}
-              onChange={(event) => setNewSymbol(event.target.value)}
-            />
-            <button className="button button-secondary" onClick={() => void addInstrument()}>
-              Add
-            </button>
-          </div>
+          <Link className="button button-primary" href="/collector/new">Add new</Link>
         </div>
         {isLoading ? (
           <div className="collector-skeleton-table" aria-label="Loading instruments">
