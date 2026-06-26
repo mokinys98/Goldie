@@ -7,21 +7,32 @@ from datetime import UTC, datetime, timedelta
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import StreamingResponse
-from sqlalchemy import desc, func, select, update
+from sqlalchemy import delete, desc, func, select, update
 from sqlalchemy.orm import Session
 
 from ..db import get_db
 from ..dependencies import require_agent_token
 from ..models import (
     Agent,
+    BacktestExperiment,
+    BacktestTrade,
     Bot,
     Candle,
     CollectorCommand,
     CollectorConfiguration,
     CollectorInstance,
     CollectorInstrumentConfiguration,
+    ConfigVersion,
+    IngestionEvent,
+    InstrumentSpecification,
     MarketFeed,
     MarketTick,
+    OptimizationRun,
+    OptimizationTrial,
+    OptimizationTrialTrade,
+    PaperAccount,
+    Run,
+    Signal,
     SignalOutcome,
     User,
 )
@@ -55,6 +66,7 @@ ALLOWED_OVERRIDE_KEYS = {
     "backfill_batch_size",
     "configuration_retry_seconds",
 }
+ACTIVE_JOB_STATUSES = {"PENDING", "RUNNING", "CANCEL_REQUESTED"}
 
 
 def feed_key(provider: str, environment: str, provider_symbol: str) -> tuple[str, str, str]:
@@ -185,6 +197,11 @@ def feed_or_404(db: Session, feed_id: uuid.UUID) -> MarketFeed:
     if feed is None:
         raise HTTPException(status_code=404, detail="Market feed not found")
     return feed
+
+
+def delete_count(db: Session, statement) -> int:
+    result = db.execute(statement.execution_options(synchronize_session=False))
+    return max(0, result.rowcount or 0)
 
 
 def feed_summary(db: Session, feed: MarketFeed, now: datetime) -> dict:
@@ -550,7 +567,39 @@ def create_instrument(
         )
     )
     if existing:
-        raise HTTPException(status_code=409, detail="Instrument already exists")
+        if existing.enabled:
+            raise HTTPException(status_code=409, detail="Instrument already exists")
+        existing.enabled = True
+        existing.overrides = existing.overrides or {}
+        add_audit(
+            db,
+            actor_type="USER",
+            actor_id=str(user.id),
+            action="COLLECTOR_INSTRUMENT_REENABLED",
+            target_type="COLLECTOR_INSTRUMENT",
+            target_id=str(existing.id),
+            details={"provider_symbol": existing.provider_symbol},
+        )
+        db.commit()
+        db.refresh(existing)
+        invalidate_collector_overview()
+        publish_event_sync(
+            {
+                "event_type": "collector.configuration",
+                "occurred_at": datetime.now(UTC).isoformat(),
+                "provider": existing.provider,
+                "environment": existing.environment,
+                "provider_symbol": existing.provider_symbol,
+            }
+        )
+        feed = db.scalar(
+            select(MarketFeed).where(
+                MarketFeed.provider == existing.provider,
+                MarketFeed.environment == existing.environment,
+                MarketFeed.provider_symbol == existing.provider_symbol,
+            )
+        )
+        return serialize_instrument(existing, feed)
     row = CollectorInstrumentConfiguration(
         provider=payload.provider,
         environment=payload.environment,
@@ -582,6 +631,177 @@ def create_instrument(
         }
     )
     return serialize_instrument(row, None)
+
+
+def hard_delete_feed_data(db: Session, feed: MarketFeed) -> dict[str, int]:
+    feed_id = feed.id
+    bot_ids = select(Bot.id).where(Bot.market_feed_id == feed_id)
+    run_ids = select(Run.id).where(Run.bot_id.in_(bot_ids))
+    config_ids = select(ConfigVersion.id).where(ConfigVersion.bot_id.in_(bot_ids))
+    backtest_ids = select(BacktestExperiment.id).where(BacktestExperiment.market_feed_id == feed_id)
+    optimization_ids = select(OptimizationRun.id).where(OptimizationRun.market_feed_id == feed_id)
+    trial_ids = select(OptimizationTrial.id).where(
+        OptimizationTrial.optimization_run_id.in_(optimization_ids)
+    )
+    counts: dict[str, int] = {}
+    counts["optimization_trial_trades"] = delete_count(
+        db,
+        delete(OptimizationTrialTrade).where(OptimizationTrialTrade.trial_id.in_(trial_ids)),
+    )
+    counts["optimization_trials"] = delete_count(
+        db,
+        delete(OptimizationTrial).where(
+            OptimizationTrial.optimization_run_id.in_(optimization_ids)
+        ),
+    )
+    counts["optimization_runs"] = delete_count(
+        db,
+        delete(OptimizationRun).where(OptimizationRun.market_feed_id == feed_id),
+    )
+    counts["backtest_trades"] = delete_count(
+        db,
+        delete(BacktestTrade).where(BacktestTrade.experiment_id.in_(backtest_ids)),
+    )
+    counts["backtest_experiments"] = delete_count(
+        db,
+        delete(BacktestExperiment).where(BacktestExperiment.market_feed_id == feed_id),
+    )
+    counts["signal_outcomes"] = delete_count(
+        db,
+        delete(SignalOutcome).where(SignalOutcome.bot_id.in_(bot_ids)),
+    )
+    counts["signals"] = delete_count(
+        db,
+        delete(Signal).where(Signal.bot_id.in_(bot_ids)),
+    )
+    counts["paper_accounts"] = delete_count(
+        db,
+        delete(PaperAccount).where(PaperAccount.bot_id.in_(bot_ids)),
+    )
+    counts["runs"] = delete_count(
+        db,
+        delete(Run).where(Run.id.in_(run_ids)),
+    )
+    counts["config_versions"] = delete_count(
+        db,
+        delete(ConfigVersion).where(ConfigVersion.id.in_(config_ids)),
+    )
+    counts["bots"] = delete_count(
+        db,
+        delete(Bot).where(Bot.market_feed_id == feed_id),
+    )
+    counts["ingestion_events"] = delete_count(
+        db,
+        delete(IngestionEvent).where(IngestionEvent.market_feed_id == feed_id),
+    )
+    counts["market_ticks"] = delete_count(
+        db,
+        delete(MarketTick).where(MarketTick.market_feed_id == feed_id),
+    )
+    counts["candles"] = delete_count(
+        db,
+        delete(Candle).where(Candle.market_feed_id == feed_id),
+    )
+    counts["instrument_specifications"] = delete_count(
+        db,
+        delete(InstrumentSpecification).where(InstrumentSpecification.market_feed_id == feed_id),
+    )
+    counts["collector_commands"] = delete_count(
+        db,
+        delete(CollectorCommand).where(CollectorCommand.market_feed_id == feed_id),
+    )
+    counts["agents"] = delete_count(
+        db,
+        delete(Agent).where(Agent.market_feed_id == feed_id),
+    )
+    counts["market_feeds"] = delete_count(
+        db,
+        delete(MarketFeed).where(MarketFeed.id == feed_id),
+    )
+    return counts
+
+
+@router.delete("/feeds/{feed_id}")
+def delete_feed(
+    feed_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> dict:
+    feed = feed_or_404(db, feed_id)
+    provider = feed.provider
+    environment = feed.environment
+    provider_symbol = feed.provider_symbol
+    active_backtest = db.scalar(
+        select(BacktestExperiment.id).where(
+            BacktestExperiment.market_feed_id == feed.id,
+            BacktestExperiment.status.in_(ACTIVE_JOB_STATUSES),
+        )
+    )
+    active_optimization = db.scalar(
+        select(OptimizationRun.id).where(
+            OptimizationRun.market_feed_id == feed.id,
+            OptimizationRun.status.in_(ACTIVE_JOB_STATUSES),
+        )
+    )
+    if active_backtest or active_optimization:
+        raise HTTPException(
+            status_code=409,
+            detail="Feed has active backtests or optimizations; cancel or finish them first",
+        )
+    instrument = db.scalar(
+        select(CollectorInstrumentConfiguration).where(
+            CollectorInstrumentConfiguration.provider == provider,
+            CollectorInstrumentConfiguration.environment == environment,
+            CollectorInstrumentConfiguration.provider_symbol == provider_symbol,
+        )
+    )
+    if instrument is None:
+        instrument = CollectorInstrumentConfiguration(
+            provider=provider,
+            environment=environment,
+            provider_symbol=provider_symbol,
+            enabled=False,
+            overrides={},
+        )
+        db.add(instrument)
+        db.flush()
+    else:
+        instrument.enabled = False
+    counts = hard_delete_feed_data(db, feed)
+    add_audit(
+        db,
+        actor_type="USER",
+        actor_id=str(user.id),
+        action="MARKET_FEED_HARD_DELETED",
+        target_type="MARKET_FEED",
+        target_id=str(feed_id),
+        details={
+            "provider": provider,
+            "environment": environment,
+            "provider_symbol": provider_symbol,
+            "deleted": counts,
+        },
+    )
+    db.commit()
+    invalidate_collector_overview()
+    publish_event_sync(
+        {
+            "event_type": "collector.configuration",
+            "occurred_at": datetime.now(UTC).isoformat(),
+            "market_feed_id": str(feed_id),
+            "provider": provider,
+            "environment": environment,
+            "provider_symbol": provider_symbol,
+        }
+    )
+    return {
+        "deleted": True,
+        "market_feed_id": str(feed_id),
+        "provider": provider,
+        "environment": environment,
+        "provider_symbol": provider_symbol,
+        "counts": counts,
+    }
 
 
 @router.get("/feeds/{feed_id}")
@@ -923,7 +1143,10 @@ def register_instance(
     if configuration is None:
         configuration = CollectorConfiguration(version=1, **payload.defaults.model_dump())
         db.add(configuration)
-    existing = {instrument_key(row): row for row in db.scalars(select(CollectorInstrumentConfiguration))}
+    existing = {
+        instrument_key(row): row
+        for row in db.scalars(select(CollectorInstrumentConfiguration))
+    }
     for item in payload.instruments:
         seed = (
             {"provider": "oanda", "environment": "practice", "provider_symbol": item}

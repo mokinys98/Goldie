@@ -131,6 +131,24 @@ export default function CollectorPage() {
     }
   };
 
+  const deleteFeed = async (feed: { id: string; provider_symbol: string }) => {
+    const confirmed = window.confirm(
+      `Delete ${feed.provider_symbol}? This permanently deletes the feed, market data, `
+        + "linked bots, backtests, and optimizations.",
+    );
+    if (!confirmed) return;
+    setError("");
+    try {
+      await api(`/api/v1/collector/feeds/${feed.id}`, { method: "DELETE" });
+      await Promise.all([
+        client.invalidateQueries({ queryKey: ["collector-overview"] }),
+        client.invalidateQueries({ queryKey: ["collector-settings"] }),
+      ]);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Feed could not be deleted");
+    }
+  };
+
   const data = overview.data;
   const isLoading = overview.isLoading || !data;
   const feeds = useMemo(() => data?.feeds ?? [], [data?.feeds]);
@@ -328,6 +346,12 @@ export default function CollectorPage() {
                           onClick={() => void command("RESUME", feed)}
                         >
                           Resume
+                        </button>
+                        <button
+                          className="button button-danger"
+                          onClick={() => void deleteFeed(feed)}
+                        >
+                          Delete
                         </button>
                       </div>
                     </td>

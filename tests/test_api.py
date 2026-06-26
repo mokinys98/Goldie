@@ -1,6 +1,7 @@
 import os
 import uuid
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 
 os.environ["DATABASE_URL"] = "sqlite:///./.pytest-goldie.db"
 os.environ["JWT_SECRET"] = "test-secret-that-is-longer-than-thirty-two-bytes"
@@ -17,11 +18,22 @@ from goldie_api.backtests import BacktestProgressReporter, execute_backtest
 from goldie_api.maintenance import prune_market_quotes
 from goldie_api.main import app
 from goldie_api.models import (
+    Agent,
+    BacktestTrade,
     Bot,
     Candle,
     BacktestExperiment,
     ConfigVersion,
+    CollectorCommand,
+    CollectorInstrumentConfiguration,
+    IngestionEvent,
+    InstrumentSpecification,
     MarketTick,
+    MarketFeed,
+    OptimizationRun,
+    OptimizationTrial,
+    OptimizationTrialTrade,
+    PaperAccount,
     Run,
     Signal,
     SignalOutcome,
@@ -125,6 +137,374 @@ def test_binance_collector_instrument_and_feed_registration() -> None:
         assert rows[0]["market_feed_id"] == feed.json()["feed"]["id"]
 
 
+def test_collector_feed_hard_delete_removes_dependents_and_disables_instrument() -> None:
+    Base.metadata.drop_all(engine)
+    Base.metadata.create_all(engine)
+    now = datetime.now(UTC).replace(microsecond=0)
+    money = Decimal("1.0")
+    with TestClient(app) as client:
+        headers = login(client)
+        instrument = client.post(
+            "/api/v1/collector/instruments",
+            headers=headers,
+            json={
+                "provider": "oanda",
+                "environment": "practice",
+                "provider_symbol": "EUR_USD",
+            },
+        )
+        assert instrument.status_code == 201
+        registration = client.post(
+            "/api/v1/market-feeds/register",
+            headers={"X-Agent-Token": "test-agent-token"},
+            json={
+                "provider": "oanda",
+                "environment": "practice",
+                "canonical_symbol": "EURUSD",
+                "provider_symbol": "EUR_USD",
+                "agent_name": "delete-test-agent",
+            },
+        ).json()
+        feed_id = uuid.UUID(registration["feed"]["id"])
+        agent_id = uuid.UUID(registration["agent"]["id"])
+        with SessionLocal() as db:
+            bot = Bot(name="Delete feed bot", mode="PAPER", market_feed_id=feed_id)
+            db.add(bot)
+            db.flush()
+            config = ConfigVersion(
+                bot_id=bot.id,
+                version=1,
+                status="ACTIVE",
+                config={"market": {"symbol": "EURUSD"}},
+            )
+            db.add(config)
+            db.flush()
+            bot.active_config_version_id = config.id
+            run = Run(bot_id=bot.id, config_version_id=config.id, mode="SHADOW", status="ACTIVE")
+            backtest_run = Run(
+                bot_id=bot.id,
+                config_version_id=config.id,
+                mode="BACKTEST",
+                status="SUCCEEDED",
+            )
+            optimization_run_row = Run(
+                bot_id=bot.id,
+                config_version_id=config.id,
+                mode="OPTIMIZATION",
+                status="SUCCEEDED",
+            )
+            db.add_all([run, backtest_run, optimization_run_row])
+            db.flush()
+            signal = Signal(
+                bot_id=bot.id,
+                run_id=run.id,
+                config_version_id=config.id,
+                observed_at=now,
+                signal="BUY",
+                reason_code="TEST",
+                inputs={},
+            )
+            db.add(signal)
+            db.flush()
+            db.add_all(
+                [
+                    SignalOutcome(
+                        signal_id=signal.id,
+                        bot_id=bot.id,
+                        run_id=run.id,
+                        config_version_id=config.id,
+                        direction="LONG",
+                        status="CLOSED",
+                        result="WIN",
+                    ),
+                    PaperAccount(
+                        bot_id=bot.id,
+                        initial_balance=money,
+                        balance=money,
+                        equity=money,
+                        available_cash=money,
+                    ),
+                    InstrumentSpecification(
+                        market_feed_id=feed_id,
+                        agent_id=agent_id,
+                        canonical_symbol="EURUSD",
+                        provider_symbol="EUR_USD",
+                        display_precision=5,
+                        pip_location=-4,
+                        point=Decimal("0.0001"),
+                        source="oanda",
+                        provider_metadata={},
+                    ),
+                    MarketTick(
+                        market_feed_id=feed_id,
+                        agent_id=agent_id,
+                        symbol="EURUSD",
+                        observed_at=now,
+                        bid=money,
+                        ask=Decimal("1.1"),
+                    ),
+                    Candle(
+                        market_feed_id=feed_id,
+                        agent_id=agent_id,
+                        symbol="EURUSD",
+                        timeframe="M1",
+                        opened_at=now,
+                        open=money,
+                        high=money,
+                        low=money,
+                        close=money,
+                    ),
+                    IngestionEvent(
+                        event_id=uuid.uuid4(),
+                        event_type="market.quote",
+                        market_feed_id=feed_id,
+                        agent_id=agent_id,
+                        sent_at=now,
+                        result={},
+                    ),
+                    CollectorCommand(
+                        market_feed_id=feed_id,
+                        command="BACKFILL",
+                        status="SUCCEEDED",
+                        payload={},
+                        progress={},
+                        result={},
+                    ),
+                ]
+            )
+            backtest = BacktestExperiment(
+                bot_id=bot.id,
+                config_version_id=config.id,
+                market_feed_id=feed_id,
+                run_id=backtest_run.id,
+                status="SUCCEEDED",
+                date_from=now - timedelta(days=1),
+                date_to=now,
+                initial_capital=Decimal("1000"),
+                fee_maker=money,
+                fee_taker=money,
+                slippage_small=money,
+                slippage_medium=money,
+                config_snapshot={},
+            )
+            optimization = OptimizationRun(
+                bot_id=bot.id,
+                config_version_id=config.id,
+                market_feed_id=feed_id,
+                run_id=optimization_run_row.id,
+                status="SUCCEEDED",
+                date_from=now - timedelta(days=1),
+                date_to=now,
+                n_trials=1,
+                initial_capital=Decimal("1000"),
+                fee_maker=money,
+                fee_taker=money,
+                slippage_small=money,
+                slippage_medium=money,
+                config_snapshot={},
+            )
+            db.add_all([backtest, optimization])
+            db.flush()
+            trial = OptimizationTrial(
+                optimization_run_id=optimization.id,
+                trial_number=1,
+                status="SUCCEEDED",
+                sampled_parameters={},
+                metrics={},
+            )
+            db.add(trial)
+            db.flush()
+            db.add_all(
+                [
+                    BacktestTrade(
+                        experiment_id=backtest.id,
+                        direction="LONG",
+                        signal_at=now,
+                        opened_at=now,
+                        closed_at=now,
+                        entry_price=money,
+                        exit_price=money,
+                        stop_loss=money,
+                        take_profit=money,
+                        volume=money,
+                        risk_amount=money,
+                        close_reason="TEST",
+                        gross_pnl=money,
+                        commission=money,
+                        net_pnl=money,
+                        pnl_points=money,
+                        r_multiple=money,
+                        mfe_points=money,
+                        mae_points=money,
+                        duration_seconds=60,
+                    ),
+                    OptimizationTrialTrade(
+                        trial_id=trial.id,
+                        direction="LONG",
+                        signal_reason="TEST",
+                        signal_at=now,
+                        opened_at=now,
+                        closed_at=now,
+                        entry_price=money,
+                        exit_price=money,
+                        stop_loss=money,
+                        take_profit=money,
+                        close_reason="TEST",
+                        gross_pnl=money,
+                        commission=money,
+                        net_pnl=money,
+                        pnl_points=money,
+                        r_multiple=money,
+                        mfe_points=money,
+                        mae_points=money,
+                        duration_seconds=60,
+                        session={},
+                    ),
+                ]
+            )
+            db.commit()
+
+        deleted = client.delete(f"/api/v1/collector/feeds/{feed_id}", headers=headers)
+        assert deleted.status_code == 200
+        assert deleted.json()["counts"]["market_feeds"] == 1
+        assert deleted.json()["counts"]["bots"] == 1
+        assert deleted.json()["counts"]["candles"] == 1
+
+        with SessionLocal() as db:
+            for model in (
+                MarketFeed,
+                Agent,
+                Bot,
+                ConfigVersion,
+                Run,
+                Signal,
+                SignalOutcome,
+                BacktestExperiment,
+                BacktestTrade,
+                OptimizationRun,
+                OptimizationTrial,
+                OptimizationTrialTrade,
+                MarketTick,
+                Candle,
+                InstrumentSpecification,
+                IngestionEvent,
+                CollectorCommand,
+            ):
+                column_name = "event_id" if model is IngestionEvent else "id"
+                assert row_count(db, model, column_name) == 0
+            stored = db.scalar(select(CollectorInstrumentConfiguration))
+            assert stored is not None
+            assert stored.enabled is False
+
+        polled = client.post(
+            "/api/v1/collector/instances/register",
+            headers={"X-Agent-Token": "test-agent-token"},
+            json={
+                "name": "delete-test-collector",
+                "defaults": {
+                    "quote_interval_seconds": 5,
+                    "candle_poll_seconds": 15,
+                    "heartbeat_seconds": 10,
+                    "backfill_days": 30,
+                    "backfill_batch_size": 50,
+                    "configuration_retry_seconds": 900,
+                },
+                "instruments": ["EUR_USD"],
+            },
+        ).json()["instance"]
+        control = client.post(
+            f"/api/v1/collector/instances/{polled['id']}/poll",
+            headers={"X-Agent-Token": "test-agent-token"},
+            json={},
+        ).json()
+        row = next(item for item in control["instruments"] if item["provider_symbol"] == "EUR_USD")
+        assert row["enabled"] is False
+        assert row["market_feed_id"] is None
+
+
+def test_deleted_collector_feed_can_be_readded_by_reenabling_tombstone() -> None:
+    Base.metadata.drop_all(engine)
+    Base.metadata.create_all(engine)
+    with TestClient(app) as client:
+        headers = login(client)
+        client.post(
+            "/api/v1/collector/instruments",
+            headers=headers,
+            json={
+                "provider": "oanda",
+                "environment": "practice",
+                "provider_symbol": "EUR_USD",
+            },
+        )
+        feed_id = register_feed(client, "EURUSD", "EUR_USD")
+        deleted = client.delete(f"/api/v1/collector/feeds/{feed_id}", headers=headers)
+        assert deleted.status_code == 200
+
+        recreated = client.post(
+            "/api/v1/collector/instruments",
+            headers=headers,
+            json={
+                "provider": "oanda",
+                "environment": "practice",
+                "provider_symbol": "EUR_USD",
+            },
+        )
+        assert recreated.status_code == 201
+        assert recreated.json()["enabled"] is True
+
+
+def test_collector_feed_delete_blocks_active_backtest_or_optimization() -> None:
+    Base.metadata.drop_all(engine)
+    Base.metadata.create_all(engine)
+    now = datetime.now(UTC).replace(microsecond=0)
+    money = Decimal("1.0")
+    with TestClient(app) as client:
+        headers = login(client)
+        feed_id = uuid.UUID(register_feed(client, "EURUSD", "EUR_USD"))
+        with SessionLocal() as db:
+            bot = Bot(name="Active backtest bot", market_feed_id=feed_id)
+            db.add(bot)
+            db.flush()
+            config = ConfigVersion(
+                bot_id=bot.id,
+                version=1,
+                status="ACTIVE",
+                config={"market": {"symbol": "EURUSD"}},
+            )
+            db.add(config)
+            db.flush()
+            run = Run(
+                bot_id=bot.id,
+                config_version_id=config.id,
+                mode="BACKTEST",
+                status="QUEUED",
+            )
+            db.add(run)
+            db.flush()
+            db.add(
+                BacktestExperiment(
+                    bot_id=bot.id,
+                    config_version_id=config.id,
+                    market_feed_id=feed_id,
+                    run_id=run.id,
+                    status="RUNNING",
+                    date_from=now - timedelta(days=1),
+                    date_to=now,
+                    initial_capital=Decimal("1000"),
+                    fee_maker=money,
+                    fee_taker=money,
+                    slippage_small=money,
+                    slippage_medium=money,
+                    config_snapshot={},
+                )
+            )
+            db.commit()
+
+        deleted = client.delete(f"/api/v1/collector/feeds/{feed_id}", headers=headers)
+        assert deleted.status_code == 409
+        assert "active backtests or optimizations" in deleted.json()["detail"]
+
+
 def test_strategy_catalog_endpoint() -> None:
     Base.metadata.drop_all(engine)
     Base.metadata.create_all(engine)
@@ -166,6 +546,10 @@ def register_feed(client: TestClient, symbol: str, provider_symbol: str) -> str:
     )
     assert response.status_code == 201
     return response.json()["feed"]["id"]
+
+
+def row_count(db: Session, model, column_name: str = "id") -> int:
+    return db.scalar(select(func.count(getattr(model, column_name)))) or 0
 
 
 def create_strategy(

@@ -101,7 +101,14 @@ describe("CollectorPage", () => {
           status: "PENDING",
         } as never;
       }
-      if (options?.method === "DELETE") {
+      if (options?.method === "DELETE" && path === "/api/v1/collector/feeds/feed-1") {
+        return {
+          deleted: true,
+          market_feed_id: "feed-1",
+          counts: { market_feeds: 1, candles: 12, market_ticks: 20, bots: 1 },
+        } as never;
+      }
+      if (options?.method === "DELETE" && path === "/api/v1/collector/commands/command-1") {
         return {
           id: "command-1",
           command: "BACKFILL",
@@ -167,11 +174,27 @@ describe("CollectorPage", () => {
 
   it("deletes a pending collector command", async () => {
     renderPage();
-    const deleteButton = await screen.findByRole("button", { name: "Delete" });
-    fireEvent.click(deleteButton);
+    const deleteButtons = await screen.findAllByRole("button", { name: "Delete" });
+    fireEvent.click(deleteButtons[1]);
     await waitFor(() => {
       expect(api).toHaveBeenCalledWith(
         "/api/v1/collector/commands/command-1",
+        expect.objectContaining({ method: "DELETE" }),
+      );
+    });
+  });
+
+  it("hard deletes a feed from the row action after destructive confirmation", async () => {
+    renderPage();
+    const deleteButtons = await screen.findAllByRole("button", { name: "Delete" });
+    fireEvent.click(deleteButtons[0]);
+    await waitFor(() => {
+      expect(window.confirm).toHaveBeenCalledWith(
+        "Delete EUR_USD? This permanently deletes the feed, market data, "
+          + "linked bots, backtests, and optimizations.",
+      );
+      expect(api).toHaveBeenCalledWith(
+        "/api/v1/collector/feeds/feed-1",
         expect.objectContaining({ method: "DELETE" }),
       );
     });
