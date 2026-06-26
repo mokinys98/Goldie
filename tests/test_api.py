@@ -1055,6 +1055,81 @@ def test_feed_pause_is_immediate_persistent_and_resume_skips_gap() -> None:
         assert resume_from.microsecond == 0
 
 
+def test_single_feed_resume_clears_global_pause_without_resuming_other_feeds() -> None:
+    Base.metadata.drop_all(engine)
+    Base.metadata.create_all(engine)
+    agent_headers = {"X-Agent-Token": "test-agent-token"}
+    with TestClient(app) as client:
+        client.post(
+            "/api/v1/collector/instances/register",
+            headers=agent_headers,
+            json={
+                "name": "single-resume-test-collector",
+                "defaults": {
+                    "quote_interval_seconds": 5,
+                    "candle_poll_seconds": 15,
+                    "heartbeat_seconds": 10,
+                    "backfill_days": 30,
+                    "backfill_batch_size": 50,
+                    "configuration_retry_seconds": 900,
+                },
+                "instruments": ["EUR_USD", "USD_JPY"],
+            },
+        )
+        eur_feed = client.post(
+            "/api/v1/market-feeds/register",
+            headers=agent_headers,
+            json={
+                "provider": "oanda",
+                "environment": "practice",
+                "canonical_symbol": "EURUSD",
+                "provider_symbol": "EUR_USD",
+                "agent_name": "single-resume-test-agent",
+            },
+        ).json()["feed"]
+        jpy_feed = client.post(
+            "/api/v1/market-feeds/register",
+            headers=agent_headers,
+            json={
+                "provider": "oanda",
+                "environment": "practice",
+                "canonical_symbol": "USDJPY",
+                "provider_symbol": "USD_JPY",
+                "agent_name": "single-resume-test-agent",
+            },
+        ).json()["feed"]
+        headers = login(client)
+
+        paused_all = client.post(
+            "/api/v1/collector/commands",
+            headers=headers,
+            json={"command": "PAUSE", "payload": {}},
+        ).json()
+        client.patch(
+            f"/api/v1/collector/commands/{paused_all['id']}",
+            headers=agent_headers,
+            json={"status": "SUCCEEDED", "result": {}, "progress": {}},
+        )
+
+        resumed_one = client.post(
+            "/api/v1/collector/commands",
+            headers=headers,
+            json={"command": "RESUME", "market_feed_id": eur_feed["id"], "payload": {}},
+        ).json()
+        client.patch(
+            f"/api/v1/collector/commands/{resumed_one['id']}",
+            headers=agent_headers,
+            json={"status": "SUCCEEDED", "result": {}, "progress": {}},
+        )
+
+        settings = client.get("/api/v1/collector/settings", headers=headers).json()
+        assert settings["configuration"]["globally_paused"] is False
+        feeds = client.get("/api/v1/market-feeds", headers=headers).json()
+        by_id = {item["id"]: item for item in feeds}
+        assert by_id[eur_feed["id"]]["status"] == "REGISTERED"
+        assert by_id[jpy_feed["id"]]["status"] == "PAUSED"
+
+
 def test_feed_heartbeat_publishes_once_and_excludes_archived_bots(monkeypatch) -> None:
     Base.metadata.drop_all(engine)
     Base.metadata.create_all(engine)

@@ -1047,6 +1047,7 @@ def update_command(
                 if command.command == "PAUSE":
                     pause_feed(feed, now)
                 else:
+                    get_configuration(db).globally_paused = False
                     resume_feed(db, feed, now)
         else:
             if command.command == "PAUSE":

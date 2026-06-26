@@ -43,6 +43,15 @@ def command(command_id: str, feed_id: str) -> dict:
     }
 
 
+def resume_command(command_id: str, feed_id: str | None = None) -> dict:
+    return {
+        "id": command_id,
+        "command": "RESUME",
+        "market_feed_id": feed_id,
+        "payload": {},
+    }
+
+
 def test_backfills_can_run_for_different_feeds(monkeypatch) -> None:
     monkeypatch.setattr(
         "goldie_collector.__main__.threading.Thread",
@@ -84,4 +93,22 @@ def test_second_backfill_for_same_feed_is_rejected(monkeypatch) -> None:
             "FAILED",
             "Another backfill is active for this feed",
         )
+    ]
+
+
+def test_single_feed_resume_clears_global_pause_in_supervisor() -> None:
+    supervisor = object.__new__(CollectorSupervisor)
+    supervisor.feed_symbols = {"feed-eur-usd": "oanda:practice:EUR_USD"}
+    supervisor.workers = {}
+    supervisor.backfill_threads = {}
+    supervisor.control_client = FakeControlClient()
+    supervisor.globally_paused = True
+    supervisor.paused = {"oanda:practice:EUR_USD"}
+
+    supervisor.handle_command(resume_command("resume-command", "feed-eur-usd"))
+
+    assert supervisor.globally_paused is False
+    assert supervisor.paused == set()
+    assert supervisor.control_client.updates == [
+        ("resume-command", "SUCCEEDED", None)
     ]

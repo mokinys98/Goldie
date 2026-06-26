@@ -403,6 +403,7 @@ class CollectorSupervisor:
             )
         elif action == "RESUME":
             if command.get("market_feed_id"):
+                self.globally_paused = False
                 self.paused.difference_update(symbols)
             else:
                 self.globally_paused = False
