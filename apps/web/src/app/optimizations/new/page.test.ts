@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { optimizationProfiles } from "./profiles";
+import { defaultConfigId, getEligibleConfigs, runButtonLabel } from "./selection";
+import type { Bot, ConfigVersion } from "@/lib/types";
 
 function profilePeriodDays(fromTo: string): number {
   const [from, to] = fromTo.split(":");
@@ -31,5 +33,26 @@ describe("optimizationProfiles", () => {
     expect(profile?.trials).toBe("100");
     expect(profile?.datasetEstimate).toContain("502,560");
     expect(profile?.runtimeEstimate).toContain("2 minutes or faster");
+  });
+});
+
+describe("bulk optimization selection", () => {
+  const bot = { active_config_version_id: "active" } as Bot;
+  const configs = [
+    { id: "draft", status: "DRAFT" },
+    { id: "validated", status: "VALIDATED" },
+    { id: "active", status: "ACTIVE" },
+  ] as ConfigVersion[];
+
+  it("uses the active configuration and excludes drafts", () => {
+    const eligible = getEligibleConfigs(configs);
+
+    expect(eligible.map((item) => item.id)).toEqual(["validated", "active"]);
+    expect(defaultConfigId(bot, eligible)).toBe("active");
+  });
+
+  it("shows the queued run count in the bulk action", () => {
+    expect(runButtonLabel(1)).toBe("Run optimization");
+    expect(runButtonLabel(3)).toBe("Run 3 optimizations");
   });
 });

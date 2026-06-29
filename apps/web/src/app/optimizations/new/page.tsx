@@ -1,8 +1,8 @@
 "use client";
 
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { FormEvent, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { useQuery } from "@tanstack/react-query";
+import { useQueries, useQuery } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import type {
   Bot,
@@ -12,6 +12,7 @@ import type {
   StrategyMetadata,
 } from "@/lib/types";
 import { optimizationProfiles, type OptimizationProfileKey } from "./profiles";
+import { defaultConfigId, getEligibleConfigs, runButtonLabel } from "./selection";
 
 function inputDate(daysAgo: number): string {
   const value = new Date(Date.now() - daysAgo * 86400000);
@@ -30,8 +31,8 @@ function optimizationPeriodDays(from: string, to: string): number {
 export default function NewOptimizationPage() {
   const router = useRouter();
   const [profileKey, setProfileKey] = useState<OptimizationProfileKey>("realistic");
-  const [botId, setBotId] = useState("");
-  const [configId, setConfigId] = useState("");
+  const [selectedBotIds, setSelectedBotIds] = useState<string[]>([]);
+  const [configIds, setConfigIds] = useState<Record<string, string>>({});
   const [dateFrom, setDateFrom] = useState(profileDate("2023-01-01"));
   const [dateTo, setDateTo] = useState(profileDate("2025-01-01"));
   const [trialCount, setTrialCount] = useState("100");
@@ -58,33 +59,44 @@ export default function NewOptimizationPage() {
     queryKey: ["strategies"],
     queryFn: () => api<StrategyMetadata[]>("/api/v1/strategies"),
   });
-  const configs = useQuery({
-    queryKey: ["bot-configs", botId],
-    queryFn: () => api<ConfigVersion[]>(`/api/v1/bots/${botId}/config-versions`),
-    enabled: Boolean(botId),
+  const configQueries = useQueries({
+    queries: selectedBotIds.map((selectedBotId) => ({
+      queryKey: ["bot-configs", selectedBotId],
+      queryFn: () => api<ConfigVersion[]>(`/api/v1/bots/${selectedBotId}/config-versions`),
+    })),
   });
-  const selectedBot = bots.data?.find((bot) => bot.id === botId);
-  const selectedFeed = feeds.data?.find((feed) => feed.id === selectedBot?.market_feed_id);
-  const eligibleConfigs = (configs.data ?? []).filter((item) =>
-    ["ACTIVE", "VALIDATED", "SUPERSEDED"].includes(item.status),
+  const selectedBots = (bots.data ?? []).filter((bot) => selectedBotIds.includes(bot.id));
+  const configsByBot = new Map(
+    selectedBotIds.map((selectedBotId, index) => [selectedBotId, configQueries[index]?.data ?? []]),
   );
-  const selectedConfig = eligibleConfigs.find((item) => item.id === configId);
-  const selectedStrategy = strategies.data?.find(
-    (item) => item.name === selectedConfig?.config.strategy.name,
-  );
-  const parameterNames = useMemo(
-    () => Object.keys(selectedStrategy?.parameters ?? {}),
-    [selectedStrategy],
+  const botSelections = selectedBots.map((bot) => {
+    const eligibleConfigs = getEligibleConfigs(configsByBot.get(bot.id) ?? []);
+    const configId = configIds[bot.id] ?? defaultConfigId(bot, eligibleConfigs);
+    return {
+      bot,
+      configId,
+      config: eligibleConfigs.find((item) => item.id === configId),
+      eligibleConfigs,
+      feed: feeds.data?.find((feed) => feed.id === bot.market_feed_id),
+    };
+  });
+  const selectedParameters = (() => {
+    const names = new Set<string>();
+    for (const selection of botSelections) {
+      const strategy = strategies.data?.find(
+        (item) => item.name === selection.config?.config.strategy.name,
+      );
+      Object.keys(strategy?.parameters ?? {}).forEach((name) => names.add(name));
+    }
+    return [...names];
+  })();
+  const configsLoading = configQueries.some((query) => query.isLoading);
+  const invalidSelection = botSelections.some(
+    ({ bot, configId }) => !bot.market_feed_id || !configId,
   );
   const selectedProfile = optimizationProfiles.find((item) => item.key === profileKey);
   const customProfile = profileKey === "other";
 
-  useEffect(() => {
-    if (!botId && bots.data?.length) setBotId(bots.data[0].id);
-  }, [botId, bots.data]);
-  useEffect(() => {
-    setConfigId(eligibleConfigs[0]?.id ?? "");
-  }, [botId, configs.data]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
     if (!selectedProfile || selectedProfile.key === "other") return;
     const [from, to] = selectedProfile.fromTo.split(":");
@@ -107,8 +119,12 @@ export default function NewOptimizationPage() {
 
   async function submit(event: FormEvent) {
     event.preventDefault();
-    if (!selectedBot?.market_feed_id) {
-      setError("Selected bot has no market feed.");
+    if (!botSelections.length) {
+      setError("Select at least one bot.");
+      return;
+    }
+    if (invalidSelection) {
+      setError("Every selected bot needs a market feed and a validated configuration.");
       return;
     }
     if (optimizationPeriodDays(dateFrom, dateTo) > 365) {
@@ -118,34 +134,45 @@ export default function NewOptimizationPage() {
     setBusy(true);
     setError("");
     try {
-      const run = await api<OptimizationRun>("/api/v1/optimizations", {
-        method: "POST",
-        body: JSON.stringify({
-          bot_id: botId,
-          config_version_id: configId,
-          market_feed_id: selectedBot.market_feed_id,
-          date_from: new Date(dateFrom).toISOString(),
-          date_to: new Date(dateTo).toISOString(),
-          n_trials: Number(trialCount),
-          objective: "BALANCED",
-          initial_capital: initialCapital,
-          fill_mode: fillMode,
-          fee_maker: feeMaker,
-          fee_taker: feeTaker,
-          taker_slippage: takerSlippage,
-          slippage_small: slippageSmall,
-          slippage_medium: slippageMedium,
-          medium_impact: slippageMedium,
-          impact_model: impactModel,
-          model_sqrt_limit: modelSqrtLimit,
-          limit_fill_timeout_s: Number(limitFillTimeout),
-          min_qty_threshold: minQtyThreshold,
-          min_qty_check: minQtyCheck,
-        }),
-      });
-      router.push(`/optimizations/${run.id}`);
-    } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "Could not create optimization");
+      const results = await Promise.allSettled(
+        botSelections.map(({ bot, configId }) =>
+          api<OptimizationRun>("/api/v1/optimizations", {
+            method: "POST",
+            body: JSON.stringify({
+              bot_id: bot.id,
+              config_version_id: configId,
+              market_feed_id: bot.market_feed_id,
+              date_from: new Date(dateFrom).toISOString(),
+              date_to: new Date(dateTo).toISOString(),
+              n_trials: Number(trialCount),
+              objective: "BALANCED",
+              initial_capital: initialCapital,
+              fill_mode: fillMode,
+              fee_maker: feeMaker,
+              fee_taker: feeTaker,
+              taker_slippage: takerSlippage,
+              slippage_small: slippageSmall,
+              slippage_medium: slippageMedium,
+              medium_impact: slippageMedium,
+              impact_model: impactModel,
+              model_sqrt_limit: modelSqrtLimit,
+              limit_fill_timeout_s: Number(limitFillTimeout),
+              min_qty_threshold: minQtyThreshold,
+              min_qty_check: minQtyCheck,
+            }),
+          }),
+        ),
+      );
+      const created = results.flatMap((result) => result.status === "fulfilled" ? [result.value] : []);
+      const failedBotIds = results.flatMap((result, index) =>
+        result.status === "rejected" ? [botSelections[index].bot.id] : [],
+      );
+      if (failedBotIds.length) {
+        setSelectedBotIds(failedBotIds);
+        setError(`${created.length} of ${results.length} optimizations queued. ${failedBotIds.length} failed; retry the remaining selection.`);
+        return;
+      }
+      router.push(created.length === 1 ? `/optimizations/${created[0].id}` : "/optimizations");
     } finally {
       setBusy(false);
     }
@@ -202,29 +229,98 @@ export default function NewOptimizationPage() {
             execution model. Optuna trials optimize strategy parameters only.
           </div>
         )}
-        <label>
-          Bot
-          <select required value={botId} onChange={(event) => setBotId(event.target.value)}>
-            <option value="">Select bot</option>
-            {(bots.data ?? []).map((bot) => (
-              <option key={bot.id} value={bot.id}>{bot.name}</option>
-            ))}
-          </select>
-        </label>
-        <label>
-          Configuration version
-          <select required value={configId} onChange={(event) => setConfigId(event.target.value)}>
-            <option value="">Select validated configuration</option>
-            {eligibleConfigs.map((item) => (
-              <option key={item.id} value={item.id}>Version {item.version} - {item.status}</option>
-            ))}
-          </select>
-        </label>
-        <label>
-          Market feed
-          <input disabled value={selectedFeed?.provider_symbol ?? "No feed"} />
-        </label>
-        <label>Objective<input disabled value="BALANCED" /></label>
+        <div className="panel optimization-bot-picker">
+          <div className="selection-heading">
+            <div>
+              <h2>Bots</h2>
+              <p className="muted">Select every bot that should receive an optimization run.</p>
+            </div>
+            <div className="button-row">
+              <button
+                type="button"
+                className="button button-ghost"
+                disabled={!bots.data?.length}
+                onClick={() => setSelectedBotIds(
+                  (bots.data ?? []).filter((bot) => bot.market_feed_id).map((bot) => bot.id),
+                )}
+              >
+                Select all
+              </button>
+              <button
+                type="button"
+                className="button button-ghost"
+                disabled={!selectedBotIds.length}
+                onClick={() => setSelectedBotIds([])}
+              >
+                Clear
+              </button>
+            </div>
+          </div>
+          {bots.isLoading && <span className="muted">Loading bots...</span>}
+          {!bots.isLoading && !bots.data?.length && <span className="muted">No bots available.</span>}
+          <div className="selection-list optimization-bot-list">
+            {(bots.data ?? []).map((bot) => {
+              const feed = feeds.data?.find((item) => item.id === bot.market_feed_id);
+              return (
+                <label className="checkbox-row bulk-option" key={bot.id}>
+                  <input
+                    type="checkbox"
+                    disabled={!bot.market_feed_id}
+                    checked={selectedBotIds.includes(bot.id)}
+                    onChange={(event) => setSelectedBotIds((current) =>
+                      event.target.checked
+                        ? [...new Set([...current, bot.id])]
+                        : current.filter((item) => item !== bot.id),
+                    )}
+                  />
+                  <span>
+                    <strong>{bot.name}</strong>
+                    <small>{feed?.provider_symbol ?? "No market feed — unavailable"}</small>
+                  </span>
+                </label>
+              );
+            })}
+          </div>
+        </div>
+        {!!botSelections.length && (
+          <div className="panel optimization-config-panel">
+            <div className="section-title">
+              <div>
+                <h2>Configurations</h2>
+                <p>{botSelections.length} bot(s) selected. Choose a validated version for each.</p>
+              </div>
+              <span className="status">Objective: BALANCED</span>
+            </div>
+            <div className="optimization-config-list">
+              {botSelections.map(({ bot, configId, eligibleConfigs, feed }) => (
+                <div className="optimization-config-row" key={bot.id}>
+                  <div>
+                    <strong>{bot.name}</strong>
+                    <small>{feed?.provider_symbol ?? "No market feed"}</small>
+                  </div>
+                  <label>
+                    Configuration version
+                    <select
+                      required
+                      value={configId}
+                      onChange={(event) => setConfigIds((current) => ({
+                        ...current,
+                        [bot.id]: event.target.value,
+                      }))}
+                    >
+                      <option value="">Select validated configuration</option>
+                      {eligibleConfigs.map((item) => (
+                        <option key={item.id} value={item.id}>
+                          Version {item.version} - {item.status}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
         {selectedProfile && !customProfile && (
           <div className="panel">
             <h2>{selectedProfile.title} profile</h2>
@@ -400,17 +496,17 @@ export default function NewOptimizationPage() {
         <div className="panel">
           <h2>Search scope</h2>
           <p className="muted">Strategy parameters included in this optimization run.</p>
-          {!parameterNames.length ? (
+          {!selectedParameters.length ? (
             <p className="muted">
-              Choose a validated strategy configuration to preview searchable
+              Choose bots with validated strategy configurations to preview searchable
               parameters.
             </p>
           ) : (
             <div className="key-values">
-              {parameterNames.map((name) => (
+              {selectedParameters.map((name) => (
                 <div key={name}>
                   <dt>{name}</dt>
-                  <dd>{String(selectedConfig?.config.strategy.parameters[name] ?? "--")}</dd>
+                  <dd>Included in selected strategies</dd>
                 </div>
               ))}
             </div>
@@ -425,8 +521,13 @@ export default function NewOptimizationPage() {
           >
             Cancel
           </button>
-          <button className="button button-primary" disabled={busy || !configId}>
-            {busy ? "Queueing..." : "Run optimization"}
+          <button
+            className="button button-primary"
+            disabled={busy || configsLoading || !botSelections.length || invalidSelection}
+          >
+            {busy
+              ? `Queueing ${botSelections.length} optimization(s)...`
+              : runButtonLabel(botSelections.length)}
           </button>
         </div>
       </form>
