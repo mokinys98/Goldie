@@ -16,6 +16,7 @@ from goldie_api.db import Base, SessionLocal, engine
 from goldie_api.main import app
 from goldie_api.models import (
     Candle,
+    InstrumentSpecification,
     MarketFeed,
     OptimizationRun,
     OptimizationTrial,
@@ -242,6 +243,91 @@ def test_data_profile_excludes_oanda_weekend_market_closure_from_detected_gaps()
     assert profile["market_closed_m1_missing_minutes"] == 2880
     assert profile["detected_m1_gap_count"] == 1
     assert profile["detected_m1_missing_minutes"] == 2
+
+
+def test_data_profile_reports_atr_quantiles_for_search_and_validation_periods() -> None:
+    Base.metadata.drop_all(engine)
+    Base.metadata.create_all(engine)
+    start = datetime(2026, 1, 1, tzinfo=UTC)
+    split = start + timedelta(minutes=20)
+    end = split + timedelta(minutes=20)
+    with SessionLocal() as db:
+        feed = MarketFeed(
+            provider="oanda",
+            environment="practice",
+            canonical_symbol="XAUUSD",
+            provider_symbol="XAU_USD",
+        )
+        db.add(feed)
+        db.flush()
+        db.add(
+            InstrumentSpecification(
+                market_feed_id=feed.id,
+                canonical_symbol="XAUUSD",
+                provider_symbol="XAU_USD",
+                display_precision=1,
+                pip_location=-1,
+                point=Decimal("0.1"),
+                source="oanda",
+                provider_metadata={},
+            )
+        )
+        for index in range(40):
+            half_range = Decimal("1") if index < 20 else Decimal("2")
+            db.add(
+                Candle(
+                    market_feed_id=feed.id,
+                    symbol="XAUUSD",
+                    timeframe="M1",
+                    opened_at=start + timedelta(minutes=index),
+                    source="oanda",
+                    open=Decimal("100"),
+                    high=Decimal("100") + half_range,
+                    low=Decimal("100") - half_range,
+                    close=Decimal("100"),
+                    tick_volume=100,
+                    is_complete=True,
+                )
+            )
+        db.commit()
+
+        profile = build_data_profile(
+            db,
+            SimpleNamespace(
+                market_feed_id=feed.id,
+                date_from=start,
+                date_to=end,
+                config_snapshot={"strategy": {"parameters": {"atr_period": 3}}},
+            ),
+            search_period=(start, split),
+            validation_period=(split, end),
+            search_total_candles=20,
+            validation_total_candles=20,
+        )
+
+    quantiles = profile["atr_quantiles"]
+    assert quantiles["period"] == 3
+    assert quantiles["unit"] == "points"
+    assert quantiles["search"] == {
+        "count": 17,
+        "q05": 20,
+        "q10": 20,
+        "q25": 20,
+        "q50": 20,
+        "q75": 20,
+        "q90": 20,
+        "q95": 20,
+    }
+    assert quantiles["validation"] == {
+        "count": 17,
+        "q05": 40,
+        "q10": 40,
+        "q25": 40,
+        "q50": 40,
+        "q75": 40,
+        "q90": 40,
+        "q95": 40,
+    }
 
 
 def test_compute_balanced_score_penalizes_drawdown_and_low_trade_count() -> None:
@@ -773,6 +859,21 @@ def test_optimization_api_and_execution_flow(monkeypatch) -> None:
         assert llm_body["parameter_stability"]["insights"]
         assert llm_body["parameter_stability"]["distributions"]
         assert llm_body["parameter_stability"]["stable_candidates"]
+        atr_quantiles = llm_body["data_quality"]["atr_quantiles"]
+        assert atr_quantiles["period"] == 14
+        assert atr_quantiles["unit"] == "points"
+        assert set(atr_quantiles["search"]) == {
+            "count",
+            "q05",
+            "q10",
+            "q25",
+            "q50",
+            "q75",
+            "q90",
+            "q95",
+        }
+        assert atr_quantiles["search"]["count"] > 0
+        assert atr_quantiles["validation"]["count"] > 0
         assert llm_body["research_quality_gates"] == quality_gates
         assert "equity_curve" not in str(llm_body["top_trials"])
         assert "equity_curve" not in str(llm_body["best_candidate"])

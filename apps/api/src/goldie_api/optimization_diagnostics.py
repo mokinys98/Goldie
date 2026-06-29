@@ -1,6 +1,7 @@
 import json
 import math
-from collections import Counter, defaultdict
+from collections import Counter, defaultdict, deque
+from collections.abc import Iterable
 from datetime import datetime, timedelta
 from decimal import Decimal
 from typing import Any
@@ -11,6 +12,7 @@ from sqlalchemy.orm import Session
 
 from .models import (
     Candle,
+    InstrumentSpecification,
     MarketFeed,
     OptimizationRun,
     OptimizationTrial,
@@ -49,6 +51,8 @@ DRAWDOWN_BLOCK_PCT = 20
 CONSECUTIVE_LOSSES_WARN = 5
 CONSECUTIVE_LOSSES_BLOCK = 8
 GAP_SAMPLE_LIMIT = 10
+ATR_QUANTILES = (0.05, 0.10, 0.25, 0.50, 0.75, 0.90, 0.95)
+DEFAULT_ANALYTICS_ATR_PERIOD = 14
 
 
 def _number(value: Any) -> float | None:
@@ -87,6 +91,100 @@ def _range(values: list[float]) -> dict[str, float | None]:
         "p25": _percentile(values, 0.25),
         "p50": _percentile(values, 0.50),
         "p75": _percentile(values, 0.75),
+    }
+
+
+def _quantiles(values: list[float]) -> dict[str, float | int | None]:
+    return {
+        "count": len(values),
+        **{
+            f"q{int(quantile * 100):02d}": _percentile(values, quantile)
+            for quantile in ATR_QUANTILES
+        },
+    }
+
+
+def _configured_atr_period(optimization: OptimizationRun) -> int:
+    parameters = (
+        (getattr(optimization, "config_snapshot", None) or {})
+        .get("strategy", {})
+        .get("parameters", {})
+    )
+    value = parameters.get("atr_period", DEFAULT_ANALYTICS_ATR_PERIOD)
+    try:
+        period = int(value)
+    except (TypeError, ValueError):
+        return DEFAULT_ANALYTICS_ATR_PERIOD
+    return period if period > 0 else DEFAULT_ANALYTICS_ATR_PERIOD
+
+
+def _atr_values(
+    candles: Iterable[tuple[Decimal, Decimal, Decimal]],
+    *,
+    period: int,
+    point: Decimal | None,
+) -> list[float]:
+    divisor = point if point is not None and point > 0 else Decimal("1")
+    ranges: deque[Decimal] = deque()
+    rolling_total = Decimal("0")
+    previous_close: Decimal | None = None
+    values: list[float] = []
+    for close, high, low in candles:
+        if previous_close is None:
+            previous_close = close
+            continue
+        true_range = max(
+            high - low,
+            abs(high - previous_close),
+            abs(low - previous_close),
+        )
+        previous_close = close
+        ranges.append(true_range)
+        rolling_total += true_range
+        if len(ranges) > period:
+            rolling_total -= ranges.popleft()
+        if len(ranges) == period:
+            values.append(float(rolling_total / Decimal(period) / divisor))
+    return values
+
+
+def _atr_quantiles_by_period(
+    db: Session,
+    optimization: OptimizationRun,
+    *,
+    search_period: tuple[datetime, datetime] | None,
+    validation_period: tuple[datetime, datetime] | None,
+) -> dict[str, Any]:
+    period = _configured_atr_period(optimization)
+    point = db.scalar(
+        select(InstrumentSpecification.point)
+        .where(InstrumentSpecification.market_feed_id == optimization.market_feed_id)
+        .order_by(InstrumentSpecification.created_at.desc())
+        .limit(1)
+    )
+
+    def summarize(date_range: tuple[datetime, datetime] | None) -> dict[str, Any]:
+        if date_range is None:
+            return _quantiles([])
+        rows = db.execute(
+            select(Candle.close, Candle.high, Candle.low)
+            .where(
+                Candle.market_feed_id == optimization.market_feed_id,
+                Candle.timeframe == "M1",
+                Candle.is_complete.is_(True),
+                Candle.opened_at >= date_range[0],
+                Candle.opened_at < date_range[1],
+            )
+            .order_by(Candle.opened_at)
+            .execution_options(stream_results=True, yield_per=2000)
+        )
+        return _quantiles(_atr_values(rows.tuples(), period=period, point=point))
+
+    return {
+        "period": period,
+        "unit": "points" if point is not None and point > 0 else "price",
+        "search": summarize(search_period),
+        "validation": summarize(validation_period),
     }
 
 
@@ -284,6 +382,12 @@ def build_data_profile(
     )
     feed = db.get(MarketFeed, optimization.market_feed_id)
     gap_summary = _summarize_m1_gaps(ordered_times, feed=feed)
+    atr_quantiles = _atr_quantiles_by_period(
+        db,
+        optimization,
+        search_period=search_period,
+        validation_period=validation_period,
+    )
     return jsonable_encoder(
         {
             "market_feed_id": optimization.market_feed_id,
@@ -306,6 +410,7 @@ def build_data_profile(
             "validation_candles": validation_total_candles,
             "complete_candles": len(ordered_times),
             "incomplete_candles": incomplete_count,
+            "atr_quantiles": atr_quantiles,
             "gap_detection_policy": (
                 "OANDA weekend market-closed minutes are reported separately and "
                 "excluded from detected_m1_gap_count."

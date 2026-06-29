@@ -1,10 +1,16 @@
 "use client";
 
 import Link from "next/link";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "@/lib/api";
-import type { Bot, OptimizationRun } from "@/lib/types";
+import { normalizeBotConfig } from "@/lib/config";
+import type {
+  Bot,
+  OptimizationLlmContext,
+  OptimizationResultsExport,
+  OptimizationRun,
+} from "@/lib/types";
 import { StatusPill } from "@/components/status-pill";
 
 export default function OptimizationsPage() {
@@ -13,6 +19,11 @@ export default function OptimizationsPage() {
   const [statusFilter, setStatusFilter] = useState("");
   const [fillModeFilter, setFillModeFilter] = useState("");
   const [scoreFilter, setScoreFilter] = useState("");
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set());
+  const [exportBusy, setExportBusy] = useState(false);
+  const [exportError, setExportError] = useState<string | null>(null);
+  const [exportMessage, setExportMessage] = useState<string | null>(null);
+  const selectAllRef = useRef<HTMLInputElement>(null);
   const runs = useQuery({
     queryKey: ["optimizations"],
     queryFn: () => api<OptimizationRun[]>("/api/v1/optimizations"),
@@ -55,6 +66,16 @@ export default function OptimizationsPage() {
     );
   });
   const filtersActive = Boolean(search || botFilter || statusFilter || fillModeFilter || scoreFilter);
+  const visibleIds = filteredRows.map((item) => item.id);
+  const visibleSelectedCount = visibleIds.filter((id) => selectedIds.has(id)).length;
+  const allVisibleSelected = visibleIds.length > 0 && visibleSelectedCount === visibleIds.length;
+  const selectedRows = rows.filter((item) => selectedIds.has(item.id));
+
+  useEffect(() => {
+    if (selectAllRef.current) {
+      selectAllRef.current.indeterminate = visibleSelectedCount > 0 && !allVisibleSelected;
+    }
+  }, [allVisibleSelected, visibleSelectedCount]);
 
   function clearFilters() {
     setSearch("");
@@ -62,6 +83,59 @@ export default function OptimizationsPage() {
     setStatusFilter("");
     setFillModeFilter("");
     setScoreFilter("");
+  }
+
+  function toggleSelection(id: string, checked: boolean) {
+    setSelectedIds((current) => {
+      const next = new Set(current);
+      if (checked) next.add(id);
+      else next.delete(id);
+      return next;
+    });
+  }
+
+  function toggleAllVisible(checked: boolean) {
+    setSelectedIds((current) => {
+      const next = new Set(current);
+      visibleIds.forEach((id) => {
+        if (checked) next.add(id);
+        else next.delete(id);
+      });
+      return next;
+    });
+  }
+
+  async function exportSelected(kind: "results" | "llm-context") {
+    if (!selectedRows.length || exportBusy) return;
+    setExportBusy(true);
+    setExportError(null);
+    setExportMessage(null);
+
+    try {
+      for (const item of selectedRows) {
+        const config = normalizeBotConfig(item.config_snapshot);
+        const isLlmContext = kind === "llm-context";
+        const payload = isLlmContext
+          ? await api<OptimizationLlmContext>(`/api/v1/optimizations/${item.id}/llm-context`)
+          : await api<OptimizationResultsExport>(`/api/v1/optimizations/${item.id}/export`);
+        downloadJson(
+          payload,
+          optimizationExportFilename(
+            config.strategy.name,
+            config.market.symbol,
+            item.id,
+            isLlmContext,
+          ),
+        );
+      }
+      setExportMessage(
+        `Exported ${selectedRows.length} ${selectedRows.length === 1 ? "optimization" : "optimizations"}.`,
+      );
+    } catch (reason) {
+      setExportError(reason instanceof Error ? reason.message : "Could not export selected optimizations");
+    } finally {
+      setExportBusy(false);
+    }
   }
 
   return (
@@ -132,17 +206,76 @@ export default function OptimizationsPage() {
               <button className="button button-secondary" type="button" onClick={clearFilters}>Clear filters</button>
             </div>
           ) : (
-            <div className="table-wrap">
-              <table>
+            <>
+              {exportError && <div className="error-box optimization-export-feedback">{exportError}</div>}
+              {exportMessage && <div className="success-box optimization-export-feedback">{exportMessage}</div>}
+              {!!selectedRows.length && (
+                <div className="button-row optimization-selection-actions" aria-live="polite">
+                  <span>
+                    <strong>{selectedRows.length}</strong>
+                    {" selected"}
+                  </span>
+                  <button
+                    className="button button-secondary"
+                    disabled={exportBusy}
+                    onClick={() => void exportSelected("results")}
+                    type="button"
+                  >
+                    {exportBusy ? "Preparing..." : "Results JSON"}
+                  </button>
+                  <button
+                    className="button button-secondary"
+                    disabled={exportBusy}
+                    onClick={() => void exportSelected("llm-context")}
+                    type="button"
+                  >
+                    {exportBusy ? "Preparing..." : "LLM context JSON"}
+                  </button>
+                  <button
+                    className="button button-ghost"
+                    disabled={exportBusy}
+                    onClick={() => setSelectedIds(new Set())}
+                    type="button"
+                  >
+                    Clear selection
+                  </button>
+                </div>
+              )}
+              <div className="table-wrap optimization-table">
+                <table>
                 <thead>
                   <tr>
-                    <th>Created</th><th>Bot</th><th>Period</th><th>Status</th>
-                    <th>Progress</th><th>Best objective score</th><th>Trials</th>
+                    <th className="optimization-select-cell">
+                      <input
+                        ref={selectAllRef}
+                        aria-label="Select all visible optimizations"
+                        checked={allVisibleSelected}
+                        className="optimization-select"
+                        onChange={(event) => toggleAllVisible(event.target.checked)}
+                        type="checkbox"
+                      />
+                    </th>
+                    <th>Created</th>
+                    <th>Bot</th>
+                    <th>Period</th>
+                    <th>Status</th>
+                    <th>Progress</th>
+                    <th>Best objective score</th>
+                    <th>Trials</th>
                   </tr>
                 </thead>
                 <tbody>
                   {filteredRows.map((item) => (
-                    <tr key={item.id}>
+                    <tr className={selectedIds.has(item.id) ? "is-selected" : undefined} key={item.id}>
+                      <td className="optimization-select-cell">
+                        <input
+                          aria-label={`Select optimization created ${new Date(item.created_at).toLocaleString()}`}
+                          checked={selectedIds.has(item.id)}
+                          className="optimization-select"
+                          onChange={(event) => toggleSelection(item.id, event.target.checked)}
+                          type="checkbox"
+                        />
+                      </td>
                       <td>
                         <Link className="table-link" href={`/optimizations/${item.id}`}>
                           {new Date(item.created_at).toLocaleString()}
@@ -161,8 +294,9 @@ export default function OptimizationsPage() {
                     </tr>
                   ))}
                 </tbody>
-              </table>
-            </div>
+                </table>
+              </div>
+            </>
           )}
         </>
       )}
@@ -178,4 +312,25 @@ function formatScore(value: string | number | null | undefined): string {
   if (value === null || value === undefined || value === "") return "--";
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed.toFixed(2) : String(value);
+}
+
+function downloadJson(payload: unknown, filename: string) {
+  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = filename;
+  anchor.click();
+  URL.revokeObjectURL(url);
+}
+
+function optimizationExportFilename(
+  strategy: string,
+  symbol: string,
+  optimizationId: string,
+  llmContext: boolean,
+): string {
+  const safe = `${strategy}-${symbol}`.replace(/[^a-zA-Z0-9_-]+/g, "-").toLowerCase();
+  const suffix = llmContext ? "-llm-context" : "";
+  return `${safe}-optimization-${optimizationId.slice(0, 8)}${suffix}.json`;
 }
