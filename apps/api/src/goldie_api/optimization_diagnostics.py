@@ -878,31 +878,43 @@ def build_llm_context(db: Session, optimization: OptimizationRun) -> dict[str, A
             .order_by(OptimizationTrial.phase.asc(), OptimizationTrial.trial_number.asc())
         )
     )
-    trial_ids = [trial.id for trial in trials]
-    trade_rows = (
+    succeeded = _successful_trials(trials)
+    search_trials = [trial for trial in succeeded if trial.phase == "STRATEGY_SEARCH"]
+    validation_trials = [
+        trial for trial in succeeded if trial.phase == "FIXED_CONFIG_VALIDATION"
+    ]
+    ranked_search = sorted(search_trials, key=lambda trial: _score(trial.score), reverse=True)
+    ranked_validation = sorted(
+        validation_trials,
+        key=lambda trial: _score(trial.score),
+        reverse=True,
+    )
+    worst = sorted(search_trials, key=lambda trial: _score(trial.score))[:5]
+
+    best_trial_number = (optimization.best_candidate or {}).get("trial_number")
+    selected_trial = next(
+        (
+            trial
+            for trial in succeeded
+            if trial.trial_number == best_trial_number
+        ),
+        (
+            ranked_validation[0]
+            if ranked_validation
+            else (ranked_search[0] if ranked_search else None)
+        ),
+    )
+    selected_trades = (
         list(
             db.scalars(
                 select(OptimizationTrialTrade)
-                .where(OptimizationTrialTrade.trial_id.in_(trial_ids))
-                .order_by(
-                    OptimizationTrialTrade.trial_id.asc(),
-                    OptimizationTrialTrade.opened_at.asc(),
-                )
+                .where(OptimizationTrialTrade.trial_id == selected_trial.id)
+                .order_by(OptimizationTrialTrade.closed_at.asc())
             )
         )
-        if trial_ids
+        if selected_trial is not None
         else []
     )
-    trades_by_trial: dict[Any, list[OptimizationTrialTrade]] = defaultdict(list)
-    for trade in trade_rows:
-        trades_by_trial[trade.trial_id].append(trade)
-
-    succeeded = _successful_trials(trials)
-    ranked = sorted(succeeded, key=lambda trial: _score(trial.score), reverse=True)
-    worst = sorted(succeeded, key=lambda trial: _score(trial.score))[:10]
-    validation = [
-        trial for trial in ranked if trial.phase == "FIXED_CONFIG_VALIDATION"
-    ][:10]
 
     def condition_counts(trial: OptimizationTrial) -> dict[str, Any]:
         return (
@@ -929,82 +941,17 @@ def build_llm_context(db: Session, optimization: OptimizationRun) -> dict[str, A
             add_condition_counts(by_phase[trial.phase], counts)
         return jsonable_encoder({"overall": overall, "by_phase": dict(by_phase)})
 
-    def trade_count(trial: OptimizationTrial) -> int:
-        persisted = len(trades_by_trial.get(trial.id, []))
-        if persisted:
-            return persisted
-        return int(_number((trial.summary or {}).get("total_trades")) or 0)
-
-    def trial_distributions() -> dict[str, Any]:
-        buckets = {"0": 0, "1_5": 0, "6_29": 0, "30_plus": 0}
-        for trial in trials:
-            count = trade_count(trial)
-            if count == 0:
-                buckets["0"] += 1
-            elif count <= 5:
-                buckets["1_5"] += 1
-            elif count <= 29:
-                buckets["6_29"] += 1
-            else:
-                buckets["30_plus"] += 1
-        return {
-            "status_counts": dict(Counter(trial.status for trial in trials)),
-            "phase_counts": dict(Counter(trial.phase for trial in trials)),
-            "trade_count_buckets": buckets,
-        }
-
-    def trade_payload(trade: OptimizationTrialTrade) -> dict[str, Any]:
-        return {
-            "entry_time": trade.opened_at,
-            "exit_time": trade.closed_at,
-            "direction": trade.direction,
-            "entry_price": trade.entry_price,
-            "exit_price": trade.exit_price,
-            "stop_loss": trade.stop_loss,
-            "take_profit": trade.take_profit,
-            "close_reason": trade.close_reason,
-            "pnl": trade.net_pnl,
-            "pnl_points": trade.pnl_points,
-            "r_multiple": trade.r_multiple,
-            "duration_seconds": trade.duration_seconds,
-            "session": trade.session,
-            "signal_reason": trade.signal_reason,
-            "mfe_points": trade.mfe_points,
-            "mae_points": trade.mae_points,
-        }
-
-    def trial_payload(trial: OptimizationTrial) -> dict[str, Any]:
-        return {
-            "id": trial.id,
-            "trial_number": trial.trial_number,
-            "phase": trial.phase,
-            "status": trial.status,
-            "score": trial.score,
-            "sampled_parameters": trial.sampled_parameters,
-            "config_overrides": trial.config_overrides,
-            "metrics": trial.metrics,
-            "summary": trial.summary,
-            "condition_pass_counts": condition_counts(trial),
-            "trades": [
-                trade_payload(trade)
-                for trade in trades_by_trial.get(trial.id, [])
-            ],
-            "error": trial.error,
-            "started_at": trial.started_at,
-            "completed_at": trial.completed_at,
-        }
-
     def compact_trial(trial: OptimizationTrial) -> dict[str, Any]:
         metrics = trial.metrics or {}
+        trial_summary = trial.summary or {}
         return {
-            "id": trial.id,
             "trial_number": trial.trial_number,
             "phase": trial.phase,
             "score": trial.score,
             "sampled_parameters": trial.sampled_parameters,
             "config_overrides": trial.config_overrides,
             "metrics": {
-                key: metrics.get(key)
+                key: metrics.get(key, trial_summary.get(key))
                 for key in (
                     "net_pnl",
                     "return_pct",
@@ -1013,62 +960,212 @@ def build_llm_context(db: Session, optimization: OptimizationRun) -> dict[str, A
                     "total_trades",
                     "win_rate",
                     "profit_factor",
+                    "expectancy",
                     "expectancy_r",
+                    "total_r",
                     "trade_sortino",
                     "max_consecutive_losses",
+                    "average_duration_seconds",
                 )
             },
-            "diagnostics": metrics.get("diagnostics", {}),
+        }
+
+    def quantiles(values: list[float]) -> dict[str, float | None]:
+        return {
+            "count": len(values),
+            "p05": _percentile(values, 0.05),
+            "p25": _percentile(values, 0.25),
+            "p50": _percentile(values, 0.50),
+            "p75": _percentile(values, 0.75),
+            "p95": _percentile(values, 0.95),
+        }
+
+    def aggregate_trades() -> dict[str, Any]:
+        monthly: dict[str, dict[str, Any]] = {}
+        directions: dict[str, dict[str, Any]] = {}
+        close_reasons: Counter[str] = Counter()
+        cumulative = Decimal("0")
+        peak = Decimal("0")
+        peak_at = None
+        drawdown_start = None
+        drawdown_end = None
+        max_drawdown = Decimal("0")
+
+        for trade in selected_trades:
+            month = trade.closed_at.strftime("%Y-%m")
+            month_bucket = monthly.setdefault(
+                month,
+                {"trades": 0, "wins": 0, "net_pnl": Decimal("0")},
+            )
+            month_bucket["trades"] += 1
+            month_bucket["wins"] += int(trade.net_pnl > 0)
+            month_bucket["net_pnl"] += trade.net_pnl
+
+            direction_bucket = directions.setdefault(
+                trade.direction,
+                {"trades": 0, "wins": 0, "net_pnl": Decimal("0")},
+            )
+            direction_bucket["trades"] += 1
+            direction_bucket["wins"] += int(trade.net_pnl > 0)
+            direction_bucket["net_pnl"] += trade.net_pnl
+            close_reasons[trade.close_reason] += 1
+
+            cumulative += trade.net_pnl
+            if cumulative > peak:
+                peak = cumulative
+                peak_at = trade.closed_at
+            drawdown = peak - cumulative
+            if drawdown > max_drawdown:
+                max_drawdown = drawdown
+                drawdown_start = peak_at
+                drawdown_end = trade.closed_at
+
+        for buckets in (monthly, directions):
+            for bucket in buckets.values():
+                bucket["win_rate"] = (
+                    bucket["wins"] * 100 / bucket["trades"]
+                    if bucket["trades"]
+                    else None
+                )
+
+        return {
+            "monthly": monthly,
+            "directions": directions,
+            "close_reasons": dict(close_reasons),
+            "drawdown": {
+                "maximum": max_drawdown,
+                "started_at": drawdown_start,
+                "ended_at": drawdown_end,
+            },
+        }
+
+    def compact_stable_candidate(candidate: dict[str, Any]) -> dict[str, Any]:
+        metrics = candidate.get("validation_metrics") or {}
+        return {
+            "trial_number": candidate.get("trial_number"),
+            "search_trial_number": candidate.get("search_trial_number"),
+            "sampled_parameters": candidate.get("sampled_parameters") or {},
+            "config_overrides": candidate.get("config_overrides") or {},
+            "search_score": candidate.get("search_score"),
+            "validation_score": candidate.get("validation_score"),
+            "score_degradation_pct": candidate.get("score_degradation_pct"),
+            "validation_metrics": {
+                key: metrics.get(key)
+                for key in CORE_TRIAL_METRICS
+                if key in metrics
+            },
         }
 
     summary = optimization.summary or {}
     data_profile = summary.get("data_profile") or {}
-    persisted_trade_count = len(trade_rows)
-    expected_trade_count = sum(trade_count(trial) for trial in trials)
+    decision_context = summary.get("decision_context") or {}
+    robustness = summary.get("robustness") or {}
+    trade_aggregates = aggregate_trades()
+    selected_metrics = selected_trial.metrics if selected_trial is not None else {}
+    selected_summary = selected_trial.summary if selected_trial is not None else {}
+    feed = db.get(MarketFeed, optimization.market_feed_id)
+    strategy = (optimization.config_snapshot or {}).get("strategy") or {}
     return jsonable_encoder(
         {
-            "schema_version": "goldie.optimization-llm-context.v2",
-            "optimization": {
-                "id": optimization.id,
-                "status": optimization.status,
-                "objective": optimization.objective,
+            "schema_version": "goldie.optimization-llm-context.v3",
+            "strategy": strategy.get("name"),
+            "symbol": data_profile.get("symbol") or (feed.canonical_symbol if feed else None),
+            "timeframe": "M1",
+            "date_range": {
                 "date_from": optimization.date_from,
                 "date_to": optimization.date_to,
-                "n_trials": optimization.n_trials,
-                "best_candidate": optimization.best_candidate,
             },
-            "run_context": {
-                "data_profile": data_profile,
-                "decision_context": summary.get("decision_context") or {},
-                "research_quality_gates": summary.get("research_quality_gates") or {},
-                "progress": optimization.progress,
-                "error": optimization.error,
+            "search_period": (
+                summary.get("search_period")
+                or data_profile.get("search_period")
+                or {}
+            ),
+            "validation_period": (
+                summary.get("validation_period")
+                or data_profile.get("validation_period")
+                or {}
+            ),
+            "data_quality": {
+                key: data_profile.get(key)
+                for key in (
+                    "complete_candles",
+                    "incomplete_candles",
+                    "search_candles",
+                    "validation_candles",
+                    "detected_m1_gap_count",
+                    "detected_m1_missing_minutes",
+                    "market_closed_m1_gap_count",
+                    "market_closed_m1_missing_minutes",
+                    "atr_quantiles",
+                    "volume_quantiles",
+                )
             },
-            "top_trials": [compact_trial(trial) for trial in ranked[:10]],
+            "objective": {
+                "name": optimization.objective,
+                "formula": decision_context.get("objective_formula"),
+                "trial_counts": {
+                    "requested_search": optimization.n_trials,
+                    "status": dict(Counter(trial.status for trial in trials)),
+                    "phase": dict(Counter(trial.phase for trial in trials)),
+                },
+            },
+            "search_space": (
+                decision_context.get("search_space")
+                or summary.get("search_space")
+                or []
+            ),
+            "fixed_config_grid": (
+                decision_context.get("fixed_config_grid")
+                or summary.get("fixed_config_grid")
+                or []
+            ),
+            "best_candidate": compact_trial(selected_trial) if selected_trial else {},
+            "top_trials": [compact_trial(trial) for trial in ranked_search[:10]],
+            "validation_winners": [
+                compact_trial(trial) for trial in ranked_validation[:10]
+            ],
             "worst_trials": [compact_trial(trial) for trial in worst],
-            "validation_winners": [compact_trial(trial) for trial in validation],
-            "trials": [trial_payload(trial) for trial in trials],
-            "trial_distributions": trial_distributions(),
-            "condition_pass_counts": aggregate_condition_counts(),
-            "parameter_distributions": build_parameter_distributions(trials),
-            "parameter_insights": summary.get("parameter_insights") or {},
-            "robustness": summary.get("robustness") or {},
-            "research_quality_gates": summary.get("research_quality_gates") or {},
-            "data_quality_notes": {
-                "detected_m1_gap_count": data_profile.get("detected_m1_gap_count"),
-                "incomplete_candles": data_profile.get("incomplete_candles"),
-                "search_candles": data_profile.get("search_candles"),
-                "validation_candles": data_profile.get("validation_candles"),
+            "parameter_stability": {
+                "distributions": build_parameter_distributions(trials),
+                "insights": summary.get("parameter_insights") or {},
+                "validated_candidate_count": robustness.get("validated_candidate_count", 0),
+                "average_score_degradation_pct": robustness.get(
+                    "average_score_degradation_pct"
+                ),
+                "stable_candidates": [
+                    compact_stable_candidate(candidate)
+                    for candidate in (robustness.get("stable_candidates") or [])[:5]
+                ],
             },
-            "data_availability": {
-                "persisted_optimization_trade_count": persisted_trade_count,
-                "summary_trade_count": expected_trade_count,
-                "full_trades_available": persisted_trade_count > 0
-                or expected_trade_count == 0,
-                "note": (
-                    "Older optimization runs may not have persisted full trade lists "
-                    "or condition pass counts."
+            "condition_pass_counts": aggregate_condition_counts(),
+            "monthly_breakdown": trade_aggregates["monthly"] or selected_summary.get(
+                "month_breakdown", {}
+            ),
+            "direction_breakdown": trade_aggregates["directions"] or selected_summary.get(
+                "direction_breakdown", {}
+            ),
+            "close_reason_counts": trade_aggregates["close_reasons"] or selected_summary.get(
+                "close_reason_counts", {}
+            ),
+            "risk_summary": {
+                "source_trial_number": selected_trial.trial_number if selected_trial else None,
+                "max_drawdown": selected_metrics.get("max_drawdown"),
+                "max_drawdown_pct": selected_metrics.get("max_drawdown_pct"),
+                "max_consecutive_losses": selected_metrics.get("max_consecutive_losses"),
+                "trade_sortino": selected_metrics.get("trade_sortino"),
+                "drawdown_period": trade_aggregates["drawdown"],
+            },
+            "mfe_mae_quantiles": {
+                "source_trial_number": selected_trial.trial_number if selected_trial else None,
+                "mfe_points": quantiles([float(trade.mfe_points) for trade in selected_trades]),
+                "mae_points": quantiles([float(trade.mae_points) for trade in selected_trades]),
+            },
+            "duration_quantiles": {
+                "source_trial_number": selected_trial.trial_number if selected_trial else None,
+                "seconds": quantiles(
+                    [float(trade.duration_seconds) for trade in selected_trades]
                 ),
             },
+            "research_quality_gates": summary.get("research_quality_gates") or {},
         }
     )

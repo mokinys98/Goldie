@@ -39,6 +39,7 @@ from ..models import (
     SignalOutcome,
     User,
 )
+from ..optimization_diagnostics import _gap_breakdown, _is_expected_market_closure
 from ..realtime import (
     OVERVIEW_CACHE_KEY,
     invalidate_collector_overview,
@@ -74,6 +75,8 @@ PROVIDER_LABELS = {
     "binance_spot": "Binance Spot",
     "oanda": "OANDA",
 }
+CONTINUITY_CACHE_SECONDS = 60
+CONTINUITY_GAP_LIMIT = 100
 
 
 def feed_key(provider: str, environment: str, provider_symbol: str) -> tuple[str, str, str]:
@@ -275,6 +278,189 @@ def feed_or_404(db: Session, feed_id: uuid.UUID) -> MarketFeed:
     if feed is None:
         raise HTTPException(status_code=404, detail="Market feed not found")
     return feed
+
+
+def continuity_status(missing_minutes: int) -> str:
+    if missing_minutes == 0:
+        return "PASS"
+    return "WARN" if missing_minutes < 5 else "BLOCK"
+
+
+def continuity_datetime(value: datetime | str) -> datetime:
+    if isinstance(value, str):
+        value = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    return as_utc(value)
+
+
+def continuity_scope(
+    *,
+    feed: MarketFeed,
+    date_from: datetime | None,
+    date_to: datetime | None,
+    observed_candles: int,
+    gap_pairs: list[tuple[datetime, datetime]],
+) -> dict:
+    unexpected_gaps = []
+    unexpected_missing_minutes = 0
+    market_closed_gap_count = 0
+    market_closed_missing_minutes = 0
+
+    for previous, current in gap_pairs:
+        gap = _gap_breakdown(previous, current, feed=feed)
+        if gap is None:
+            continue
+        unexpected = int(gap["unexpected_missing_minutes"])
+        market_closed = int(gap["market_closed_missing_minutes"])
+        if unexpected:
+            unexpected_missing_minutes += unexpected
+            segment_start = None
+            missing_at = gap["from"]
+            while missing_at <= gap["to"]:
+                if _is_expected_market_closure(missing_at, feed):
+                    if segment_start is not None:
+                        segment_end = missing_at - timedelta(minutes=1)
+                        unexpected_gaps.append(
+                            {
+                                "from": segment_start,
+                                "to": segment_end,
+                                "missing_minutes": int(
+                                    (segment_end - segment_start).total_seconds() // 60
+                                )
+                                + 1,
+                            }
+                        )
+                        segment_start = None
+                elif segment_start is None:
+                    segment_start = missing_at
+                missing_at += timedelta(minutes=1)
+            if segment_start is not None:
+                unexpected_gaps.append(
+                    {
+                        "from": segment_start,
+                        "to": gap["to"],
+                        "missing_minutes": int(
+                            (gap["to"] - segment_start).total_seconds() // 60
+                        )
+                        + 1,
+                    }
+                )
+        if market_closed:
+            market_closed_gap_count += 1
+            market_closed_missing_minutes += market_closed
+
+    expected_candles = observed_candles + unexpected_missing_minutes
+    coverage_pct = (
+        round(observed_candles * 100 / expected_candles, 6)
+        if expected_candles
+        else None
+    )
+    unexpected_gaps.sort(
+        key=lambda gap: (gap["missing_minutes"], gap["from"]),
+        reverse=True,
+    )
+    gap_segment_count = len(unexpected_gaps)
+    return {
+        "status": continuity_status(unexpected_missing_minutes),
+        "date_from": date_from,
+        "date_to": date_to,
+        "observed_candles": observed_candles,
+        "expected_candles": expected_candles,
+        "coverage_pct": coverage_pct,
+        "gap_segment_count": gap_segment_count,
+        "missing_minutes": unexpected_missing_minutes,
+        "market_closed_gap_count": market_closed_gap_count,
+        "market_closed_missing_minutes": market_closed_missing_minutes,
+        "gaps": unexpected_gaps[:CONTINUITY_GAP_LIMIT],
+        "gaps_truncated": gap_segment_count > CONTINUITY_GAP_LIMIT,
+    }
+
+
+def build_feed_continuity(db: Session, feed: MarketFeed) -> dict:
+    candle_filter = (
+        Candle.market_feed_id == feed.id,
+        Candle.timeframe == "M1",
+        Candle.is_complete.is_(True),
+    )
+    stats = db.execute(
+        select(
+            func.count(Candle.id),
+            func.min(Candle.opened_at),
+            func.max(Candle.opened_at),
+        ).where(*candle_filter)
+    ).one()
+    observed_candles = int(stats[0] or 0)
+    earliest = as_utc(stats[1]) if stats[1] else None
+    latest = as_utc(stats[2]) if stats[2] else None
+
+    ordered = (
+        select(
+            Candle.opened_at.label("current_at"),
+            func.lag(Candle.opened_at)
+            .over(order_by=Candle.opened_at)
+            .label("previous_at"),
+        )
+        .where(*candle_filter)
+        .subquery()
+    )
+    if db.get_bind().dialect.name == "sqlite":
+        has_gap = (
+            func.julianday(ordered.c.current_at)
+            - func.julianday(ordered.c.previous_at)
+        ) > (1.0 / 1440.0)
+    else:
+        has_gap = ordered.c.current_at > (
+            ordered.c.previous_at + timedelta(minutes=1)
+        )
+    rows = db.execute(
+        select(ordered.c.previous_at, ordered.c.current_at).where(
+            ordered.c.previous_at.is_not(None),
+            has_gap,
+        )
+    ).all()
+    all_gap_pairs = [
+        (continuity_datetime(row[0]), continuity_datetime(row[1]))
+        for row in rows
+    ]
+
+    recent_start = max(earliest, latest - timedelta(hours=24)) if earliest and latest else None
+    recent_pairs: list[tuple[datetime, datetime]] = []
+    if recent_start and latest:
+        for previous, current in all_gap_pairs:
+            if current <= recent_start or previous >= latest:
+                continue
+            recent_pairs.append((max(previous, recent_start - timedelta(minutes=1)), current))
+        recent_observed = db.scalar(
+            select(func.count(Candle.id)).where(
+                *candle_filter,
+                Candle.opened_at >= recent_start,
+                Candle.opened_at <= latest,
+            )
+        ) or 0
+    else:
+        recent_observed = 0
+
+    return jsonable_encoder(
+        {
+            "market_feed_id": feed.id,
+            "symbol": feed.canonical_symbol,
+            "timeframe": "M1",
+            "computed_at": datetime.now(UTC),
+            "full_history": continuity_scope(
+                feed=feed,
+                date_from=earliest,
+                date_to=latest,
+                observed_candles=observed_candles,
+                gap_pairs=all_gap_pairs,
+            ),
+            "recent_24h": continuity_scope(
+                feed=feed,
+                date_from=recent_start,
+                date_to=latest,
+                observed_candles=int(recent_observed),
+                gap_pairs=recent_pairs,
+            ),
+        }
+    )
 
 
 def delete_count(db: Session, statement) -> int:
@@ -975,6 +1161,33 @@ def feed_detail(
         "gaps": jsonable_encoder(gap_segments),
         "commands": [serialize_command(command) for command in commands],
     }
+
+
+@router.get("/feeds/{feed_id}/continuity")
+def feed_continuity(
+    feed_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    _: User = Depends(get_current_user),
+) -> dict:
+    feed = feed_or_404(db, feed_id)
+    cache_key = f"collector:feed:{feed_id}:continuity:v1"
+    try:
+        cached = redis_client().get(cache_key)
+        if cached:
+            return json.loads(cached)
+    except Exception:
+        pass
+
+    result = build_feed_continuity(db, feed)
+    try:
+        redis_client().set(
+            cache_key,
+            json.dumps(result),
+            ex=CONTINUITY_CACHE_SECONDS,
+        )
+    except Exception:
+        pass
+    return result
 
 
 def parse_cursor(cursor: str | None) -> datetime | None:

@@ -6,6 +6,8 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, openCollectorStream } from "@/lib/api";
 import type {
   CollectorCommand,
+  CollectorContinuity,
+  CollectorContinuityScope,
   CollectorFeedDetail,
   CollectorSettingsResponse,
 } from "@/lib/types";
@@ -22,6 +24,12 @@ export default function CollectorFeedPage() {
     queryKey: ["collector-feed", feedId],
     queryFn: () => api<CollectorFeedDetail>(`/api/v1/collector/feeds/${feedId}`),
     refetchInterval: 60_000,
+  });
+  const continuity = useQuery({
+    queryKey: ["collector-continuity", feedId],
+    queryFn: () => api<CollectorContinuity>(`/api/v1/collector/feeds/${feedId}/continuity`),
+    enabled: tab === "Data",
+    refetchInterval: tab === "Data" ? 60_000 : false,
   });
   const settings = useQuery({
     queryKey: ["collector-settings"],
@@ -96,7 +104,13 @@ export default function CollectorFeedPage() {
         ))}
       </div>
       {tab === "Overview" && <Overview detail={data} />}
-      {tab === "Data" && <DataContinuity detail={data} />}
+      {tab === "Data" && (
+        <DataContinuity
+          continuity={continuity.data}
+          error={continuity.error}
+          loading={continuity.isLoading}
+        />
+      )}
       {tab === "Commands" && <Commands feedId={feedId} commands={data.commands} />}
       {tab === "Settings" && settings.data && (
         <Settings
@@ -140,119 +154,117 @@ function Overview({ detail }: { detail: CollectorFeedDetail }) {
   );
 }
 
-function DataContinuity({ detail }: { detail: CollectorFeedDetail }) {
-  const feed = detail.feed;
-  const latestCandle = feed.latest_candle_at ? new Date(feed.latest_candle_at) : null;
-  const earliestCandle = feed.earliest_candle_at ? new Date(feed.earliest_candle_at) : null;
-  const latestTick = feed.latest_tick?.observed_at ? new Date(feed.latest_tick.observed_at) : null;
-  const heartbeat = feed.last_heartbeat_at ? new Date(feed.last_heartbeat_at) : null;
-  const gaps = detail.gaps ?? [];
-  const gapStatus = detail.gap_count === 0 ? "PASS" : detail.gap_count < 5 ? "WARN" : "BLOCK";
-  const lagStatus =
-    feed.data_lag_seconds === null ? "MISSING" : feed.data_lag_seconds <= 90 ? "FRESH" : "STALE";
-  const candleSpanMinutes =
-    earliestCandle && latestCandle
-      ? Math.max(0, Math.round((latestCandle.getTime() - earliestCandle.getTime()) / 60_000) + 1)
-      : 0;
-  const observedMinutes = Math.max(0, candleSpanMinutes - detail.gap_count);
-  const coverage = candleSpanMinutes ? Math.max(0, Math.min(100, (observedMinutes / candleSpanMinutes) * 100)) : 0;
-  const gapWidth = candleSpanMinutes ? Math.max(2, Math.min(38, 100 - coverage)) : 0;
-  const gapOffset = Math.max(8, Math.min(88, coverage));
-  const fallbackGap = detail.gap_count > 0 && gaps.length === 0;
-  const qualityLabel =
-    detail.gap_count === 0
-      ? "Continuous M1 sequence"
-      : `${detail.gap_count} missing M1 candle${detail.gap_count === 1 ? "" : "s"} in the recent window`;
+function DataContinuity({
+  continuity,
+  error,
+  loading,
+}: {
+  continuity: CollectorContinuity | undefined;
+  error: Error | null;
+  loading: boolean;
+}) {
+  if (loading) return <div className="panel">Loading continuity analysis...</div>;
+  if (error || !continuity) {
+    return <div className="error-box">{error?.message ?? "Continuity analysis unavailable"}</div>;
+  }
+  const history = continuity.full_history;
+  const recent = continuity.recent_24h;
+  const qualityLabel = history.missing_minutes
+    ? `${history.missing_minutes.toLocaleString()} missing M1 candles across full history`
+    : "Continuous M1 sequence across full history";
 
   return (
     <div className="performance-stack">
+      <ContinuitySummary title="Full history continuity" scope={history} primary />
       <div className="panel">
         <div className="section-title">
           <div>
-            <h2>Data continuity</h2>
-            <p>M1 sequence health from the latest collector feed detail.</p>
+            <h2>Full history gap map</h2>
+            <p>{qualityLabel}</p>
           </div>
-          <StatusPill value={gapStatus} />
+          <StatusPill value={history.status} />
         </div>
         <div className="continuity-plot" aria-label={qualityLabel}>
           <div className="continuity-axis">
             <span className="continuity-dot" />
             <span className="continuity-line" />
-            {gaps.map((gap, index) => {
-              const gapFrom = new Date(gap.from);
-              const gapTo = new Date(gap.to);
-              const startPercent =
-                earliestCandle && latestCandle && candleSpanMinutes
-                  ? ((gapFrom.getTime() - earliestCandle.getTime()) / (candleSpanMinutes * 60_000)) * 100
-                  : gapOffset;
-              const widthPercent =
-                candleSpanMinutes ? (gap.missing_minutes / candleSpanMinutes) * 100 : gapWidth;
+            {history.gaps.map((gap, index) => {
+              const fullSpan = history.date_from && history.date_to
+                ? new Date(history.date_to).getTime() - new Date(history.date_from).getTime()
+                : 0;
+              const offset = history.date_from && fullSpan
+                ? ((new Date(gap.from).getTime() - new Date(history.date_from).getTime()) / fullSpan) * 100
+                : 50;
+              const width = fullSpan ? (gap.missing_minutes * 60_000 / fullSpan) * 100 : 2;
               return (
                 <span
                   className="continuity-gap"
                   key={`${gap.from}-${gap.to}-${index}`}
                   style={{
-                    left: `${Math.max(2, Math.min(96, startPercent))}%`,
-                    width: `${Math.max(2, Math.min(38, widthPercent))}%`,
+                    left: `${Math.max(2, Math.min(96, offset))}%`,
+                    width: `${Math.max(2, Math.min(38, width))}%`,
                   }}
                   tabIndex={0}
                   data-tooltip={`${displayDate(gap.from)} - ${displayDate(gap.to)} (${gap.missing_minutes}m)`}
                 />
               );
             })}
-            {fallbackGap && (
-              <span
-                className="continuity-gap"
-                style={{ left: `${gapOffset}%`, width: `${gapWidth}%` }}
-                tabIndex={0}
-                data-tooltip={`${detail.gap_count} missing M1 candle${detail.gap_count === 1 ? "" : "s"}`}
-              />
-            )}
             <span className="continuity-dot continuity-dot-end" />
           </div>
           <div className="continuity-labels">
-            <span>{displayDate(feed.earliest_candle_at)}</span>
+            <span>{displayDate(history.date_from)}</span>
             <strong>{qualityLabel}</strong>
-            <span>{displayDate(feed.latest_candle_at)}</span>
+            <span>{displayDate(history.date_to)}</span>
           </div>
         </div>
       </div>
-      <div className="dashboard-grid">
-        <Metric label="Gap status" value={gapStatus} />
-        <Metric label="Recent M1 gaps" value={detail.gap_count} />
-        <Metric label="Coverage" value={candleSpanMinutes ? `${coverage.toFixed(1)}%` : "--"} />
-        <Metric label="Observed M1 candles" value={candleSpanMinutes ? observedMinutes : "--"} />
-        <Metric label="Expected M1 candles" value={candleSpanMinutes || "--"} />
-        <Metric label="Lag status" value={lagStatus} />
-      </div>
-      <div className="split-layout collector-section">
-        <div className="panel">
-          <h2>Continuity checkpoints</h2>
-          <div className="continuity-checks">
-            <ContinuityCheck label="First complete M1 candle" value={earliestCandle} state={earliestCandle ? "ok" : "missing"} />
-            <ContinuityCheck label="Latest complete M1 candle" value={latestCandle} state={latestCandle ? "ok" : "missing"} />
-            <ContinuityCheck label="Latest tick" value={latestTick} state={lagStatus === "FRESH" ? "ok" : "warn"} />
-            <ContinuityCheck label="Collector heartbeat" value={heartbeat} state={heartbeat ? "ok" : "missing"} />
-          </div>
-        </div>
-        <GapList gaps={gaps} gapCount={detail.gap_count} />
-      </div>
+      <ContinuitySummary title="Latest 24 hours" scope={recent} />
+      <GapList scope={history} />
     </div>
   );
 }
 
-function GapList({
-  gaps,
-  gapCount,
+function ContinuitySummary({
+  title,
+  scope,
+  primary = false,
 }: {
-  gaps: CollectorFeedDetail["gaps"];
-  gapCount: number;
+  title: string;
+  scope: CollectorContinuityScope;
+  primary?: boolean;
 }) {
-  if (!gapCount) {
+  return (
+    <div className="panel">
+      <div className="section-title">
+        <div>
+          <h2>{title}</h2>
+          <p>{displayDate(scope.date_from)} – {displayDate(scope.date_to)}</p>
+        </div>
+        <StatusPill value={scope.status} />
+      </div>
+      <div className="dashboard-grid">
+        <Metric label={primary ? "Full history status" : "Recent status"} value={scope.status} />
+        <Metric label="Coverage" value={scope.coverage_pct === null ? "--" : `${scope.coverage_pct.toFixed(1)}%`} />
+        <Metric label="Observed M1 candles" value={scope.observed_candles.toLocaleString()} />
+        <Metric label="Expected M1 candles" value={scope.expected_candles.toLocaleString()} />
+        <Metric label="Missing M1 minutes" value={scope.missing_minutes.toLocaleString()} />
+        <Metric label="Gap segments" value={scope.gap_segment_count.toLocaleString()} />
+      </div>
+      {scope.market_closed_missing_minutes > 0 && (
+        <p className="muted">
+          {scope.market_closed_missing_minutes.toLocaleString()} provider market-closure minutes were excluded.
+        </p>
+      )}
+    </div>
+  );
+}
+
+function GapList({ scope }: { scope: CollectorContinuityScope }) {
+  if (!scope.gap_segment_count) {
     return (
       <div className="success-box">
-        <strong>No recent gap action</strong>
-        <p>Recent M1 candles are contiguous in the collector detail window.</p>
+        <strong>No historical gap action</strong>
+        <p>Complete M1 candles are contiguous across the stored feed history.</p>
       </div>
     );
   }
@@ -262,16 +274,16 @@ function GapList({
       <div className="section-title">
         <div>
           <h2>Detected gaps</h2>
-          <p>Aggregated missing M1 ranges only, no raw candle rows.</p>
+          <p>Largest missing M1 ranges across full history.</p>
         </div>
-        <StatusPill value="WARN" />
+        <StatusPill value={scope.status} />
       </div>
-      {gaps.length ? (
+      {scope.gaps.length ? (
         <div className="gap-list">
-          {gaps.map((gap, index) => (
+          {scope.gaps.map((gap, index) => (
             <div className="gap-row" key={`${gap.from}-${gap.to}-${index}`}>
               <span>{displayDate(gap.from)}</span>
-              <strong>{gap.missing_minutes}m</strong>
+              <strong>{gap.missing_minutes.toLocaleString()}m</strong>
               <span>{displayDate(gap.to)}</span>
             </div>
           ))}
@@ -279,28 +291,11 @@ function GapList({
       ) : (
         <p className="muted">Gap count is available, but this API response does not include ranges yet.</p>
       )}
+      {scope.gaps_truncated && (
+        <p className="muted">Showing largest 100 of {scope.gap_segment_count.toLocaleString()} gaps.</p>
+      )}
       <div className="error-box table-actions">
         Run a targeted backfill from Commands for the listed range, then confirm this panel returns to PASS.
-      </div>
-    </div>
-  );
-}
-
-function ContinuityCheck({
-  label,
-  value,
-  state,
-}: {
-  label: string;
-  value: Date | null;
-  state: "ok" | "warn" | "missing";
-}) {
-  return (
-    <div className={`continuity-check continuity-check-${state}`}>
-      <span />
-      <div>
-        <strong>{label}</strong>
-        <small>{value ? value.toLocaleString() : "--"}</small>
       </div>
     </div>
   );
@@ -524,7 +519,9 @@ function Table({ headers, rows }: { headers: string[]; rows: Array<Array<string 
 }
 
 function displayDate(value: string | null): string {
-  return value ? new Date(value).toLocaleString() : "--";
+  return value
+    ? `${new Date(value).toLocaleString(undefined, { timeZone: "UTC" })} UTC`
+    : "--";
 }
 
 function localInput(value: Date): string {

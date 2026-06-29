@@ -324,6 +324,34 @@ export type CollectorFeedDetail = {
   commands: CollectorCommand[];
 };
 
+export type CollectorContinuityScope = {
+  status: "PASS" | "WARN" | "BLOCK";
+  date_from: string | null;
+  date_to: string | null;
+  observed_candles: number;
+  expected_candles: number;
+  coverage_pct: number | null;
+  gap_segment_count: number;
+  missing_minutes: number;
+  market_closed_gap_count: number;
+  market_closed_missing_minutes: number;
+  gaps: Array<{
+    from: string;
+    to: string;
+    missing_minutes: number;
+  }>;
+  gaps_truncated: boolean;
+};
+
+export type CollectorContinuity = {
+  market_feed_id: string;
+  symbol: string;
+  timeframe: "M1";
+  computed_at: string;
+  full_history: CollectorContinuityScope;
+  recent_24h: CollectorContinuityScope;
+};
+
 export type PageResult<T> = {
   items: T[];
   next_cursor: string | null;
@@ -618,19 +646,28 @@ export type OptimizationResultsExport = {
 };
 
 export type OptimizationLlmContext = {
-  schema_version: "goldie.optimization-llm-context.v1" | "goldie.optimization-llm-context.v2";
-  optimization: Record<string, unknown>;
-  run_context: Record<string, unknown>;
+  schema_version: "goldie.optimization-llm-context.v3";
+  strategy: string | null;
+  symbol: string | null;
+  timeframe: "M1";
+  date_range: Record<string, unknown>;
+  search_period: Record<string, unknown>;
+  validation_period: Record<string, unknown>;
+  data_quality: Record<string, unknown>;
+  objective: Record<string, unknown>;
+  search_space: Array<Record<string, unknown>>;
+  fixed_config_grid: Array<Record<string, unknown>>;
+  best_candidate: Record<string, unknown>;
   top_trials: Array<Record<string, unknown>>;
   worst_trials: Array<Record<string, unknown>>;
   validation_winners: Array<Record<string, unknown>>;
-  trials?: Array<Record<string, unknown>>;
-  trial_distributions?: Record<string, unknown>;
-  condition_pass_counts?: Record<string, unknown>;
-  parameter_distributions?: Record<string, unknown>;
-  parameter_insights: Record<string, unknown>;
-  robustness: Record<string, unknown>;
+  parameter_stability: Record<string, unknown>;
+  condition_pass_counts: Record<string, unknown>;
+  monthly_breakdown: Record<string, unknown>;
+  direction_breakdown: Record<string, unknown>;
+  close_reason_counts: Record<string, unknown>;
+  risk_summary: Record<string, unknown>;
+  mfe_mae_quantiles: Record<string, unknown>;
+  duration_quantiles: Record<string, unknown>;
   research_quality_gates: ResearchQualityGates | Record<string, never>;
-  data_quality_notes: Record<string, unknown>;
-  data_availability?: Record<string, unknown>;
 };

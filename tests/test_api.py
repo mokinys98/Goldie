@@ -49,6 +49,23 @@ def login(client: TestClient) -> dict[str, str]:
     return {"Authorization": f"Bearer {response.json()['access_token']}"}
 
 
+def candle_row(feed_id: uuid.UUID, opened_at: datetime) -> dict:
+    return {
+        "id": uuid.uuid4(),
+        "market_feed_id": feed_id,
+        "symbol": "BTCUSDT",
+        "timeframe": "M1",
+        "opened_at": opened_at,
+        "source": "binance_spot",
+        "open": Decimal("100"),
+        "high": Decimal("101"),
+        "low": Decimal("99"),
+        "close": Decimal("100"),
+        "tick_volume": 1,
+        "is_complete": True,
+    }
+
+
 def test_bot_config_lifecycle() -> None:
     Base.metadata.drop_all(engine)
     Base.metadata.create_all(engine)
@@ -1743,3 +1760,116 @@ def test_collector_feed_data_commands_and_export() -> None:
             },
         )
         assert replacement.status_code == 201
+
+
+def test_collector_continuity_reports_full_history_gap_and_clean_recent_window() -> None:
+    Base.metadata.drop_all(engine)
+    Base.metadata.create_all(engine)
+    feed_id = uuid.uuid4()
+    gap_previous = datetime(2026, 2, 6, 11, 19, tzinfo=UTC)
+    recent_start = datetime(2026, 5, 27, 9, 31, tzinfo=UTC)
+    recent_end = recent_start + timedelta(hours=24)
+
+    with SessionLocal() as db:
+        db.add(
+            MarketFeed(
+                id=feed_id,
+                provider="binance_spot",
+                environment="spot",
+                canonical_symbol="BTCUSDT",
+                provider_symbol="BTCUSDT",
+                status="ONLINE",
+                details={},
+            )
+        )
+        db.bulk_insert_mappings(
+            Candle,
+            [candle_row(feed_id, gap_previous)]
+            + [
+                candle_row(feed_id, recent_start + timedelta(minutes=index))
+                for index in range(1441)
+            ],
+        )
+        db.commit()
+
+    with TestClient(app) as client:
+        response = client.get(
+            f"/api/v1/collector/feeds/{feed_id}/continuity",
+            headers=login(client),
+        )
+
+    assert response.status_code == 200
+    body = response.json()
+    full = body["full_history"]
+    recent = body["recent_24h"]
+    assert full["status"] == "BLOCK"
+    assert full["observed_candles"] == 1442
+    assert full["expected_candles"] == 159733
+    assert full["missing_minutes"] == 158291
+    assert full["gap_segment_count"] == 1
+    assert full["gaps"] == [
+        {
+            "from": "2026-02-06T11:20:00+00:00",
+            "to": "2026-05-27T09:30:00+00:00",
+            "missing_minutes": 158291,
+        }
+    ]
+    assert recent["status"] == "PASS"
+    assert recent["date_from"] == recent_start.isoformat()
+    assert recent["date_to"] == recent_end.isoformat()
+    assert recent["observed_candles"] == 1441
+    assert recent["expected_candles"] == 1441
+    assert recent["coverage_pct"] == 100.0
+
+
+def test_collector_continuity_excludes_oanda_weekend_and_limits_gap_examples() -> None:
+    from goldie_api.routers.collector import continuity_scope
+
+    oanda = MarketFeed(
+        id=uuid.uuid4(),
+        provider="oanda",
+        environment="practice",
+        canonical_symbol="EURUSD",
+        provider_symbol="EUR_USD",
+        status="ONLINE",
+        details={},
+    )
+    friday = datetime(2026, 6, 26, 21, 59, tzinfo=UTC)
+    sunday = datetime(2026, 6, 28, 22, 0, tzinfo=UTC)
+    weekend = continuity_scope(
+        feed=oanda,
+        date_from=friday,
+        date_to=sunday,
+        observed_candles=2,
+        gap_pairs=[(friday, sunday)],
+    )
+    assert weekend["status"] == "PASS"
+    assert weekend["missing_minutes"] == 0
+    assert weekend["market_closed_missing_minutes"] == 2880
+    assert weekend["expected_candles"] == 2
+
+    crypto = MarketFeed(
+        id=uuid.uuid4(),
+        provider="binance_spot",
+        environment="spot",
+        canonical_symbol="BTCUSDT",
+        provider_symbol="BTCUSDT",
+        status="ONLINE",
+        details={},
+    )
+    start = datetime(2026, 1, 1, tzinfo=UTC)
+    gaps = [
+        (start + timedelta(minutes=index * 3), start + timedelta(minutes=index * 3 + 2))
+        for index in range(101)
+    ]
+    limited = continuity_scope(
+        feed=crypto,
+        date_from=start,
+        date_to=gaps[-1][1],
+        observed_candles=202,
+        gap_pairs=gaps,
+    )
+    assert limited["gap_segment_count"] == 101
+    assert limited["missing_minutes"] == 101
+    assert len(limited["gaps"]) == 100
+    assert limited["gaps_truncated"] is True

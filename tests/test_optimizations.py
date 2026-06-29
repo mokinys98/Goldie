@@ -1,3 +1,4 @@
+import json
 import os
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
@@ -456,7 +457,7 @@ def test_pine_search_space_and_samples_are_always_valid() -> None:
         strategy.parameters_model.model_validate(sampled)
 
 
-def test_llm_context_v2_includes_all_trials_distributions_and_trades() -> None:
+def test_llm_context_v3_compacts_trials_and_aggregates_best_trades() -> None:
     Base.metadata.drop_all(engine)
     Base.metadata.create_all(engine)
     with SessionLocal() as db:
@@ -558,23 +559,26 @@ def test_llm_context_v2_includes_all_trials_distributions_and_trades() -> None:
             .count()
         )
 
-    assert payload["schema_version"] == "goldie.optimization-llm-context.v2"
-    assert len(payload["trials"]) == 4
-    assert payload["trial_distributions"]["trade_count_buckets"] == {
-        "0": 1,
-        "1_5": 1,
-        "6_29": 1,
-        "30_plus": 1,
-    }
+    assert payload["schema_version"] == "goldie.optimization-llm-context.v3"
+    assert "trials" not in payload
+    assert payload["best_candidate"]["trial_number"] == 3
+    assert len(payload["top_trials"]) == 2
+    assert len(payload["validation_winners"]) == 2
+    assert len(payload["worst_trials"]) == 2
     assert payload["condition_pass_counts"]["overall"]["volatility_ok"] == {
         "evaluated": 40,
         "passed": 6,
     }
-    assert payload["parameter_distributions"]["fast_ema_period"]["unique_values"] == 2
-    trade_payload = payload["trials"][1]["trades"][0]
-    assert trade_payload["signal_reason"] == "EMA_ATR_PULLBACK_CONTINUATION_BUY"
-    assert trade_payload["mfe_points"] == 12
-    assert trade_payload["mae_points"] == 3
+    assert payload["parameter_stability"]["distributions"]["fast_ema_period"][
+        "unique_values"
+    ] == 2
+    assert payload["monthly_breakdown"]["2026-01"]["trades"] == 30
+    assert payload["direction_breakdown"]["BUY"]["trades"] == 30
+    assert payload["close_reason_counts"] == {"TAKE_PROFIT": 30}
+    assert payload["mfe_mae_quantiles"]["mfe_points"]["p50"] == 12
+    assert payload["mfe_mae_quantiles"]["mae_points"]["p50"] == 3
+    assert payload["duration_quantiles"]["seconds"]["p50"] == 60
+    assert all("trades" not in trial for trial in payload["top_trials"])
     assert remaining_deleted_trial_trades == 0
 
 
@@ -760,24 +764,19 @@ def test_optimization_api_and_execution_flow(monkeypatch) -> None:
         )
         assert llm_context.status_code == 200
         llm_body = llm_context.json()
-        assert llm_body["schema_version"] == "goldie.optimization-llm-context.v2"
+        assert llm_body["schema_version"] == "goldie.optimization-llm-context.v3"
         assert llm_body["top_trials"]
         assert llm_body["worst_trials"]
         assert llm_body["validation_winners"]
-        assert len(llm_body["trials"]) == 57
-        assert llm_body["trial_distributions"]["phase_counts"]["STRATEGY_SEARCH"] == 12
-        assert set(llm_body["trial_distributions"]["trade_count_buckets"]) == {
-            "0",
-            "1_5",
-            "6_29",
-            "30_plus",
-        }
-        assert llm_body["parameter_insights"]
-        assert llm_body["parameter_distributions"]
-        assert llm_body["robustness"]
+        assert "trials" not in llm_body
+        assert llm_body["objective"]["trial_counts"]["phase"]["STRATEGY_SEARCH"] == 12
+        assert llm_body["parameter_stability"]["insights"]
+        assert llm_body["parameter_stability"]["distributions"]
+        assert llm_body["parameter_stability"]["stable_candidates"]
         assert llm_body["research_quality_gates"] == quality_gates
-        assert llm_body["run_context"]["research_quality_gates"] == quality_gates
         assert "equity_curve" not in str(llm_body["top_trials"])
+        assert "equity_curve" not in str(llm_body["best_candidate"])
+        assert len(json.dumps(llm_body).encode("utf-8")) < 300 * 1024
         successful_export_trial = next(
             item for item in export_body["trials"] if item["status"] == "SUCCEEDED"
         )

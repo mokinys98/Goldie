@@ -664,5 +664,5 @@ function llmContextFilename(strategy: string, symbol: string, optimizationId: st
 }
 
 function llmContextTrialCount(payload: OptimizationLlmContext): number {
-  return payload.trials?.length ?? payload.top_trials.length;
+  return payload.top_trials.length + payload.validation_winners.length + payload.worst_trials.length;
 }
