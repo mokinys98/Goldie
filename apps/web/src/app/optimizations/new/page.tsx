@@ -179,7 +179,7 @@ export default function NewOptimizationPage() {
   }
 
   return (
-    <section className="narrow-page">
+    <section>
       <header className="page-header">
         <div>
           <span className="eyebrow">NEW SEARCH</span>
@@ -190,8 +190,10 @@ export default function NewOptimizationPage() {
           </p>
         </div>
       </header>
-      <form className="panel form-grid" onSubmit={submit}>
-        <div className="profile-picker">
+      <form className="panel form-grid optimization-form" onSubmit={submit}>
+        <div className="optimization-form-columns">
+          <div className="optimization-form-column">
+        <div id="profile-picker" className="profile-picker">
           {optimizationProfiles.map((profile) => (
             <button
               key={profile.key}
@@ -223,106 +225,8 @@ export default function NewOptimizationPage() {
             </button>
           ))}
         </div>
-        {selectedProfile && (
-          <div className="info-box">
-            <strong>Fill status:</strong> This profile is saved as a run-level
-            execution model. Optuna trials optimize strategy parameters only.
-          </div>
-        )}
-        <div className="panel optimization-bot-picker">
-          <div className="selection-heading">
-            <div>
-              <h2>Bots</h2>
-              <p className="muted">Select every bot that should receive an optimization run.</p>
-            </div>
-            <div className="button-row">
-              <button
-                type="button"
-                className="button button-ghost"
-                disabled={!bots.data?.length}
-                onClick={() => setSelectedBotIds(
-                  (bots.data ?? []).filter((bot) => bot.market_feed_id).map((bot) => bot.id),
-                )}
-              >
-                Select all
-              </button>
-              <button
-                type="button"
-                className="button button-ghost"
-                disabled={!selectedBotIds.length}
-                onClick={() => setSelectedBotIds([])}
-              >
-                Clear
-              </button>
-            </div>
-          </div>
-          {bots.isLoading && <span className="muted">Loading bots...</span>}
-          {!bots.isLoading && !bots.data?.length && <span className="muted">No bots available.</span>}
-          <div className="selection-list optimization-bot-list">
-            {(bots.data ?? []).map((bot) => {
-              const feed = feeds.data?.find((item) => item.id === bot.market_feed_id);
-              return (
-                <label className="checkbox-row bulk-option" key={bot.id}>
-                  <input
-                    type="checkbox"
-                    disabled={!bot.market_feed_id}
-                    checked={selectedBotIds.includes(bot.id)}
-                    onChange={(event) => setSelectedBotIds((current) =>
-                      event.target.checked
-                        ? [...new Set([...current, bot.id])]
-                        : current.filter((item) => item !== bot.id),
-                    )}
-                  />
-                  <span>
-                    <strong>{bot.name}</strong>
-                    <small>{feed?.provider_symbol ?? "No market feed — unavailable"}</small>
-                  </span>
-                </label>
-              );
-            })}
-          </div>
-        </div>
-        {!!botSelections.length && (
-          <div className="panel optimization-config-panel">
-            <div className="section-title">
-              <div>
-                <h2>Configurations</h2>
-                <p>{botSelections.length} bot(s) selected. Choose a validated version for each.</p>
-              </div>
-              <span className="status">Objective: BALANCED</span>
-            </div>
-            <div className="optimization-config-list">
-              {botSelections.map(({ bot, configId, eligibleConfigs, feed }) => (
-                <div className="optimization-config-row" key={bot.id}>
-                  <div>
-                    <strong>{bot.name}</strong>
-                    <small>{feed?.provider_symbol ?? "No market feed"}</small>
-                  </div>
-                  <label>
-                    Configuration version
-                    <select
-                      required
-                      value={configId}
-                      onChange={(event) => setConfigIds((current) => ({
-                        ...current,
-                        [bot.id]: event.target.value,
-                      }))}
-                    >
-                      <option value="">Select validated configuration</option>
-                      {eligibleConfigs.map((item) => (
-                        <option key={item.id} value={item.id}>
-                          Version {item.version} - {item.status}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
         {selectedProfile && !customProfile && (
-          <div className="panel">
+          <div id="profile-panel" className="panel">
             <h2>{selectedProfile.title} profile</h2>
             <div className="key-values">
               <div><dt>FromTo</dt><dd>{selectedProfile.fromTo}</dd></div>
@@ -341,7 +245,7 @@ export default function NewOptimizationPage() {
             </div>
           </div>
         )}
-        {customProfile && <div className="compact-form form-grid">
+        {customProfile && <div id="profile-panel" className="panel compact-form form-grid">
           <label>
             From
             <input
@@ -493,7 +397,7 @@ export default function NewOptimizationPage() {
             />
           </label>
         </div>}
-        <div className="panel">
+        <div id="search-scope" className="panel">
           <h2>Search scope</h2>
           <p className="muted">Strategy parameters included in this optimization run.</p>
           {!selectedParameters.length ? (
@@ -512,8 +416,104 @@ export default function NewOptimizationPage() {
             </div>
           )}
         </div>
+          </div>
+          <div className="optimization-form-column">
+            <div id="bot-picker" className="panel optimization-bot-picker">
+              <div className="selection-heading">
+                <div>
+                  <h2>Bots</h2>
+                  <p className="muted">Select every bot that should receive an optimization run.</p>
+                </div>
+                <div className="button-row">
+                  <button
+                    type="button"
+                    className="button button-ghost"
+                    disabled={!bots.data?.length}
+                    onClick={() => setSelectedBotIds(
+                      (bots.data ?? []).filter((bot) => bot.market_feed_id).map((bot) => bot.id),
+                    )}
+                  >
+                    Select all
+                  </button>
+                  <button
+                    type="button"
+                    className="button button-ghost"
+                    disabled={!selectedBotIds.length}
+                    onClick={() => setSelectedBotIds([])}
+                  >
+                    Clear
+                  </button>
+                </div>
+              </div>
+              {bots.isLoading && <span className="muted">Loading bots...</span>}
+              {!bots.isLoading && !bots.data?.length && <span className="muted">No bots available.</span>}
+              <div className="selection-list optimization-bot-list">
+                {(bots.data ?? []).map((bot) => {
+                  const feed = feeds.data?.find((item) => item.id === bot.market_feed_id);
+                  return (
+                    <label className="checkbox-row bulk-option" key={bot.id}>
+                      <input
+                        type="checkbox"
+                        disabled={!bot.market_feed_id}
+                        checked={selectedBotIds.includes(bot.id)}
+                        onChange={(event) => setSelectedBotIds((current) =>
+                          event.target.checked
+                            ? [...new Set([...current, bot.id])]
+                            : current.filter((item) => item !== bot.id),
+                        )}
+                      />
+                      <span>
+                        <strong>{bot.name}</strong>
+                        <small>{feed?.provider_symbol ?? "No market feed — unavailable"}</small>
+                      </span>
+                    </label>
+                  );
+                })}
+              </div>
+            </div>
+            {!!botSelections.length && (
+              <div id="config-panel" className="panel optimization-config-panel">
+                <div className="section-title">
+                  <div>
+                    <h2>Configurations</h2>
+                    <p>{botSelections.length} bot(s) selected. Choose a validated version for each.</p>
+                  </div>
+                  <span className="status">Objective: BALANCED</span>
+                </div>
+                <div className="optimization-config-list">
+                  {botSelections.map(({ bot, configId, eligibleConfigs, feed }) => (
+                    <div className="optimization-config-row" key={bot.id}>
+                      <div>
+                        <strong>{bot.name}</strong>
+                        <small>{feed?.provider_symbol ?? "No market feed"}</small>
+                      </div>
+                      <label>
+                        Configuration version
+                        <select
+                          required
+                          value={configId}
+                          onChange={(event) => setConfigIds((current) => ({
+                            ...current,
+                            [bot.id]: event.target.value,
+                          }))}
+                        >
+                          <option value="">Select validated configuration</option>
+                          {eligibleConfigs.map((item) => (
+                            <option key={item.id} value={item.id}>
+                              Version {item.version} - {item.status}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
         {error && <div className="error-box">{error}</div>}
-        <div className="button-row">
+        <div className="button-row optimization-form-actions">
           <button
             type="button"
             className="button button-secondary"
