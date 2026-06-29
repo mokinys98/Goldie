@@ -52,7 +52,7 @@ const strategies = [
   },
 ];
 
-function renderEditor() {
+function renderEditor(strategyProfileId: string | null = "strategy-1") {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
     <QueryClientProvider client={client}>
@@ -69,6 +69,7 @@ function renderEditor() {
           activated_at: null,
         }]}
         onChanged={() => undefined}
+        strategyProfileId={strategyProfileId}
       />
     </QueryClientProvider>,
   );
@@ -79,38 +80,35 @@ describe("ConfigEditor", () => {
   beforeEach(() => {
     vi.mocked(api).mockImplementation(async (path) => {
       if (path === "/api/v1/strategies") return strategies as never;
+      if (path === "/api/v1/strategy-profiles/strategy-1") {
+        return { config: defaultBotConfig } as never;
+      }
       return {} as never;
     });
   });
 
-  it("renders dynamic parameters and switches defaults", async () => {
+  it("renders inherited strategy fields", async () => {
     renderEditor();
-    const select = await screen.findByLabelText("Strategy");
-    await screen.findByRole("option", { name: "ema_rsi" });
-    fireEvent.change(select, { target: { value: "ema_rsi" } });
-    expect(await screen.findByLabelText("Fast EMA Period")).toHaveValue(9);
-    expect(screen.getByDisplayValue("21 M1 candles")).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "Strategy inheritance" })).toBeInTheDocument();
+    expect(screen.getAllByText(/Inherited:/).length).toBeGreaterThan(0);
   });
 
-  it("submits the selected strategy parameters", async () => {
+  it("submits enabled overrides", async () => {
     renderEditor();
-    fireEvent.click(await screen.findByRole("button", { name: "Save as new draft" }));
+    const checkboxes = await screen.findAllByRole("checkbox");
+    fireEvent.click(checkboxes[0]);
+    fireEvent.click(screen.getByRole("button", { name: "Save and activate overrides" }));
     await waitFor(() => {
       expect(api).toHaveBeenCalledWith(
-        "/api/v1/bots/bot-1/config-versions",
-        expect.objectContaining({ method: "POST" }),
+        "/api/v1/bots/bot-1/overrides",
+        expect.objectContaining({ method: "PUT" }),
       );
     });
   });
 
-  it("renders enum strategy parameters as selects", async () => {
-    renderEditor();
-    const select = await screen.findByLabelText("Strategy");
-    await screen.findByRole("option", { name: "fvg_ma_volume_profile" });
-    fireEvent.change(select, { target: { value: "fvg_ma_volume_profile" } });
-
-    const direction = await screen.findByLabelText("Trade Direction");
-    expect(direction.tagName).toBe("SELECT");
-    expect(direction).toHaveValue("BOTH");
+  it("does not render the legacy editor for an unlinked bot", () => {
+    renderEditor(null);
+    expect(screen.getByRole("heading", { name: "Global strategy required" })).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Configuration editor" })).not.toBeInTheDocument();
   });
 });

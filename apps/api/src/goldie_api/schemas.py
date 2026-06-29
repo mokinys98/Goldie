@@ -25,6 +25,7 @@ class BotCreate(BaseModel):
     description: str = Field(default="", max_length=1000)
     mode: str = Field(default="SHADOW", pattern="^(SHADOW|PAPER)$")
     market_feed_id: uuid.UUID | None = None
+    strategy_profile_id: uuid.UUID | None = None
     initial_config: BotConfiguration | None = None
 
 

@@ -90,7 +90,14 @@ LOCAL_ADMIN_PASSWORD=<stiprus slaptažodis>
 AGENT_SERVICE_TOKEN=<ilga bendra collector ir API reikšmė>
 CORS_ORIGINS=https://<web-public-domain>
 QUOTE_RETENTION_DAYS=30
+DB_POOL_SIZE=10
+DB_MAX_OVERFLOW=10
 ```
+
+Šios reikšmės vienai API replikai leidžia iki 20 vienalaikių PostgreSQL
+jungčių. Didinant API replikų skaičių, bendras galimas jungčių skaičius didėja
+po 20 kiekvienai replikai, todėl prieš tai patikrinkite PostgreSQL
+`max_connections` ir kitų servisų naudojamas jungtis.
 
 API paleidimo komanda prieš Uvicorn automatiškai vykdo:
 

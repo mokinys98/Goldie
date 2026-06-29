@@ -610,6 +610,34 @@ def create_strategy(
     return profile
 
 
+def test_create_bot_links_selected_strategy() -> None:
+    Base.metadata.drop_all(engine)
+    Base.metadata.create_all(engine)
+    with TestClient(app) as client:
+        headers = login(client)
+        feed_id = register_feed(client, "EURUSD", "EUR_USD")
+        profile = create_strategy(client, headers, "Create bot strategy")
+
+        created = client.post(
+            "/api/v1/bots",
+            headers=headers,
+            json={
+                "name": "Linked bot",
+                "market_feed_id": feed_id,
+                "strategy_profile_id": profile["id"],
+            },
+        )
+
+        assert created.status_code == 201
+        assert created.json()["strategy_profile_id"] == profile["id"]
+        versions = client.get(
+            f"/api/v1/bots/{created.json()['id']}/config-versions",
+            headers=headers,
+        ).json()
+        assert versions[0]["strategy_profile_id"] == profile["id"]
+        assert versions[0]["config"]["market"]["symbol"] == "EURUSD"
+
+
 def test_global_strategy_bulk_creation_and_overrides() -> None:
     Base.metadata.drop_all(engine)
     Base.metadata.create_all(engine)

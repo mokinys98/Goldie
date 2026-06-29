@@ -4,21 +4,24 @@ import { FormEvent, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "@/lib/api";
-import { defaultBotConfig } from "@/lib/config";
-import type { Bot, MarketFeed } from "@/lib/types";
+import type { Bot, MarketFeed, StrategyProfile } from "@/lib/types";
 
 export default function NewBotPage() {
   const router = useRouter();
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
   const [marketFeedId, setMarketFeedId] = useState("");
+  const [strategyProfileId, setStrategyProfileId] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const feeds = useQuery({
     queryKey: ["market-feeds"],
     queryFn: () => api<MarketFeed[]>("/api/v1/market-feeds"),
   });
-  const selectedFeed = feeds.data?.find((feed) => feed.id === marketFeedId);
+  const strategies = useQuery({
+    queryKey: ["strategy-profiles"],
+    queryFn: () => api<StrategyProfile[]>("/api/v1/strategy-profiles"),
+  });
 
   async function submit(event: FormEvent) {
     event.preventDefault();
@@ -32,13 +35,7 @@ export default function NewBotPage() {
           description,
           mode: "SHADOW",
           market_feed_id: marketFeedId || null,
-          initial_config: {
-            ...defaultBotConfig,
-            market: {
-              ...defaultBotConfig.market,
-              symbol: selectedFeed?.canonical_symbol ?? defaultBotConfig.market.symbol,
-            },
-          },
+          strategy_profile_id: strategyProfileId,
         }),
       });
       router.push(`/bots/${bot.id}`);
@@ -79,6 +76,19 @@ export default function NewBotPage() {
           />
         </label>
         <label>
+          Global strategy
+          <select
+            required
+            value={strategyProfileId}
+            onChange={(event) => setStrategyProfileId(event.target.value)}
+          >
+            <option value="">Select strategy</option>
+            {(strategies.data ?? []).map((strategy) => (
+              <option key={strategy.id} value={strategy.id}>{strategy.name}</option>
+            ))}
+          </select>
+        </label>
+        <label>
           Market feed
           <select
             value={marketFeedId}
@@ -98,6 +108,9 @@ export default function NewBotPage() {
         </label>
         {feeds.isError && (
           <div className="error-box">Could not load available market feeds.</div>
+        )}
+        {strategies.isError && (
+          <div className="error-box">Could not load available strategies.</div>
         )}
         {error && <div className="error-box">{error}</div>}
         <div className="button-row">

@@ -85,9 +85,6 @@ def create_bot(
     existing = db.scalar(select(Bot).where(Bot.name == payload.name))
     if existing:
         raise HTTPException(status_code=409, detail="Bot name already exists")
-    initial_config = payload.initial_config or BotConfiguration.model_validate(
-        DEFAULT_BOT_CONFIGURATION
-    )
     selected_feed = (
         db.get(MarketFeed, payload.market_feed_id)
         if payload.market_feed_id is not None
@@ -95,7 +92,27 @@ def create_bot(
     )
     if payload.market_feed_id is not None and selected_feed is None:
         raise HTTPException(status_code=404, detail="Market feed not found")
-    if selected_feed is not None:
+    profile = (
+        db.get(StrategyProfile, payload.strategy_profile_id)
+        if payload.strategy_profile_id is not None
+        else None
+    )
+    if payload.strategy_profile_id is not None and (
+        profile is None or profile.status == "ARCHIVED"
+    ):
+        raise HTTPException(status_code=404, detail="Active strategy not found")
+    if profile is not None:
+        profile_symbol = (profile.config.get("market") or {}).get("symbol", "XAUUSD")
+        initial_config = effective_strategy_config(
+            profile,
+            {},
+            symbol=selected_feed.canonical_symbol if selected_feed else profile_symbol,
+        )
+    else:
+        initial_config = payload.initial_config or BotConfiguration.model_validate(
+            DEFAULT_BOT_CONFIGURATION
+        )
+    if selected_feed is not None and profile is None:
         initial_config = initial_config.model_copy(
             update={
                 "market": initial_config.market.model_copy(
@@ -103,7 +120,7 @@ def create_bot(
                 )
             }
         )
-    else:
+    elif selected_feed is None:
         selected_feed = db.scalar(
             select(MarketFeed)
             .where(
@@ -117,6 +134,8 @@ def create_bot(
         description=payload.description,
         mode=payload.mode,
         market_feed_id=selected_feed.id if selected_feed else None,
+        strategy_profile_id=profile.id if profile else None,
+        config_overrides={},
     )
     db.add(bot)
     db.flush()
@@ -139,6 +158,8 @@ def create_bot(
         config=jsonable_encoder(
             initial_config.model_dump(mode="json")
         ),
+        strategy_profile_id=profile.id if profile else None,
+        config_overrides={},
         created_by=user.id,
     )
     db.add(config)
