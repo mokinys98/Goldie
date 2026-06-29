@@ -145,4 +145,17 @@ describe("Collector feed Data tab", () => {
     expect(screen.getByText("Continuity query failed")).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "BTCUSDT" })).toBeInTheDocument();
   });
+
+  it("opens Commands and pre-fills the historical backfill from a selected gap", () => {
+    render(<CollectorFeedPage />);
+    fireEvent.click(screen.getByRole("button", { name: "Data" }));
+
+    fireEvent.click(screen.getAllByRole("button", { name: /Backfill gap/ })[0]);
+
+    expect(screen.getByRole("heading", { name: "Historical backfill" })).toBeInTheDocument();
+    const start = screen.getByLabelText("Start") as HTMLInputElement;
+    const end = screen.getByLabelText("End") as HTMLInputElement;
+    expect(new Date(start.value).toISOString()).toBe("2026-02-06T11:20:00.000Z");
+    expect(new Date(end.value).toISOString()).toBe("2026-05-27T09:31:00.000Z");
+  });
 });

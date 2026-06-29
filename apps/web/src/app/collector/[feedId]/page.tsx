@@ -15,11 +15,13 @@ import { StatusPill } from "@/components/status-pill";
 
 const tabs = ["Overview", "Data", "Commands", "Settings"] as const;
 type Tab = (typeof tabs)[number];
+type BackfillRange = { start: string; end: string };
 
 export default function CollectorFeedPage() {
   const { feedId } = useParams<{ feedId: string }>();
   const client = useQueryClient();
   const [tab, setTab] = useState<Tab>("Overview");
+  const [backfillRange, setBackfillRange] = useState<BackfillRange>();
   const detail = useQuery({
     queryKey: ["collector-feed", feedId],
     queryFn: () => api<CollectorFeedDetail>(`/api/v1/collector/feeds/${feedId}`),
@@ -109,9 +111,18 @@ export default function CollectorFeedPage() {
           continuity={continuity.data}
           error={continuity.error}
           loading={continuity.isLoading}
+          onSelectGap={(gap) => {
+            setBackfillRange({
+              start: gap.from,
+              end: new Date(new Date(gap.to).getTime() + 60_000).toISOString(),
+            });
+            setTab("Commands");
+          }}
         />
       )}
-      {tab === "Commands" && <Commands feedId={feedId} commands={data.commands} />}
+      {tab === "Commands" && (
+        <Commands feedId={feedId} commands={data.commands} initialRange={backfillRange} />
+      )}
       {tab === "Settings" && settings.data && (
         <Settings
           feedId={feedId}
@@ -158,10 +169,12 @@ function DataContinuity({
   continuity,
   error,
   loading,
+  onSelectGap,
 }: {
   continuity: CollectorContinuity | undefined;
   error: Error | null;
   loading: boolean;
+  onSelectGap: (gap: CollectorContinuityScope["gaps"][number]) => void;
 }) {
   if (loading) return <div className="panel">Loading continuity analysis...</div>;
   if (error || !continuity) {
@@ -197,14 +210,16 @@ function DataContinuity({
                 : 50;
               const width = fullSpan ? (gap.missing_minutes * 60_000 / fullSpan) * 100 : 2;
               return (
-                <span
+                <button
+                  aria-label={`Backfill gap ${displayDate(gap.from)} to ${displayDate(gap.to)}`}
                   className="continuity-gap"
                   key={`${gap.from}-${gap.to}-${index}`}
+                  onClick={() => onSelectGap(gap)}
                   style={{
                     left: `${Math.max(2, Math.min(96, offset))}%`,
                     width: `${Math.max(2, Math.min(38, width))}%`,
                   }}
-                  tabIndex={0}
+                  type="button"
                   data-tooltip={`${displayDate(gap.from)} - ${displayDate(gap.to)} (${gap.missing_minutes}m)`}
                 />
               );
@@ -219,7 +234,7 @@ function DataContinuity({
         </div>
       </div>
       <ContinuitySummary title="Latest 24 hours" scope={recent} />
-      <GapList scope={history} />
+      <GapList scope={history} onSelectGap={onSelectGap} />
     </div>
   );
 }
@@ -259,7 +274,13 @@ function ContinuitySummary({
   );
 }
 
-function GapList({ scope }: { scope: CollectorContinuityScope }) {
+function GapList({
+  scope,
+  onSelectGap,
+}: {
+  scope: CollectorContinuityScope;
+  onSelectGap: (gap: CollectorContinuityScope["gaps"][number]) => void;
+}) {
   if (!scope.gap_segment_count) {
     return (
       <div className="success-box">
@@ -281,11 +302,17 @@ function GapList({ scope }: { scope: CollectorContinuityScope }) {
       {scope.gaps.length ? (
         <div className="gap-list">
           {scope.gaps.map((gap, index) => (
-            <div className="gap-row" key={`${gap.from}-${gap.to}-${index}`}>
+            <button
+              aria-label={`Backfill gap ${displayDate(gap.from)} to ${displayDate(gap.to)}`}
+              className="gap-row"
+              key={`${gap.from}-${gap.to}-${index}`}
+              onClick={() => onSelectGap(gap)}
+              type="button"
+            >
               <span>{displayDate(gap.from)}</span>
               <strong>{gap.missing_minutes.toLocaleString()}m</strong>
               <span>{displayDate(gap.to)}</span>
-            </div>
+            </button>
           ))}
         </div>
       ) : (
@@ -301,10 +328,22 @@ function GapList({ scope }: { scope: CollectorContinuityScope }) {
   );
 }
 
-function Commands({ feedId, commands }: { feedId: string; commands: CollectorCommand[] }) {
+function Commands({
+  feedId,
+  commands,
+  initialRange,
+}: {
+  feedId: string;
+  commands: CollectorCommand[];
+  initialRange?: BackfillRange;
+}) {
   const client = useQueryClient();
-  const [start, setStart] = useState(localInput(new Date(Date.now() - 24 * 3600_000)));
-  const [end, setEnd] = useState(localInput(new Date()));
+  const [start, setStart] = useState(
+    localInput(initialRange ? new Date(initialRange.start) : new Date(Date.now() - 24 * 3600_000)),
+  );
+  const [end, setEnd] = useState(
+    localInput(initialRange ? new Date(initialRange.end) : new Date()),
+  );
   const [error, setError] = useState("");
 
   const send = async (command: CollectorCommand["command"]) => {
