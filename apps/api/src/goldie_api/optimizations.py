@@ -125,7 +125,10 @@ def build_fixed_config_pairs(config: BotConfiguration) -> list[dict[str, Any]]:
     return pairs
 
 
-def build_search_space(config: BotConfiguration) -> list[dict[str, Any]]:
+def build_search_space(
+    config: BotConfiguration,
+    optimization_ranges: dict[str, dict[str, Any]] | None = None,
+) -> list[dict[str, Any]]:
     metadata = _catalog_entry(config.strategy.name)
     defaults = config.strategy.parameters
     search_space: list[dict[str, Any]] = []
@@ -139,13 +142,22 @@ def build_search_space(config: BotConfiguration) -> list[dict[str, Any]]:
             parameter["choices"] = [True, False]
             search_space.append(parameter)
             continue
+        configured_range = (optimization_ranges or {}).get(name)
         uses_optimization_minimum = "optimization_minimum" in field
         minimum = (
-            field["optimization_minimum"]
-            if uses_optimization_minimum
-            else field.get("minimum", field.get("exclusiveMinimum"))
+            configured_range["minimum"]
+            if configured_range is not None
+            else (
+                field["optimization_minimum"]
+                if uses_optimization_minimum
+                else field.get("minimum", field.get("exclusiveMinimum"))
+            )
         )
-        maximum = field.get("optimization_maximum", field.get("maximum"))
+        maximum = (
+            configured_range["maximum"]
+            if configured_range is not None
+            else field.get("optimization_maximum", field.get("maximum"))
+        )
         if (
             field.get("type") in {"integer", "number"}
             and minimum is not None
@@ -153,7 +165,11 @@ def build_search_space(config: BotConfiguration) -> list[dict[str, Any]]:
         ):
             parameter["minimum"] = minimum
             parameter["maximum"] = maximum
-            if "exclusiveMinimum" in field and not uses_optimization_minimum:
+            if (
+                "exclusiveMinimum" in field
+                and not uses_optimization_minimum
+                and configured_range is None
+            ):
                 parameter["exclusive_minimum"] = field["exclusiveMinimum"]
             if name in defaults:
                 parameter["default"] = defaults[name]
@@ -634,7 +650,10 @@ def execute_optimization(db: Session, optimization_id: uuid.UUID) -> None:
                 f"At least {minimum} completed M1 candles are required in both "
                 "search and validation periods"
             )
-        search_space = build_search_space(config)
+        search_space = (
+            optimization.search_space_snapshot
+            or build_search_space(config)
+        )
         if not search_space:
             raise ValueError("No searchable strategy parameters were found")
 

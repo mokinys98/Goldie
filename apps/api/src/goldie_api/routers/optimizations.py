@@ -2,6 +2,7 @@ import uuid
 from datetime import UTC, datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from goldie_domain import BotConfiguration
 from redis import Redis
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -14,10 +15,12 @@ from ..models import (
     OptimizationRun,
     OptimizationTrial,
     Run,
+    StrategyProfile,
     User,
 )
-from ..optimization_diagnostics import build_llm_context
 from ..optimization_analysis import build_optimization_export
+from ..optimization_diagnostics import build_llm_context
+from ..optimizations import build_search_space
 from ..schemas import (
     OptimizationCreate,
     OptimizationRunRead,
@@ -82,6 +85,11 @@ def create_optimization(
         raise HTTPException(status_code=409, detail="Market feed does not belong to bot")
     if config.status not in {"ACTIVE", "SUPERSEDED", "VALIDATED"}:
         raise HTTPException(status_code=409, detail="Config version must be validated")
+    strategy_profile = (
+        db.get(StrategyProfile, config.strategy_profile_id)
+        if config.strategy_profile_id
+        else None
+    )
 
     run = Run(
         bot_id=bot.id,
@@ -116,6 +124,10 @@ def create_optimization(
         min_qty_threshold=payload.min_qty_threshold,
         min_qty_check=payload.min_qty_check,
         config_snapshot=config.config,
+        search_space_snapshot=build_search_space(
+            BotConfiguration.model_validate(config.config),
+            strategy_profile.optimization_ranges if strategy_profile else None,
+        ),
         progress={"completed_trials": 0, "total_trials": payload.n_trials},
         best_candidate={},
         summary={},

@@ -4,6 +4,7 @@ import { useParams } from "next/navigation";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, downloadAuthenticated } from "@/lib/api";
 import { normalizeBotConfig } from "@/lib/config";
+import { displayValue } from "@/lib/display";
 import type { BacktestExperiment, BacktestTradePage } from "@/lib/types";
 import { StatusPill } from "@/components/status-pill";
 
@@ -100,7 +101,7 @@ export default function BacktestDetailPage() {
           <h2>Strategy parameters</h2>
           <div className="key-values">
             {Object.entries(configSnapshot.strategy.parameters).map(([key, value]) => (
-              <div key={key}><dt>{key}</dt><dd>{String(value)}</dd></div>
+              <div key={key}><dt>{key}</dt><dd>{displayValue(value)}</dd></div>
             ))}
           </div>
         </div>

@@ -5,6 +5,7 @@ import { useParams } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 import { api } from "@/lib/api";
+import { displayJson, displayValue } from "@/lib/display";
 import { normalizeBotConfig } from "@/lib/config";
 import type { OptimizationRun, OptimizationTrial } from "@/lib/types";
 import { StatusPill } from "@/components/status-pill";
@@ -116,9 +117,9 @@ export default function OptimizationTrialDetailPage() {
 
       <div className="dashboard-grid collector-section">
         <Metric label={`${phaseScoreLabel(trial.data.phase)} objective score`} value={formatScore(trial.data.score)} />
-        <Metric label="Net P&L" value={String(trial.data.metrics.net_pnl ?? "--")} />
-        <Metric label="Drawdown" value={String(trial.data.metrics.max_drawdown ?? "--")} />
-        <Metric label="Trades" value={String(trial.data.metrics.total_trades ?? "--")} />
+        <Metric label="Net P&L" value={displayValue(trial.data.metrics.net_pnl ?? "--")} />
+        <Metric label="Drawdown" value={displayValue(trial.data.metrics.max_drawdown ?? "--")} />
+        <Metric label="Trades" value={displayValue(trial.data.metrics.total_trades ?? "--")} />
       </div>
 
       <div className="split-layout collector-section">
@@ -129,7 +130,7 @@ export default function OptimizationTrialDetailPage() {
           ) : (
             <dl className="key-values">
               {Object.entries(trial.data.sampled_parameters).map(([key, value]) => (
-                <div key={key}><dt>{key}</dt><dd>{String(value)}</dd></div>
+                <div key={key}><dt>{key}</dt><dd>{displayValue(value)}</dd></div>
               ))}
             </dl>
           )}
@@ -139,7 +140,7 @@ export default function OptimizationTrialDetailPage() {
           <h2>Base snapshot values</h2>
           <dl className="key-values">
             {Object.entries(configSnapshot.strategy.parameters).map(([key, value]) => (
-              <div key={key}><dt>{key}</dt><dd>{String(value)}</dd></div>
+              <div key={key}><dt>{key}</dt><dd>{displayValue(value)}</dd></div>
             ))}
           </dl>
         </div>
@@ -148,7 +149,7 @@ export default function OptimizationTrialDetailPage() {
             <h2>Fixed config overrides</h2>
             <dl className="key-values">
               {Object.entries(trial.data.config_overrides.theoretical_trade).map(([key, value]) => (
-                <div key={key}><dt>{key}</dt><dd>{String(value)}</dd></div>
+                <div key={key}><dt>{key}</dt><dd>{displayValue(value)}</dd></div>
               ))}
             </dl>
           </div>
@@ -172,7 +173,7 @@ export default function OptimizationTrialDetailPage() {
         {diagnostics && (
           <div className="panel">
             <h2>Diagnostics</h2>
-            <pre className="code-block">{JSON.stringify(diagnostics, null, 2)}</pre>
+            <pre className="code-block">{displayJson(diagnostics)}</pre>
           </div>
         )}
 
@@ -210,7 +211,7 @@ function formatScore(value: string | number | null | undefined): string {
 function renderValue(value: unknown): string {
   if (value === null || value === undefined) return "--";
   if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
-    return String(value);
+    return displayValue(value);
   }
-  return JSON.stringify(value);
+  return displayJson(value);
 }

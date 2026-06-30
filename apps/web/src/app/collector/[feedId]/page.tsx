@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, openCollectorStream } from "@/lib/api";
+import { displayValue } from "@/lib/display";
 import type {
   CollectorCommand,
   CollectorContinuity,
@@ -544,7 +545,7 @@ function Metric({ label, value }: { label: string; value: string | number }) {
 function KeyValues({ values }: { values: Record<string, unknown> | null }) {
   if (!values) return <p className="muted">Waiting for data.</p>;
   return <dl className="key-values">{Object.entries(values).map(([key, value]) => (
-    <div key={key}><dt>{key.replaceAll("_", " ")}</dt><dd>{String(value)}</dd></div>
+    <div key={key}><dt>{key.replaceAll("_", " ")}</dt><dd>{displayValue(value)}</dd></div>
   ))}</dl>;
 }
 

@@ -98,6 +98,7 @@ class StrategyProfile(Base, TimestampMixin):
     description: Mapped[str] = mapped_column(Text, default="")
     status: Mapped[str] = mapped_column(String(20), default="DRAFT", index=True)
     config: Mapped[dict] = mapped_column(JSON)
+    optimization_ranges: Mapped[dict] = mapped_column(JSON, default=dict)
 
 
 class Run(Base, TimestampMixin):
@@ -531,6 +532,7 @@ class OptimizationRun(Base, TimestampMixin):
     min_qty_threshold: Mapped[Decimal] = mapped_column(Numeric(20, 8), default=Decimal("0"))
     min_qty_check: Mapped[bool] = mapped_column(Boolean, default=True)
     config_snapshot: Mapped[dict] = mapped_column(JSON)
+    search_space_snapshot: Mapped[list] = mapped_column(JSON, default=list)
     progress: Mapped[dict] = mapped_column(JSON, default=dict)
     best_candidate: Mapped[dict] = mapped_column(JSON, default=dict)
     summary: Mapped[dict] = mapped_column(JSON, default=dict)

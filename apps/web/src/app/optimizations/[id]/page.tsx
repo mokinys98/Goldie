@@ -5,6 +5,7 @@ import { useParams } from "next/navigation";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useRef, useState } from "react";
 import { api } from "@/lib/api";
+import { displayJson, displayValue } from "@/lib/display";
 import { normalizeBotConfig } from "@/lib/config";
 import type {
   OptimizationLlmContext,
@@ -393,7 +394,7 @@ export default function OptimizationDetailPage() {
           ) : (
             <div className="key-values">
               {Object.entries(data.best_candidate.sampled_parameters ?? {}).map(([key, value]) => (
-                <div key={key}><dt>{key}</dt><dd>{String(value)}</dd></div>
+                <div key={key}><dt>{key}</dt><dd>{displayValue(value)}</dd></div>
               ))}
             </div>
           )}
@@ -407,7 +408,7 @@ export default function OptimizationDetailPage() {
               {Object.entries(data.best_candidate.metrics ?? {})
                 .filter(([key]) => key !== "timings")
                 .map(([key, value]) => (
-                  <div key={key}><dt>{key}</dt><dd>{String(value)}</dd></div>
+                  <div key={key}><dt>{key}</dt><dd>{displayValue(value)}</dd></div>
                 ))}
             </div>
           )}
@@ -418,11 +419,11 @@ export default function OptimizationDetailPage() {
             <div><dt>session</dt><dd>{configSnapshot.session.timezone}</dd></div>
             <div>
               <dt>stop_loss_points</dt>
-              <dd>{String(fixedTradeOverrides?.stop_loss_points ?? configSnapshot.theoretical_trade.stop_loss_points)}</dd>
+              <dd>{displayValue(fixedTradeOverrides?.stop_loss_points ?? configSnapshot.theoretical_trade.stop_loss_points)}</dd>
             </div>
             <div>
               <dt>take_profit_points</dt>
-              <dd>{String(fixedTradeOverrides?.take_profit_points ?? configSnapshot.theoretical_trade.take_profit_points)}</dd>
+              <dd>{displayValue(fixedTradeOverrides?.take_profit_points ?? configSnapshot.theoretical_trade.take_profit_points)}</dd>
             </div>
             <div>
               <dt>risk_per_trade_pct</dt>
@@ -454,7 +455,7 @@ export default function OptimizationDetailPage() {
               min_qty_threshold: data.min_qty_threshold,
               min_qty_check: data.min_qty_check,
             }).map(([key, value]) => (
-              <div key={key}><dt>{key}</dt><dd>{String(value)}</dd></div>
+              <div key={key}><dt>{key}</dt><dd>{displayValue(value)}</dd></div>
             ))}
           </div>
         </div>
@@ -486,9 +487,9 @@ export default function OptimizationDetailPage() {
                   <td>{trial.trial_number}</td>
                   <td><StatusPill value={trial.status} /></td>
                   <td>{formatScore(trial.score)}</td>
-                  <td>{String(trial.metrics.net_pnl ?? "--")}</td>
-                  <td>{String(trial.metrics.max_drawdown ?? "--")}</td>
-                  <td>{String(trial.metrics.total_trades ?? "--")}</td>
+                  <td>{displayValue(trial.metrics.net_pnl ?? "--")}</td>
+                  <td>{displayValue(trial.metrics.max_drawdown ?? "--")}</td>
+                  <td>{displayValue(trial.metrics.total_trades ?? "--")}</td>
                   <td>{formatSeconds(trial.metrics.timings?.backtest_seconds)}</td>
                 </tr>
               ))}</tbody>
@@ -505,13 +506,13 @@ export default function OptimizationDetailPage() {
               <tbody>{validationTrials.map((trial) => (
                 <tr key={trial.id}>
                   <td><Link className="table-link" href={`/optimizations/${id}/trials/${trial.id}`}>{trial.trial_number}</Link></td>
-                  <td>{String(trial.config_overrides?.theoretical_trade?.stop_loss_points ?? "--")}</td>
-                  <td>{String(trial.config_overrides?.theoretical_trade?.take_profit_points ?? "--")}</td>
+                  <td>{displayValue(trial.config_overrides?.theoretical_trade?.stop_loss_points ?? "--")}</td>
+                  <td>{displayValue(trial.config_overrides?.theoretical_trade?.take_profit_points ?? "--")}</td>
                   <td><StatusPill value={trial.status} /></td>
                   <td>{formatScore(trial.score)}</td>
-                  <td>{String(trial.metrics.net_pnl ?? "--")}</td>
-                  <td>{String(trial.metrics.max_drawdown ?? "--")}</td>
-                  <td>{String(trial.metrics.total_trades ?? "--")}</td>
+                  <td>{displayValue(trial.metrics.net_pnl ?? "--")}</td>
+                  <td>{displayValue(trial.metrics.max_drawdown ?? "--")}</td>
+                  <td>{displayValue(trial.metrics.total_trades ?? "--")}</td>
                 </tr>
               ))}</tbody>
             </table>
@@ -530,7 +531,7 @@ function JsonPanel({ title, value }: { title: string; value: unknown }) {
   return (
     <div className="panel">
       <h2>{title}</h2>
-      <pre className="code-block">{JSON.stringify(value, null, 2)}</pre>
+      <pre className="code-block">{displayJson(value)}</pre>
     </div>
   );
 }
@@ -623,7 +624,7 @@ function formatGateName(value: string): string {
 
 function formatEvidence(evidence: Record<string, unknown>): string {
   return Object.entries(evidence)
-    .map(([key, value]) => `${formatGateName(key)}: ${String(value)}`)
+    .map(([key, value]) => `${formatGateName(key)}: ${displayValue(value)}`)
     .join(", ");
 }
 

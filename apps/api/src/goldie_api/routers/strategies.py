@@ -21,6 +21,52 @@ router = APIRouter(prefix="/api/v1/strategies", tags=["strategies"])
 profiles = APIRouter(prefix="/api/v1/strategy-profiles", tags=["strategy-profiles"])
 
 
+def validate_optimization_ranges(
+    strategy_name: str,
+    ranges: dict,
+) -> None:
+    catalog_entry = next(
+        (entry for entry in strategy_catalog() if entry["name"] == strategy_name),
+        None,
+    )
+    if catalog_entry is None:
+        raise HTTPException(status_code=422, detail="Unknown strategy algorithm")
+    for name, value in ranges.items():
+        field = catalog_entry["parameters"].get(name)
+        if field is None or field.get("type") not in {"integer", "number"}:
+            raise HTTPException(
+                status_code=422,
+                detail=f"{name} is not a numeric optimization parameter",
+            )
+        minimum = value.minimum
+        maximum = value.maximum
+        if field.get("type") == "integer" and (
+            not minimum.is_integer() or not maximum.is_integer()
+        ):
+            raise HTTPException(
+                status_code=422,
+                detail=f"{name} optimization bounds must be integers",
+            )
+        schema_minimum = field.get("minimum")
+        exclusive_minimum = field.get("exclusiveMinimum")
+        schema_maximum = field.get("maximum")
+        if schema_minimum is not None and minimum < schema_minimum:
+            raise HTTPException(
+                status_code=422,
+                detail=f"{name} minimum must be at least {schema_minimum}",
+            )
+        if exclusive_minimum is not None and minimum <= exclusive_minimum:
+            raise HTTPException(
+                status_code=422,
+                detail=f"{name} minimum must be greater than {exclusive_minimum}",
+            )
+        if schema_maximum is not None and maximum > schema_maximum:
+            raise HTTPException(
+                status_code=422,
+                detail=f"{name} maximum must not exceed {schema_maximum}",
+            )
+
+
 @router.get("")
 def list_strategies(_: User = Depends(get_current_user)) -> list[dict]:
     return strategy_catalog()
@@ -100,6 +146,10 @@ def create_profile(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ) -> StrategyProfileRead:
+    validate_optimization_ranges(
+        payload.initial_config.strategy.name,
+        payload.optimization_ranges,
+    )
     if db.scalar(select(StrategyProfile).where(StrategyProfile.name == payload.name)):
         raise HTTPException(status_code=409, detail="Strategy profile name already exists")
     row = StrategyProfile(
@@ -107,6 +157,12 @@ def create_profile(
         description=payload.description,
         status="ACTIVE",
         config=jsonable_encoder(payload.initial_config.model_dump(mode="json")),
+        optimization_ranges=jsonable_encoder(
+            {
+                name: value.model_dump(mode="json")
+                for name, value in payload.optimization_ranges.items()
+            }
+        ),
     )
     db.add(row)
     db.flush()
@@ -150,6 +206,15 @@ def update_profile(
     values = payload.model_dump(exclude_none=True)
     config = payload.config
     values.pop("config", None)
+    optimization_ranges = payload.optimization_ranges
+    values.pop("optimization_ranges", None)
+    if optimization_ranges is not None:
+        strategy_name = (
+            config.strategy.name
+            if config is not None
+            else row.config["strategy"]["name"]
+        )
+        validate_optimization_ranges(strategy_name, optimization_ranges)
     if "name" in values:
         duplicate = db.scalar(
             select(StrategyProfile).where(
@@ -190,6 +255,13 @@ def update_profile(
             db.add(config_row)
             db.flush()
             activate_config_version(db, bot, config_row)
+    if optimization_ranges is not None:
+        row.optimization_ranges = jsonable_encoder(
+            {
+                name: value.model_dump(mode="json")
+                for name, value in optimization_ranges.items()
+            }
+        )
     add_audit(
         db,
         actor_type="USER",

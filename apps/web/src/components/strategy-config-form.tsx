@@ -6,6 +6,10 @@ import { useEffect, useRef, useState } from "react";
 import { useForm } from "react-hook-form";
 import { api } from "@/lib/api";
 import {
+  exclusiveZeroInputValue,
+  exclusiveZeroStoredValue,
+} from "@/lib/display";
+import {
   botConfigSchema,
   defaultBotConfig,
   extractStrategyConfig,
@@ -15,24 +19,32 @@ import {
 import type {
   BotConfig,
   ConfigurationSchema,
+  OptimizationRanges,
   StrategyMetadata,
   StrategyParameterMetadata,
 } from "@/lib/types";
 import { FieldHelp } from "./field-help";
 
+const EMPTY_OPTIMIZATION_RANGES: OptimizationRanges = {};
+
 export function StrategyConfigForm({
   initialConfig = defaultBotConfig,
+  initialOptimizationRanges = EMPTY_OPTIMIZATION_RANGES,
   submitLabel,
   onSubmit,
   onImportedFileName,
 }: {
   initialConfig?: BotConfig;
+  initialOptimizationRanges?: OptimizationRanges;
   submitLabel: string;
-  onSubmit: (config: BotConfig) => Promise<void>;
+  onSubmit: (config: BotConfig, optimizationRanges: OptimizationRanges) => Promise<void>;
   onImportedFileName?: (name: string) => void;
 }) {
   const initial = normalizeBotConfig(initialConfig);
   const [strategyName, setStrategyName] = useState(initial.strategy.name);
+  const [optimizationRanges, setOptimizationRanges] = useState<OptimizationRanges>(
+    initialOptimizationRanges,
+  );
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
@@ -55,13 +67,14 @@ export function StrategyConfigForm({
   useEffect(() => {
     form.reset(normalizeBotConfig(initialConfig));
     setStrategyName(initialConfig.strategy.name);
-  }, [form, initialConfig]);
+    setOptimizationRanges(initialOptimizationRanges);
+  }, [form, initialConfig, initialOptimizationRanges]);
 
   async function submit(values: BotConfig) {
     setBusy(true);
     setError("");
     try {
-      await onSubmit(values);
+      await onSubmit(values, resolvedOptimizationRanges(selected, optimizationRanges));
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "Could not save strategy");
     } finally {
@@ -74,6 +87,7 @@ export function StrategyConfigForm({
     setStrategyName(name);
     form.setValue("strategy.name", name);
     form.setValue("strategy.parameters", metadata?.defaults ?? {});
+    setOptimizationRanges(defaultOptimizationRanges(metadata));
   }
 
   async function importConfiguration(file: File | undefined) {
@@ -91,6 +105,10 @@ export function StrategyConfigForm({
       const normalized = normalizeBotConfig(validated);
       form.reset(normalized);
       setStrategyName(normalized.strategy.name);
+      const importedMetadata = strategies.data?.find(
+        (item) => item.name === normalized.strategy.name,
+      );
+      setOptimizationRanges(defaultOptimizationRanges(importedMetadata));
       onImportedFileName?.(strategyNameFromFile(file.name));
       setNotice(`Imported ${file.name}. Review the settings before saving.`);
     } catch (reason) {
@@ -155,7 +173,7 @@ export function StrategyConfigForm({
           </button>
         </div>
       </div>
-      <fieldset>
+      <fieldset className="algorithm-fieldset">
         <legend>Algorithm</legend>
         <label>
           <FieldHelp label="Strategy algorithm" metadata={meta("strategy", "name")} />
@@ -180,6 +198,11 @@ export function StrategyConfigForm({
               name={name}
               metadata={metadata}
               register={form.register}
+              range={optimizationRanges[name]}
+              onRangeChange={(range) => setOptimizationRanges((current) => ({
+                ...current,
+                [name]: range,
+              }))}
             />
           ))}
       </fieldset>
@@ -226,7 +249,7 @@ function readTextFile(file: File): Promise<string> {
   });
 }
 
-function ParameterField({ name, metadata, register }: { name: string; metadata: StrategyParameterMetadata; register: Register }) {
+function ParameterField({ name, metadata, register, range, onRangeChange }: { name: string; metadata: StrategyParameterMetadata; register: Register; range?: { minimum: number; maximum: number }; onRangeChange: (range: { minimum: number; maximum: number }) => void }) {
   const label = metadata.title ?? name.replaceAll("_", " ");
   if (metadata.enum?.length) {
     return <SelectField label={label} path={`strategy.parameters.${name}`} metadata={metadata} register={register} />;
@@ -239,7 +262,85 @@ function ParameterField({ name, metadata, register }: { name: string; metadata: 
       </label>
     );
   }
-  return <NumberField label={label} path={`strategy.parameters.${name}`} metadata={metadata} register={register} integer={metadata.type === "integer"} />;
+  if (!hasOptimizationRange(metadata)) {
+    return <NumberField label={label} path={`strategy.parameters.${name}`} metadata={metadata} register={register} integer={metadata.type === "integer"} />;
+  }
+  const defaults = defaultParameterRange(metadata);
+  return (
+    <div className="parameter-range-row">
+      <NumberField label={label} path={`strategy.parameters.${name}`} metadata={metadata} register={register} integer={metadata.type === "integer"} />
+      <label>
+        {label} Min
+        <input
+          aria-label={`${label} Min`}
+          type="number"
+          step={metadata.type === "integer" ? 1 : "any"}
+          value={exclusiveZeroInputValue(range?.minimum ?? defaults.minimum)}
+          onChange={(event) => onRangeChange({
+            minimum: exclusiveZeroStoredValue(
+              Number(event.target.value),
+              metadata.exclusiveMinimum,
+            ),
+            maximum: range?.maximum ?? defaults.maximum,
+          })}
+        />
+      </label>
+      <label>
+        {label} Max
+        <input
+          aria-label={`${label} Max`}
+          type="number"
+          step={metadata.type === "integer" ? 1 : "any"}
+          value={exclusiveZeroInputValue(range?.maximum ?? defaults.maximum)}
+          onChange={(event) => onRangeChange({
+            minimum: range?.minimum ?? defaults.minimum,
+            maximum: Number(event.target.value),
+          })}
+        />
+      </label>
+    </div>
+  );
+}
+
+function defaultParameterRange(metadata: StrategyParameterMetadata) {
+  const exclusiveMinimum = metadata.exclusiveMinimum;
+  return {
+    minimum: Number(
+      metadata.optimization_minimum
+      ?? metadata.minimum
+      ?? (exclusiveMinimum === undefined
+        ? 0
+        : exclusiveMinimum + (metadata.type === "integer" ? 1 : 1e-9)),
+    ),
+    maximum: Number(metadata.optimization_maximum ?? metadata.maximum ?? 0),
+  };
+}
+
+function hasOptimizationRange(metadata: StrategyParameterMetadata): boolean {
+  const hasMinimum = metadata.optimization_minimum !== undefined
+    || metadata.minimum !== undefined
+    || metadata.exclusiveMinimum !== undefined;
+  const hasMaximum = metadata.optimization_maximum !== undefined
+    || metadata.maximum !== undefined;
+  return (metadata.type === "integer" || metadata.type === "number")
+    && hasMinimum
+    && hasMaximum;
+}
+
+function defaultOptimizationRanges(metadata?: StrategyMetadata): OptimizationRanges {
+  if (!metadata) return {};
+  return Object.fromEntries(
+    Object.entries(metadata.parameters)
+      .filter(([, field]) => hasOptimizationRange(field))
+      .map(([name, field]) => [name, defaultParameterRange(field)]),
+  );
+}
+
+function resolvedOptimizationRanges(
+  metadata: StrategyMetadata | undefined,
+  ranges: OptimizationRanges,
+): OptimizationRanges {
+  return { ...defaultOptimizationRanges(metadata), ...ranges };
 }
 
 function NumberField({ label, path, metadata, register, integer = false }: { label: string; path: Parameters<Register>[0]; metadata?: StrategyParameterMetadata; register: Register; integer?: boolean }) {

@@ -80,6 +80,36 @@ def test_search_space_includes_exclusive_minimum_parameters() -> None:
     assert "atr_stop_multiplier" in names
 
 
+def test_strategy_ranges_override_catalog_search_space() -> None:
+    from goldie_domain import BotConfiguration
+
+    config = BotConfiguration.model_validate(
+        {
+            "strategy": {
+                "name": "ema_rsi",
+                "parameters": {
+                    "fast_ema_period": 9,
+                    "slow_ema_period": 21,
+                    "rsi_period": 14,
+                    "buy_rsi_max": "70",
+                    "min_trend_points": "0",
+                    "sell_rsi_min": "60",
+                    "require_crossover": False,
+                },
+            }
+        }
+    )
+
+    search_space = build_search_space(
+        config,
+        {"fast_ema_period": {"minimum": 6, "maximum": 12}},
+    )
+    fast_ema = next(item for item in search_space if item["name"] == "fast_ema_period")
+
+    assert fast_ema["minimum"] == 6
+    assert fast_ema["maximum"] == 12
+
+
 def test_optimization_period_is_split_without_overlap() -> None:
     date_from = datetime(2026, 1, 1, tzinfo=UTC)
     date_to = date_from + timedelta(days=10)

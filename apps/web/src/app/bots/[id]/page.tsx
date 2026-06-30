@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, openBotStream } from "@/lib/api";
+import { displayValue } from "@/lib/display";
 import type {
   Bot,
   BotStatus,
@@ -403,7 +404,7 @@ function KeyValues({ values }: { values: Record<string, unknown> | null }) {
       {Object.entries(values).map(([key, value]) => (
         <div key={key}>
           <dt>{key.replaceAll("_", " ")}</dt>
-          <dd>{String(value)}</dd>
+          <dd>{displayValue(value)}</dd>
         </div>
       ))}
     </dl>
@@ -474,6 +475,6 @@ function symbolPrecision(
 
 function formatInputs(inputs: Record<string, unknown>): string {
   return Object.entries(inputs)
-    .map(([key, value]) => `${key}=${String(value)}`)
+    .map(([key, value]) => `${key}=${displayValue(value)}`)
     .join(", ");
 }

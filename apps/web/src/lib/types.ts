@@ -68,7 +68,16 @@ export type StrategyParameterMetadata = {
   default?: string | number | boolean;
   unit?: string;
   impact?: string;
+  optimization_minimum?: number;
+  optimization_maximum?: number;
 };
+
+export type OptimizationParameterRange = {
+  minimum: number;
+  maximum: number;
+};
+
+export type OptimizationRanges = Record<string, OptimizationParameterRange>;
 
 export type StrategyMetadata = {
   name: string;
@@ -84,6 +93,7 @@ export type StrategyProfile = {
   description: string;
   status: "DRAFT" | "ACTIVE" | "ARCHIVED";
   config: BotConfig;
+  optimization_ranges: OptimizationRanges;
   bot_count: number;
   created_at: string;
   updated_at: string;

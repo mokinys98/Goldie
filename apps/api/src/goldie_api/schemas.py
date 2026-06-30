@@ -61,16 +61,31 @@ class ConfigRead(OrmModel):
     config_overrides: dict
 
 
+class OptimizationParameterRange(BaseModel):
+    minimum: float
+    maximum: float
+
+    @model_validator(mode="after")
+    def ordered(self) -> "OptimizationParameterRange":
+        if self.minimum > self.maximum:
+            raise ValueError("minimum must not exceed maximum")
+        return self
+
+
 class StrategyProfileCreate(BaseModel):
     name: str = Field(min_length=2, max_length=120)
     description: str = Field(default="", max_length=2000)
     initial_config: BotConfiguration
+    optimization_ranges: dict[str, OptimizationParameterRange] = Field(
+        default_factory=dict
+    )
 
 
 class StrategyProfileUpdate(BaseModel):
     name: str | None = Field(default=None, min_length=2, max_length=120)
     description: str | None = Field(default=None, max_length=2000)
     config: BotConfiguration | None = None
+    optimization_ranges: dict[str, OptimizationParameterRange] | None = None
 
 
 class StrategyProfileRead(OrmModel):
@@ -79,6 +94,9 @@ class StrategyProfileRead(OrmModel):
     description: str
     status: str
     config: dict
+    optimization_ranges: dict[str, OptimizationParameterRange] = Field(
+        default_factory=dict
+    )
     created_at: datetime
     updated_at: datetime
     bot_count: int = 0

@@ -23,11 +23,16 @@ export default function NewStrategyPage() {
         <StrategyConfigForm
           submitLabel="Create strategy"
           onImportedFileName={setName}
-          onSubmit={async (config: BotConfig) => {
+          onSubmit={async (config: BotConfig, optimizationRanges) => {
             if (name.trim().length < 2) throw new Error("Strategy name is required");
             const profile = await api<StrategyProfile>("/api/v1/strategy-profiles", {
               method: "POST",
-              body: JSON.stringify({ name, description, initial_config: config }),
+              body: JSON.stringify({
+                name,
+                description,
+                initial_config: config,
+                optimization_ranges: optimizationRanges,
+              }),
             });
             router.push(`/strategies/${profile.id}`);
           }}

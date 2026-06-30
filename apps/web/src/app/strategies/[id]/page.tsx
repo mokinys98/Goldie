@@ -5,6 +5,7 @@ import { useParams, useRouter } from "next/navigation";
 import { useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
+import { displayValue } from "@/lib/display";
 import type {
   BotConfig,
   BulkBotResult,
@@ -81,12 +82,18 @@ export default function StrategyDetailPage() {
           </div>
           <StrategyConfigForm
             initialConfig={data.config}
+            initialOptimizationRanges={data.optimization_ranges}
             submitLabel="Save strategy"
             onImportedFileName={setName}
-            onSubmit={async (config: BotConfig) => {
+            onSubmit={async (config: BotConfig, optimizationRanges) => {
               await api(`/api/v1/strategy-profiles/${id}`, {
                 method: "PATCH",
-                body: JSON.stringify({ name, description, config }),
+                body: JSON.stringify({
+                  name,
+                  description,
+                  config,
+                  optimization_ranges: optimizationRanges,
+                }),
               });
               setEditing(false);
               await refresh();
@@ -121,10 +128,10 @@ function ConfigValues({ config }: { config: BotConfig }) {
   const rows = [
     ["Market", `${config.market.symbol} ${config.market.timeframe}`],
     ["Strategy", config.strategy.name],
-    ...Object.entries(config.strategy.parameters).map(([key, value]) => [key, String(value)]),
-    ...Object.entries(config.filters).map(([key, value]) => [key, String(value)]),
-    ...Object.entries(config.session).map(([key, value]) => [key, String(value)]),
-    ...Object.entries(config.theoretical_trade).map(([key, value]) => [key, String(value)]),
+    ...Object.entries(config.strategy.parameters).map(([key, value]) => [key, displayValue(value)]),
+    ...Object.entries(config.filters).map(([key, value]) => [key, displayValue(value)]),
+    ...Object.entries(config.session).map(([key, value]) => [key, displayValue(value)]),
+    ...Object.entries(config.theoretical_trade).map(([key, value]) => [key, displayValue(value)]),
   ];
   return <dl className="key-values">{rows.map(([key, value]) => <div key={key}><dt>{key.replaceAll("_", " ")}</dt><dd>{value}</dd></div>)}</dl>;
 }

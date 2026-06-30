@@ -3,6 +3,10 @@
 import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 import { api } from "@/lib/api";
+import {
+  displayValue,
+  exclusiveZeroStoredValue,
+} from "@/lib/display";
 import type {
   BotConfig,
   ConfigurationSchema,
@@ -139,11 +143,24 @@ function OverrideEditor({
               <input type="checkbox" checked={enabled[field.path] ?? false} onChange={(event) => setEnabled((current) => ({ ...current, [field.path]: event.target.checked }))} />
               <FieldHelp label={field.label} metadata={field.metadata} />
             </label>
-            <span className="inherited-value">Inherited: {String(field.inherited)}</span>
+            <span className="inherited-value">Inherited: {displayValue(field.inherited)}</span>
             {typeof field.effective === "boolean" ? (
               <select disabled={!enabled[field.path]} value={String(values[field.path])} onChange={(event) => setValues((current) => ({ ...current, [field.path]: event.target.value === "true" }))}><option value="false">false</option><option value="true">true</option></select>
             ) : (
-              <input disabled={!enabled[field.path]} type={typeof field.effective === "number" ? "number" : "text"} value={String(values[field.path])} onChange={(event) => setValues((current) => ({ ...current, [field.path]: typeof field.effective === "number" ? Number(event.target.value) : event.target.value }))} />
+              <input
+                disabled={!enabled[field.path]}
+                type={isNumericField(field) ? "number" : "text"}
+                value={displayValue(values[field.path])}
+                onChange={(event) => setValues((current) => ({
+                  ...current,
+                  [field.path]: isNumericField(field)
+                    ? exclusiveZeroStoredValue(
+                      Number(event.target.value),
+                      field.metadata?.exclusiveMinimum,
+                    )
+                    : event.target.value,
+                }))}
+              />
             )}
           </div>
         ))}
@@ -187,6 +204,15 @@ function flattenConfig(
   add("session.end_time", "End time", inherited.session.end_time, effective.session.end_time, configSchema?.session?.end_time);
   for (const key of Object.keys(inherited.theoretical_trade) as Array<keyof BotConfig["theoretical_trade"]>) add(`theoretical_trade.${key}`, key.replaceAll("_", " "), inherited.theoretical_trade[key], effective.theoretical_trade[key], configSchema?.theoretical_trade?.[key]);
   return entries;
+}
+
+function isNumericField(field: {
+  effective: string | number | boolean;
+  metadata?: StrategyParameterMetadata;
+}): boolean {
+  return typeof field.effective === "number"
+    || field.metadata?.type === "number"
+    || field.metadata?.type === "integer";
 }
 
 function hasNested(value: Record<string, unknown>, path: string): boolean {
