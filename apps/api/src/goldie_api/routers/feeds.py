@@ -65,9 +65,7 @@ def broadcast_to_feed_bots(
         )
     )
     db.commit()
-    publish_event_sync(
-        {**payload, "bot_instance_ids": [str(bot_id) for bot_id in bot_ids]}
-    )
+    publish_event_sync({**payload, "bot_instance_ids": [str(bot_id) for bot_id in bot_ids]})
 
 
 @router.get("", response_model=list[MarketFeedRead])
@@ -174,7 +172,7 @@ def heartbeat(
             "occurred_at": datetime.now(UTC).isoformat(),
             "market_feed_id": str(feed.id),
             "status": feed.status,
-        }
+        },
     )
     return feed
 
@@ -192,7 +190,14 @@ def ingest_instrument_specification(
         return {"accepted": False, "dropped": True, "reason": "FEED_PAUSED"}
     if payload.provider_symbol != feed.provider_symbol:
         raise HTTPException(status_code=422, detail="Provider symbol does not match feed")
-    point = Decimal(10) ** payload.pip_location
+    raw_tick_size = payload.provider_metadata.get("tick_size")
+    point = (
+        Decimal(str(raw_tick_size))
+        if raw_tick_size is not None
+        else Decimal(10) ** payload.pip_location
+    )
+    if point <= 0:
+        raise HTTPException(status_code=422, detail="Instrument tick_size must be positive")
     row = db.scalar(
         select(InstrumentSpecification)
         .where(InstrumentSpecification.market_feed_id == feed_id)
@@ -223,7 +228,7 @@ def ingest_instrument_specification(
             "occurred_at": datetime.now(UTC).isoformat(),
             "market_feed_id": str(feed.id),
             "symbol": feed.canonical_symbol,
-        }
+        },
     )
     return {"accepted": True}
 

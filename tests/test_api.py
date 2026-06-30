@@ -147,6 +147,31 @@ def test_binance_collector_instrument_and_feed_registration() -> None:
         )
         assert feed.status_code == 201
         assert feed.json()["feed"]["provider"] == "binance_spot"
+        feed_body = feed.json()
+
+        specification = client.post(
+            f"/api/v1/market-feeds/{feed_body['feed']['id']}/instrument-specification",
+            headers={"X-Agent-Token": "test-agent-token"},
+            json={
+                "agent_id": feed_body["agent"]["id"],
+                "canonical_symbol": "BTCUSDT",
+                "provider_symbol": "BTCUSDT",
+                "display_precision": 2,
+                "pip_location": -8,
+                "minimum_trade_size": "0.00001",
+                "trade_units_precision": 5,
+                "provider_metadata": {"tick_size": "0.01", "price_precision": 2},
+            },
+        )
+        assert specification.status_code == 202
+        with SessionLocal() as db:
+            stored = db.scalar(
+                select(InstrumentSpecification).where(
+                    InstrumentSpecification.market_feed_id == uuid.UUID(feed_body["feed"]["id"])
+                )
+            )
+            assert stored is not None
+            assert stored.point == Decimal("0.01")
 
         settings = client.get("/api/v1/collector/settings", headers=headers)
         assert settings.status_code == 200
@@ -716,9 +741,7 @@ def test_strategy_update_activates_linked_bot_config() -> None:
         assert updated.status_code == 200
         current = client.get(f"/api/v1/bots/{bot['id']}", headers=headers).json()
         assert current["strategy_profile_id"] == profile["id"]
-        configs = client.get(
-            f"/api/v1/bots/{bot['id']}/config-versions", headers=headers
-        ).json()
+        configs = client.get(f"/api/v1/bots/{bot['id']}/config-versions", headers=headers).json()
         assert len(configs) == 2
         assert configs[0]["status"] == "ACTIVE"
         assert configs[0]["config"]["filters"]["max_spread_points"] == "5"
@@ -768,9 +791,7 @@ def test_strategy_and_bot_crud_archive_preserves_history() -> None:
 
 
 def activate_first_config(client: TestClient, bot_id: str, headers: dict[str, str]) -> None:
-    versions = client.get(
-        f"/api/v1/bots/{bot_id}/config-versions", headers=headers
-    ).json()
+    versions = client.get(f"/api/v1/bots/{bot_id}/config-versions", headers=headers).json()
     if versions[0]["status"] == "ACTIVE":
         return
     validated = client.post(
@@ -910,12 +931,8 @@ def test_shared_oanda_feed_and_paper_ledger() -> None:
         assert duplicate.json()["count"] == 0
         assert duplicate.json()["duplicates"] == 6
 
-        paper_status = client.get(
-            f"/api/v1/bots/{paper['id']}/status", headers=headers
-        ).json()
-        shadow_status = client.get(
-            f"/api/v1/bots/{shadow['id']}/status", headers=headers
-        ).json()
+        paper_status = client.get(f"/api/v1/bots/{paper['id']}/status", headers=headers).json()
+        shadow_status = client.get(f"/api/v1/bots/{shadow['id']}/status", headers=headers).json()
         assert paper_status["paper_account"]["balance"] == 10000.0
         assert paper_status["paper_account"]["equity"] == 10000.0
         assert shadow_status["paper_account"] is None
@@ -941,9 +958,7 @@ def test_shared_oanda_feed_and_paper_ledger() -> None:
             },
         )
         assert heartbeat.status_code == 200
-        closed_status = client.get(
-            f"/api/v1/bots/{paper['id']}/status", headers=headers
-        ).json()
+        closed_status = client.get(f"/api/v1/bots/{paper['id']}/status", headers=headers).json()
         assert closed_status["agent_effective_status"] == "MARKET_CLOSED"
         assert closed_status["data_state"] == "MARKET_CLOSED"
 
@@ -1139,9 +1154,10 @@ def test_batch_backtest_uses_active_bot_configuration() -> None:
         )
         assert response.status_code == 200
         assert [item["status"] for item in response.json()] == ["CREATED", "FAILED"]
-        assert response.json()[0]["experiment"]["config_version_id"] == active[
-            "active_config_version_id"
-        ]
+        assert (
+            response.json()[0]["experiment"]["config_version_id"]
+            == active["active_config_version_id"]
+        )
 
 
 def test_backtest_progress_reporter_throttles_and_honors_cancel() -> None:
@@ -1162,9 +1178,7 @@ def test_backtest_progress_reporter_throttles_and_honors_cancel() -> None:
         uuid.uuid4(),
         clock=lambda: now[0],
     )
-    reporter._write = lambda _db, processed, total: (
-        writes.append((processed, total)) or True
-    )
+    reporter._write = lambda _db, processed, total: writes.append((processed, total)) or True
 
     assert reporter(100, 5000)
     assert writes == []
@@ -1189,9 +1203,7 @@ def test_shadow_trade_and_performance_endpoints() -> None:
         ).json()
         bot_id = uuid.UUID(bot["id"])
         with Session(engine) as db:
-            config = db.scalar(
-                select(ConfigVersion).where(ConfigVersion.bot_id == bot_id)
-            )
+            config = db.scalar(select(ConfigVersion).where(ConfigVersion.bot_id == bot_id))
             run = Run(
                 bot_id=bot_id,
                 config_version_id=config.id,
@@ -1257,8 +1269,7 @@ def test_shadow_trade_and_performance_endpoints() -> None:
             json={"name": "No performance yet", "mode": "SHADOW"},
         ).json()
         portfolio = client.get(
-            "/api/v1/bots/performance"
-            "?date_from=2026-06-11T00:00:00Z&date_to=2026-06-12T00:00:00Z",
+            "/api/v1/bots/performance?date_from=2026-06-11T00:00:00Z&date_to=2026-06-12T00:00:00Z",
             headers=headers,
         )
 

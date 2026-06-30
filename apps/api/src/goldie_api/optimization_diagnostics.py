@@ -55,6 +55,24 @@ ATR_QUANTILES = (0.05, 0.10, 0.25, 0.50, 0.75, 0.90, 0.95)
 DEFAULT_ANALYTICS_ATR_PERIOD = 14
 
 
+def _instrument_units(spec: InstrumentSpecification | None) -> dict[str, Any]:
+    if spec is None:
+        return {"point_size": None, "tick_size": None, "price_precision": None}
+    metadata = spec.provider_metadata or {}
+    raw_tick_size = metadata.get("tick_size")
+    try:
+        tick_size = Decimal(str(raw_tick_size)) if raw_tick_size is not None else spec.point
+    except (TypeError, ValueError):
+        tick_size = spec.point
+    if tick_size <= 0:
+        tick_size = spec.point
+    return {
+        "point_size": spec.point,
+        "tick_size": tick_size,
+        "price_precision": metadata.get("price_precision", spec.display_precision),
+    }
+
+
 def _number(value: Any) -> float | None:
     if value is None or isinstance(value, bool):
         return None
@@ -154,7 +172,7 @@ def _atr_quantiles_by_period(
     *,
     search_period: tuple[datetime, datetime] | None,
     validation_period: tuple[datetime, datetime] | None,
-) -> dict[str, Any]:
+) -> tuple[dict[str, Any], dict[str, Any]]:
     period = _configured_atr_period(optimization)
     point = db.scalar(
         select(InstrumentSpecification.point)
@@ -163,29 +181,47 @@ def _atr_quantiles_by_period(
         .limit(1)
     )
 
-    def summarize(date_range: tuple[datetime, datetime] | None) -> dict[str, Any]:
+    def summarize(
+        date_range: tuple[datetime, datetime] | None,
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
         if date_range is None:
-            return _quantiles([])
-        rows = db.execute(
-            select(Candle.close, Candle.high, Candle.low)
-            .where(
-                Candle.market_feed_id == optimization.market_feed_id,
-                Candle.timeframe == "M1",
-                Candle.is_complete.is_(True),
-                Candle.opened_at >= date_range[0],
-                Candle.opened_at < date_range[1],
+            return _quantiles([]), _quantiles([])
+        rows = list(
+            db.execute(
+                select(Candle.close, Candle.high, Candle.low)
+                .where(
+                    Candle.market_feed_id == optimization.market_feed_id,
+                    Candle.timeframe == "M1",
+                    Candle.is_complete.is_(True),
+                    Candle.opened_at >= date_range[0],
+                    Candle.opened_at < date_range[1],
+                )
+                .order_by(Candle.opened_at)
+                .execution_options(stream_results=True, yield_per=2000)
             )
-            .order_by(Candle.opened_at)
-            .execution_options(stream_results=True, yield_per=2000)
         )
-        return _quantiles(_atr_values(rows.tuples(), period=period, point=point))
+        tuples = [tuple(row) for row in rows]
+        return (
+            _quantiles(_atr_values(tuples, period=period, point=point)),
+            _quantiles(_atr_values(tuples, period=period, point=None)),
+        )
 
-    return {
-        "period": period,
-        "unit": "points" if point is not None and point > 0 else "price",
-        "search": summarize(search_period),
-        "validation": summarize(validation_period),
-    }
+    search_points, search_price = summarize(search_period)
+    validation_points, validation_price = summarize(validation_period)
+    return (
+        {
+            "period": period,
+            "unit": "points" if point is not None and point > 0 else "price",
+            "search": search_points,
+            "validation": validation_points,
+        },
+        {
+            "period": period,
+            "unit": "price",
+            "search": search_price,
+            "validation": validation_price,
+        },
+    )
 
 
 def build_backtest_diagnostics(
@@ -258,8 +294,10 @@ def build_trial_metrics(
 def _oanda_market_is_closed(value: datetime) -> bool:
     timestamp = as_utc(value)
     weekday = timestamp.weekday()
-    return weekday == 5 or (weekday == 4 and timestamp.hour >= 22) or (
-        weekday == 6 and timestamp.hour < 22
+    return (
+        weekday == 5
+        or (weekday == 4 and timestamp.hour >= 22)
+        or (weekday == 6 and timestamp.hour < 22)
     )
 
 
@@ -360,14 +398,17 @@ def build_data_profile(
         Candle.market_feed_id == optimization.market_feed_id,
         Candle.timeframe == "M1",
     )
-    incomplete_count = db.scalar(
-        select(func.count(Candle.id)).where(
-            *base_filter,
-            Candle.opened_at >= optimization.date_from,
-            Candle.opened_at < optimization.date_to,
-            Candle.is_complete.is_(False),
+    incomplete_count = (
+        db.scalar(
+            select(func.count(Candle.id)).where(
+                *base_filter,
+                Candle.opened_at >= optimization.date_from,
+                Candle.opened_at < optimization.date_to,
+                Candle.is_complete.is_(False),
+            )
         )
-    ) or 0
+        or 0
+    )
     ordered_times = list(
         db.scalars(
             select(Candle.opened_at)
@@ -381,8 +422,14 @@ def build_data_profile(
         )
     )
     feed = db.get(MarketFeed, optimization.market_feed_id)
+    spec = db.scalar(
+        select(InstrumentSpecification)
+        .where(InstrumentSpecification.market_feed_id == optimization.market_feed_id)
+        .order_by(InstrumentSpecification.created_at.desc())
+        .limit(1)
+    )
     gap_summary = _summarize_m1_gaps(ordered_times, feed=feed)
-    atr_quantiles = _atr_quantiles_by_period(
+    atr_quantiles, atr_price_quantiles = _atr_quantiles_by_period(
         db,
         optimization,
         search_period=search_period,
@@ -393,6 +440,7 @@ def build_data_profile(
             "market_feed_id": optimization.market_feed_id,
             "symbol": feed.canonical_symbol if feed else None,
             "provider_symbol": feed.provider_symbol if feed else None,
+            **_instrument_units(spec),
             "timeframe": "M1",
             "date_from": optimization.date_from,
             "date_to": optimization.date_to,
@@ -411,6 +459,7 @@ def build_data_profile(
             "complete_candles": len(ordered_times),
             "incomplete_candles": incomplete_count,
             "atr_quantiles": atr_quantiles,
+            "atr_price_quantiles": atr_price_quantiles,
             "gap_detection_policy": (
                 "OANDA weekend market-closed minutes are reported separately and "
                 "excluded from detected_m1_gap_count."
@@ -427,9 +476,7 @@ def _successful_trials(trials: list[OptimizationTrial]) -> list[OptimizationTria
 
 
 def build_parameter_insights(trials: list[OptimizationTrial]) -> dict[str, Any]:
-    succeeded = _successful_trials(
-        [trial for trial in trials if trial.phase == "STRATEGY_SEARCH"]
-    )
+    succeeded = _successful_trials([trial for trial in trials if trial.phase == "STRATEGY_SEARCH"])
     if not succeeded:
         return {"top_decile": {}, "bottom_decile": {}, "numeric_score_correlation": {}}
     ranked = sorted(succeeded, key=lambda trial: _score(trial.score), reverse=True)
@@ -459,11 +506,7 @@ def build_parameter_insights(trials: list[OptimizationTrial]) -> dict[str, Any]:
 
     correlations: dict[str, float] = {}
     parameter_names = sorted(
-        {
-            name
-            for trial in succeeded
-            for name in (trial.sampled_parameters or {}).keys()
-        }
+        {name for trial in succeeded for name in (trial.sampled_parameters or {}).keys()}
     )
     scores = [_score(trial.score) for trial in succeeded]
     mean_score = _average(scores)
@@ -650,9 +693,7 @@ def build_research_quality_gates(
     robustness: dict[str, Any],
 ) -> dict[str, Any]:
     succeeded = _successful_trials(trials)
-    validation_trials = [
-        trial for trial in succeeded if trial.phase == "FIXED_CONFIG_VALIDATION"
-    ]
+    validation_trials = [trial for trial in succeeded if trial.phase == "FIXED_CONFIG_VALIDATION"]
     total_trials = len(trials)
     failed_trials = len([trial for trial in trials if trial.status == "FAILED"])
     failed_ratio = failed_trials / total_trials if total_trials else 0
@@ -876,22 +917,14 @@ def build_research_quality_gates(
     risk_status = "PASS"
     risk_severity = "INFO"
     risk_message = "Drawdown and consecutive-loss risk are within V1 tolerance."
-    if (
-        (drawdown_pct is not None and drawdown_pct > DRAWDOWN_BLOCK_PCT)
-        or (
-            consecutive_losses is not None
-            and consecutive_losses > CONSECUTIVE_LOSSES_BLOCK
-        )
+    if (drawdown_pct is not None and drawdown_pct > DRAWDOWN_BLOCK_PCT) or (
+        consecutive_losses is not None and consecutive_losses > CONSECUTIVE_LOSSES_BLOCK
     ):
         risk_status = "BLOCK"
         risk_severity = "HIGH"
         risk_message = "Best validation candidate breaches V1 risk limits."
-    elif (
-        (drawdown_pct is not None and drawdown_pct > DRAWDOWN_WARN_PCT)
-        or (
-            consecutive_losses is not None
-            and consecutive_losses > CONSECUTIVE_LOSSES_WARN
-        )
+    elif (drawdown_pct is not None and drawdown_pct > DRAWDOWN_WARN_PCT) or (
+        consecutive_losses is not None and consecutive_losses > CONSECUTIVE_LOSSES_WARN
     ):
         risk_status = "WARN"
         risk_severity = "MEDIUM"
@@ -985,9 +1018,7 @@ def build_llm_context(db: Session, optimization: OptimizationRun) -> dict[str, A
     )
     succeeded = _successful_trials(trials)
     search_trials = [trial for trial in succeeded if trial.phase == "STRATEGY_SEARCH"]
-    validation_trials = [
-        trial for trial in succeeded if trial.phase == "FIXED_CONFIG_VALIDATION"
-    ]
+    validation_trials = [trial for trial in succeeded if trial.phase == "FIXED_CONFIG_VALIDATION"]
     ranked_search = sorted(search_trials, key=lambda trial: _score(trial.score), reverse=True)
     ranked_validation = sorted(
         validation_trials,
@@ -998,11 +1029,7 @@ def build_llm_context(db: Session, optimization: OptimizationRun) -> dict[str, A
 
     best_trial_number = (optimization.best_candidate or {}).get("trial_number")
     selected_trial = next(
-        (
-            trial
-            for trial in succeeded
-            if trial.trial_number == best_trial_number
-        ),
+        (trial for trial in succeeded if trial.trial_number == best_trial_number),
         (
             ranked_validation[0]
             if ranked_validation
@@ -1022,11 +1049,7 @@ def build_llm_context(db: Session, optimization: OptimizationRun) -> dict[str, A
     )
 
     def condition_counts(trial: OptimizationTrial) -> dict[str, Any]:
-        return (
-            (trial.metrics or {})
-            .get("diagnostics", {})
-            .get("condition_pass_counts", {})
-        )
+        return (trial.metrics or {}).get("diagnostics", {}).get("condition_pass_counts", {})
 
     def add_condition_counts(
         target: dict[str, dict[str, int]],
@@ -1128,9 +1151,7 @@ def build_llm_context(db: Session, optimization: OptimizationRun) -> dict[str, A
         for buckets in (monthly, directions):
             for bucket in buckets.values():
                 bucket["win_rate"] = (
-                    bucket["wins"] * 100 / bucket["trades"]
-                    if bucket["trades"]
-                    else None
+                    bucket["wins"] * 100 / bucket["trades"] if bucket["trades"] else None
                 )
 
         return {
@@ -1155,9 +1176,7 @@ def build_llm_context(db: Session, optimization: OptimizationRun) -> dict[str, A
             "validation_score": candidate.get("validation_score"),
             "score_degradation_pct": candidate.get("score_degradation_pct"),
             "validation_metrics": {
-                key: metrics.get(key)
-                for key in CORE_TRIAL_METRICS
-                if key in metrics
+                key: metrics.get(key) for key in CORE_TRIAL_METRICS if key in metrics
             },
         }
 
@@ -1169,6 +1188,12 @@ def build_llm_context(db: Session, optimization: OptimizationRun) -> dict[str, A
     selected_metrics = selected_trial.metrics if selected_trial is not None else {}
     selected_summary = selected_trial.summary if selected_trial is not None else {}
     feed = db.get(MarketFeed, optimization.market_feed_id)
+    current_spec = db.scalar(
+        select(InstrumentSpecification)
+        .where(InstrumentSpecification.market_feed_id == optimization.market_feed_id)
+        .order_by(InstrumentSpecification.created_at.desc())
+        .limit(1)
+    )
     strategy = (optimization.config_snapshot or {}).get("strategy") or {}
     optuna_strategy_ranges = (
         optimization.search_space_snapshot
@@ -1176,25 +1201,55 @@ def build_llm_context(db: Session, optimization: OptimizationRun) -> dict[str, A
         or summary.get("search_space")
         or []
     )
+    current_units = _instrument_units(current_spec)
+    units = {
+        key: data_profile.get(key)
+        if data_profile.get(key) is not None
+        else current_units[key]
+        for key in ("point_size", "tick_size", "price_precision")
+    }
+    point_size = _number(units["point_size"])
+    trade_config = (optimization.config_snapshot or {}).get("theoretical_trade") or {}
+    selected_trade_overrides = (
+        (selected_trial.config_overrides or {}).get("theoretical_trade", {})
+        if selected_trial is not None
+        else {}
+    )
+    stop_loss_points = selected_trade_overrides.get(
+        "stop_loss_points", trade_config.get("stop_loss_points")
+    )
+    take_profit_points = selected_trade_overrides.get(
+        "take_profit_points", trade_config.get("take_profit_points")
+    )
+    stop_loss_price_distance = (
+        _number(stop_loss_points) * point_size
+        if _number(stop_loss_points) is not None and point_size is not None
+        else None
+    )
+    take_profit_price_distance = (
+        _number(take_profit_points) * point_size
+        if _number(take_profit_points) is not None and point_size is not None
+        else None
+    )
     return jsonable_encoder(
         {
             "schema_version": "goldie.optimization-llm-context.v3",
             "strategy": strategy.get("name"),
             "symbol": data_profile.get("symbol") or (feed.canonical_symbol if feed else None),
             "timeframe": "M1",
+            **units,
+            "stop_loss_price_distance": stop_loss_price_distance,
+            "take_profit_price_distance": take_profit_price_distance,
+            "atr_price_quantiles": data_profile.get("atr_price_quantiles"),
             "date_range": {
                 "date_from": optimization.date_from,
                 "date_to": optimization.date_to,
             },
             "search_period": (
-                summary.get("search_period")
-                or data_profile.get("search_period")
-                or {}
+                summary.get("search_period") or data_profile.get("search_period") or {}
             ),
             "validation_period": (
-                summary.get("validation_period")
-                or data_profile.get("validation_period")
-                or {}
+                summary.get("validation_period") or data_profile.get("validation_period") or {}
             ),
             "data_quality": {
                 key: data_profile.get(key)
@@ -1208,6 +1263,7 @@ def build_llm_context(db: Session, optimization: OptimizationRun) -> dict[str, A
                     "market_closed_m1_gap_count",
                     "market_closed_m1_missing_minutes",
                     "atr_quantiles",
+                    "atr_price_quantiles",
                     "volume_quantiles",
                 )
             },
@@ -1223,38 +1279,29 @@ def build_llm_context(db: Session, optimization: OptimizationRun) -> dict[str, A
             "search_space": optuna_strategy_ranges,
             "optuna_strategy_ranges": optuna_strategy_ranges,
             "fixed_config_grid": (
-                decision_context.get("fixed_config_grid")
-                or summary.get("fixed_config_grid")
-                or []
+                decision_context.get("fixed_config_grid") or summary.get("fixed_config_grid") or []
             ),
             "best_candidate": compact_trial(selected_trial) if selected_trial else {},
             "top_trials": [compact_trial(trial) for trial in ranked_search[:10]],
-            "validation_winners": [
-                compact_trial(trial) for trial in ranked_validation[:10]
-            ],
+            "validation_winners": [compact_trial(trial) for trial in ranked_validation[:10]],
             "worst_trials": [compact_trial(trial) for trial in worst],
             "parameter_stability": {
                 "distributions": build_parameter_distributions(trials),
                 "insights": summary.get("parameter_insights") or {},
                 "validated_candidate_count": robustness.get("validated_candidate_count", 0),
-                "average_score_degradation_pct": robustness.get(
-                    "average_score_degradation_pct"
-                ),
+                "average_score_degradation_pct": robustness.get("average_score_degradation_pct"),
                 "stable_candidates": [
                     compact_stable_candidate(candidate)
                     for candidate in (robustness.get("stable_candidates") or [])[:5]
                 ],
             },
             "condition_pass_counts": aggregate_condition_counts(),
-            "monthly_breakdown": trade_aggregates["monthly"] or selected_summary.get(
-                "month_breakdown", {}
-            ),
-            "direction_breakdown": trade_aggregates["directions"] or selected_summary.get(
-                "direction_breakdown", {}
-            ),
-            "close_reason_counts": trade_aggregates["close_reasons"] or selected_summary.get(
-                "close_reason_counts", {}
-            ),
+            "monthly_breakdown": trade_aggregates["monthly"]
+            or selected_summary.get("month_breakdown", {}),
+            "direction_breakdown": trade_aggregates["directions"]
+            or selected_summary.get("direction_breakdown", {}),
+            "close_reason_counts": trade_aggregates["close_reasons"]
+            or selected_summary.get("close_reason_counts", {}),
             "risk_summary": {
                 "source_trial_number": selected_trial.trial_number if selected_trial else None,
                 "max_drawdown": selected_metrics.get("max_drawdown"),
@@ -1270,9 +1317,7 @@ def build_llm_context(db: Session, optimization: OptimizationRun) -> dict[str, A
             },
             "duration_quantiles": {
                 "source_trial_number": selected_trial.trial_number if selected_trial else None,
-                "seconds": quantiles(
-                    [float(trade.duration_seconds) for trade in selected_trades]
-                ),
+                "seconds": quantiles([float(trade.duration_seconds) for trade in selected_trades]),
             },
             "research_quality_gates": summary.get("research_quality_gates") or {},
         }

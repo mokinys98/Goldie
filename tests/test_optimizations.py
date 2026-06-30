@@ -11,6 +11,7 @@ os.environ["LOCAL_ADMIN_EMAIL"] = "admin@test.local"
 os.environ["LOCAL_ADMIN_PASSWORD"] = "test-password"
 os.environ["AGENT_SERVICE_TOKEN"] = "test-agent-token"
 
+import pytest
 from fastapi.testclient import TestClient
 from goldie_api.db import Base, SessionLocal, engine
 from goldie_api.main import app
@@ -39,6 +40,7 @@ from goldie_api.optimizations import (
     execute_optimization,
     sample_parameters,
     split_optimization_period,
+    validate_trial_summary,
 )
 
 
@@ -358,6 +360,10 @@ def test_data_profile_reports_atr_quantiles_for_search_and_validation_periods() 
         "q90": 40,
         "q95": 40,
     }
+    price_quantiles = profile["atr_price_quantiles"]
+    assert price_quantiles["unit"] == "price"
+    assert price_quantiles["search"]["q50"] == 2
+    assert price_quantiles["validation"]["q50"] == 4
 
 
 def test_compute_balanced_score_penalizes_drawdown_and_low_trade_count() -> None:
@@ -373,6 +379,13 @@ def test_compute_balanced_score_heavily_penalizes_one_trade_candidate() -> None:
 def test_compute_balanced_score_rejects_candidate_without_trades() -> None:
     summary = {"net_pnl": "0", "max_drawdown": "0", "total_trades": 0}
     assert compute_balanced_score(summary) == Decimal("-99999")
+
+
+def test_trial_with_impossible_expectancy_r_is_invalid() -> None:
+    with pytest.raises(ValueError, match=r"abs\(expectancy_r\).+exceeds 10"):
+        validate_trial_summary({"expectancy_r": "-368308477"})
+
+    validate_trial_summary({"expectancy_r": "10"})
 
 
 def test_backtest_diagnostics_compacts_trade_behavior() -> None:
@@ -631,9 +644,7 @@ def test_llm_context_v3_compacts_trials_and_aggregates_best_trades() -> None:
             db.flush()
             trials.append(trial)
             for trade_index in range(trade_count):
-                opened_at = datetime(2026, 1, 1, 10, 0, tzinfo=UTC) + timedelta(
-                    minutes=trade_index
-                )
+                opened_at = datetime(2026, 1, 1, 10, 0, tzinfo=UTC) + timedelta(minutes=trade_index)
                 db.add(
                     OptimizationTrialTrade(
                         trial_id=trial.id,
@@ -670,9 +681,7 @@ def test_llm_context_v3_compacts_trials_and_aggregates_best_trades() -> None:
         db.delete(trials[1])
         db.commit()
         remaining_deleted_trial_trades = (
-            db.query(OptimizationTrialTrade)
-            .filter_by(trial_id=deleted_trial_id)
-            .count()
+            db.query(OptimizationTrialTrade).filter_by(trial_id=deleted_trial_id).count()
         )
 
     assert payload["schema_version"] == "goldie.optimization-llm-context.v3"
@@ -685,9 +694,7 @@ def test_llm_context_v3_compacts_trials_and_aggregates_best_trades() -> None:
         "evaluated": 40,
         "passed": 6,
     }
-    assert payload["parameter_stability"]["distributions"]["fast_ema_period"][
-        "unique_values"
-    ] == 2
+    assert payload["parameter_stability"]["distributions"]["fast_ema_period"]["unique_values"] == 2
     assert payload["monthly_breakdown"]["2026-01"]["trades"] == 30
     assert payload["direction_breakdown"]["BUY"]["trades"] == 30
     assert payload["close_reason_counts"] == {"TAKE_PROFIT": 30}
@@ -867,9 +874,7 @@ def test_optimization_api_and_execution_flow(monkeypatch) -> None:
         assert export_body["optimization"]["id"] == str(optimization_id)
         assert len(export_body["trials"]) == 57
         assert export_body["analysis"]["phases"]["STRATEGY_SEARCH"]["trial_count"] == 12
-        assert export_body["analysis"]["phases"]["FIXED_CONFIG_VALIDATION"][
-            "trial_count"
-        ] == 45
+        assert export_body["analysis"]["phases"]["FIXED_CONFIG_VALIDATION"]["trial_count"] == 45
         assert export_body["analysis"]["parameter_distributions"]
         assert export_body["analysis"]["candidate_validation"]
         assert export_body["analysis"]["parameter_insights"]
@@ -883,10 +888,7 @@ def test_optimization_api_and_execution_flow(monkeypatch) -> None:
         llm_body = llm_context.json()
         assert llm_body["schema_version"] == "goldie.optimization-llm-context.v3"
         assert llm_body["optuna_strategy_ranges"]
-        assert (
-            llm_body["optuna_strategy_ranges"]
-            == detail.json()["search_space_snapshot"]
-        )
+        assert llm_body["optuna_strategy_ranges"] == detail.json()["search_space_snapshot"]
         assert llm_body["search_space"] == llm_body["optuna_strategy_ranges"]
         assert llm_body["top_trials"]
         assert llm_body["worst_trials"]
@@ -911,6 +913,13 @@ def test_optimization_api_and_execution_flow(monkeypatch) -> None:
         }
         assert atr_quantiles["search"]["count"] > 0
         assert atr_quantiles["validation"]["count"] > 0
+        assert llm_body["point_size"] == 0.1
+        assert llm_body["tick_size"] == 0.1
+        assert llm_body["price_precision"] == 2
+        assert llm_body["stop_loss_price_distance"] > 0
+        assert llm_body["take_profit_price_distance"] > 0
+        assert llm_body["atr_price_quantiles"]["unit"] == "price"
+        assert llm_body["data_quality"]["atr_price_quantiles"]["unit"] == "price"
         assert llm_body["research_quality_gates"] == quality_gates
         assert "equity_curve" not in str(llm_body["top_trials"])
         assert "equity_curve" not in str(llm_body["best_candidate"])

@@ -105,6 +105,8 @@ describe("OptimizationDetailPage", () => {
     useQuery.mockImplementation(({ queryKey }: { queryKey: string[] }) => (
       queryKey[0] === "optimization"
         ? { data: optimization, isLoading: false, error: null }
+        : queryKey[0] === "bot"
+          ? { data: { id: "bot-1", name: "Prefix Alpha Bot" }, isLoading: false, error: null }
         : { data: { items: [], total: 0 }, isLoading: false, error: null }
     ));
   });
@@ -117,6 +119,7 @@ describe("OptimizationDetailPage", () => {
   it("renders persisted performance timings", () => {
     render(<OptimizationDetailPage />);
 
+    expect(screen.getByRole("heading", { name: "Prefix Alpha Bot", level: 1 })).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Performance timings" })).toBeInTheDocument();
     expect(screen.getByText("0.123456 s")).toBeInTheDocument();
     expect(screen.getByText("1.345678 s")).toBeInTheDocument();
@@ -162,6 +165,23 @@ describe("OptimizationDetailPage", () => {
     expect(
       screen.getAllByRole("button", { name: "LLM context JSON" }).at(1),
     ).toBeEnabled();
+  });
+
+  it("uses the bot name and optimization prefix for downloaded JSON", async () => {
+    const createObjectUrl = vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:test");
+    const revokeObjectUrl = vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => undefined);
+    const click = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(function () {
+      expect(this.download).toBe("prefix-alpha-bot-optimization-optimiza.json");
+    });
+    api.mockResolvedValueOnce({ trials: [] });
+    render(<OptimizationDetailPage />);
+
+    fireEvent.click(screen.getByLabelText("Download optimization data"));
+    fireEvent.click(screen.getAllByRole("button", { name: "Results JSON" }).at(0)!);
+
+    await waitFor(() => expect(click).toHaveBeenCalledOnce());
+    expect(createObjectUrl).toHaveBeenCalledOnce();
+    expect(revokeObjectUrl).toHaveBeenCalledWith("blob:test");
   });
 
   it("copies results with the fallback clipboard path when Clipboard API is unavailable", async () => {

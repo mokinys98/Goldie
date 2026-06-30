@@ -6,6 +6,7 @@ from .backtest import (
     BacktestInstrument,
     BacktestResult,
     BacktestTrade,
+    InvalidBacktestResult,
 )
 from .config import BotConfiguration
 from .indicators import (
@@ -53,6 +54,7 @@ __all__ = [
     "BacktestInstrument",
     "BacktestResult",
     "BacktestTrade",
+    "InvalidBacktestResult",
     "BasicMomentumStrategy",
     "BollingerEmaRsiMeanReversionStrategy",
     "BollingerMomentumBreakoutStrategy",

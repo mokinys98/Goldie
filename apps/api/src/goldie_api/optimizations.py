@@ -41,6 +41,7 @@ OPTIMIZATION_CANCEL_CHECK_INTERVAL = 5
 STRATEGY_SEARCH_PHASE = "STRATEGY_SEARCH"
 FIXED_CONFIG_VALIDATION_PHASE = "FIXED_CONFIG_VALIDATION"
 VALIDATION_CANDIDATE_LIMIT = 5
+MAX_ABS_EXPECTANCY_R = Decimal("10")
 FIXED_CONFIG_MULTIPLIERS = (
     Decimal("0.75"),
     Decimal("1.0"),
@@ -96,6 +97,18 @@ def compute_balanced_score(summary: dict[str, Any]) -> Decimal:
     trade_penalty = Decimal(max(0, MIN_BALANCED_TRADES - total_trades)) * Decimal("50")
     drawdown_penalty = max_drawdown * Decimal("1.5")
     return net_pnl - drawdown_penalty - trade_penalty
+
+
+def validate_trial_summary(summary: dict[str, Any]) -> None:
+    expectancy_r = summary.get("expectancy_r")
+    if expectancy_r is None:
+        return
+    value = _as_decimal(expectancy_r)
+    if abs(value) > MAX_ABS_EXPECTANCY_R:
+        raise ValueError(
+            "Invalid optimization trial: "
+            f"abs(expectancy_r)={abs(value)} exceeds {MAX_ABS_EXPECTANCY_R}"
+        )
 
 
 def split_optimization_period(date_from, date_to):
@@ -198,10 +211,7 @@ def sample_parameters(
         dependencies["sell_rsi_max"] = "sell_rsi_min"
     elif {"buy_rsi_max", "sell_rsi_min"} <= parameter_names:
         dependencies["sell_rsi_min"] = "buy_rsi_max"
-    if (
-        {"sell_rsi_max", "buy_rsi_min"} <= parameter_names
-        and "sell_rsi_min" not in parameter_names
-    ):
+    if {"sell_rsi_max", "buy_rsi_min"} <= parameter_names and "sell_rsi_min" not in parameter_names:
         dependencies["sell_rsi_max"] = "buy_rsi_min"
     positions = {parameter["name"]: index for index, parameter in enumerate(search_space)}
 
@@ -244,9 +254,7 @@ def sample_parameters(
             if preceding_period is not None:
                 lower = max(lower, int(preceding_period) + 1)
         elif (
-            name == "buy_rsi_max"
-            and "buy_rsi_min" in sampled
-            and "buy_rsi_min" in parameter_names
+            name == "buy_rsi_max" and "buy_rsi_min" in sampled and "buy_rsi_min" in parameter_names
         ):
             lower = max(lower, sampled["buy_rsi_min"])
         elif (
@@ -477,9 +485,7 @@ def _terminal_summary_payload(
         "validation_failed_trials": validation_failed_trials,
         "duration_seconds": duration_seconds,
         "search_period": (
-            {"date_from": search_period[0], "date_to": search_period[1]}
-            if search_period
-            else None
+            {"date_from": search_period[0], "date_to": search_period[1]} if search_period else None
         ),
         "validation_period": (
             {"date_from": validation_period[0], "date_to": validation_period[1]}
@@ -488,9 +494,7 @@ def _terminal_summary_payload(
         ),
         "search_space": search_space,
         "execution_model": execution_model,
-        "top_candidates": _top_candidates(
-            db, optimization.id, phase=STRATEGY_SEARCH_PHASE
-        ),
+        "top_candidates": _top_candidates(db, optimization.id, phase=STRATEGY_SEARCH_PHASE),
         "validation_candidates": _top_candidates(
             db, optimization.id, phase=FIXED_CONFIG_VALIDATION_PHASE
         ),
@@ -650,10 +654,7 @@ def execute_optimization(db: Session, optimization_id: uuid.UUID) -> None:
                 f"At least {minimum} completed M1 candles are required in both "
                 "search and validation periods"
             )
-        search_space = (
-            optimization.search_space_snapshot
-            or build_search_space(config)
-        )
+        search_space = optimization.search_space_snapshot or build_search_space(config)
         if not search_space:
             raise ValueError("No searchable strategy parameters were found")
 
@@ -677,10 +678,14 @@ def execute_optimization(db: Session, optimization_id: uuid.UUID) -> None:
         search_candles = list(stream_candles(db, candle_statement(search_candle_filter)))
         validation_candles = list(stream_candles(db, candle_statement(validation_candle_filter)))
         timings["candle_load_seconds"] += monotonic() - candle_load_started
+        raw_tick_size = (spec.provider_metadata or {}).get("tick_size")
+        tick_size = Decimal(str(raw_tick_size)) if raw_tick_size is not None else spec.point
+        if spec.point <= 0 or tick_size <= 0:
+            raise ValueError("Instrument point_size and tick_size must be positive")
         instrument = BacktestInstrument(
             point=spec.point,
-            tick_size=spec.point,
-            tick_value=spec.point,
+            tick_size=tick_size,
+            tick_value=tick_size,
             volume_min=spec.minimum_trade_size
             or Decimal(1).scaleb(-(spec.trade_units_precision or 0)),
             volume_max=Decimal("1000000000"),
@@ -784,6 +789,7 @@ def execute_optimization(db: Session, optimization_id: uuid.UUID) -> None:
                     use_fast_strategy=True,
                     collect_reason_counts=False,
                 )
+                validate_trial_summary(result.summary)
                 backtest_seconds = monotonic() - backtest_started
                 timings["backtest_seconds"] += backtest_seconds
                 score = compute_balanced_score(result.summary)
@@ -964,6 +970,7 @@ def execute_optimization(db: Session, optimization_id: uuid.UUID) -> None:
                         use_fast_strategy=True,
                         collect_reason_counts=True,
                     )
+                    validate_trial_summary(result.summary)
                     backtest_seconds = monotonic() - backtest_started
                     timings["backtest_seconds"] += backtest_seconds
                     score = compute_balanced_score(result.summary)

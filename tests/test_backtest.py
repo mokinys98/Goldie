@@ -1,6 +1,7 @@
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
+import pytest
 from goldie_domain import (
     BacktestCandle,
     BacktestCosts,
@@ -8,8 +9,10 @@ from goldie_domain import (
     BacktestInstrument,
     BotConfiguration,
     CandleInput,
+    InvalidBacktestResult,
     get_strategy,
 )
+from goldie_domain.backtest import _OpenPosition
 
 
 def candle(minute: int, open_: str, high: str, low: str, close: str) -> CandleInput:
@@ -56,8 +59,8 @@ def settings() -> tuple[BotConfiguration, BacktestInstrument, BacktestCosts]:
     )
     costs = BacktestCosts(
         spread_points=Decimal("2"),
-        slippage_points=Decimal("1"),
-        commission_per_trade=Decimal("1"),
+        slippage_points=Decimal("0"),
+        commission_per_trade=Decimal("0"),
     )
     return config, instrument, costs
 
@@ -143,6 +146,100 @@ def test_same_candle_stop_and_take_uses_stop_first() -> None:
     )
     assert result.trades[0].close_reason == "STOP_LOSS"
     assert result.trades[0].net_pnl < 0
+
+
+def test_theoretical_stop_loss_rejects_loss_below_minus_1_05r() -> None:
+    position = _OpenPosition(
+        direction="BUY",
+        signal_reason="TEST",
+        signal_at=datetime(2026, 1, 5, 10, 0, tzinfo=UTC),
+        opened_at=datetime(2026, 1, 5, 10, 1, tzinfo=UTC),
+        entry_price=Decimal("100"),
+        stop_loss=Decimal("99"),
+        take_profit=Decimal("102"),
+        volume=Decimal("1"),
+        risk_amount=Decimal("1"),
+    )
+    instrument = BacktestInstrument(
+        point=Decimal("0.01"),
+        tick_size=Decimal("0.01"),
+        tick_value=Decimal("0.01"),
+        volume_min=Decimal("1"),
+        volume_max=Decimal("1"),
+        volume_step=Decimal("1"),
+    )
+
+    with pytest.raises(InvalidBacktestResult, match="below -1.05R"):
+        BacktestEngine._close(
+            position,
+            closed_at=datetime(2026, 1, 5, 10, 2, tzinfo=UTC),
+            raw_exit=position.stop_loss,
+            close_reason="STOP_LOSS",
+            instrument=instrument,
+            costs=BacktestCosts(slippage_points=Decimal("10")),
+        )
+
+
+def test_theoretical_take_profit_rejects_profit_above_configured_ratio() -> None:
+    position = _OpenPosition(
+        direction="BUY",
+        signal_reason="TEST",
+        signal_at=datetime(2026, 1, 5, 10, 0, tzinfo=UTC),
+        opened_at=datetime(2026, 1, 5, 10, 1, tzinfo=UTC),
+        entry_price=Decimal("100"),
+        stop_loss=Decimal("99"),
+        take_profit=Decimal("102"),
+        volume=Decimal("1"),
+        risk_amount=Decimal("0.9"),
+    )
+    instrument = BacktestInstrument(
+        point=Decimal("0.01"),
+        tick_size=Decimal("0.01"),
+        tick_value=Decimal("0.01"),
+        volume_min=Decimal("1"),
+        volume_max=Decimal("1"),
+        volume_step=Decimal("1"),
+    )
+
+    with pytest.raises(InvalidBacktestResult, match="exceeds 2.05R"):
+        BacktestEngine._close(
+            position,
+            closed_at=datetime(2026, 1, 5, 10, 2, tzinfo=UTC),
+            raw_exit=position.take_profit,
+            close_reason="TAKE_PROFIT",
+            instrument=instrument,
+            costs=BacktestCosts(fill_mode="perfect"),
+        )
+
+
+def test_btc_stop_loss_points_convert_to_price_distance() -> None:
+    config, _, _ = settings()
+    payload = config.model_dump(mode="python")
+    payload["theoretical_trade"]["stop_loss_points"] = Decimal("22.5")
+    payload["theoretical_trade"]["take_profit_points"] = Decimal("37.5")
+    btc_config = BotConfiguration.model_validate(payload)
+    instrument = BacktestInstrument(
+        point=Decimal("0.01"),
+        tick_size=Decimal("0.01"),
+        tick_value=Decimal("0.01"),
+        volume_min=Decimal("0.00001"),
+        volume_max=Decimal("100"),
+        volume_step=Decimal("0.00001"),
+    )
+    opened = BacktestEngine()._open(
+        direction="BUY",
+        signal_reason="TEST",
+        signal_at=datetime(2026, 1, 5, 10, 0, tzinfo=UTC),
+        candle=candle(1, "60000", "60001", "59999", "60000"),
+        config=btc_config,
+        instrument=instrument,
+        costs=BacktestCosts(fill_mode="perfect", spread_points=Decimal("0")),
+        balance=Decimal("10000"),
+    )
+
+    assert opened is not None
+    assert opened.entry_price - opened.stop_loss == Decimal("0.225")
+    assert opened.take_profit - opened.entry_price == Decimal("0.375")
 
 
 def test_gap_closes_open_position_and_counts_reason() -> None:

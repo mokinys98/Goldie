@@ -87,6 +87,13 @@ class BacktestCancelled(Exception):
     pass
 
 
+class InvalidBacktestResult(ValueError):
+    """Raised when a theoretical fill violates its configured risk boundary."""
+
+
+THEORETICAL_R_TOLERANCE = Decimal("0.05")
+
+
 def _as_candle_input(candle: CandleInput | BacktestCandle) -> CandleInput:
     if isinstance(candle, CandleInput):
         return candle
@@ -187,9 +194,7 @@ class BacktestEngine:
         )
         history: deque[CandleInput | BacktestCandle] | None = None
         if prepared is None:
-            parameters = strategy.parameters_model.model_validate(
-                config.strategy.parameters
-            )
+            parameters = strategy.parameters_model.model_validate(config.strategy.parameters)
             history = deque(maxlen=strategy.required_candles(parameters))
         previous: CandleInput | BacktestCandle | None = None
         last: CandleInput | BacktestCandle | None = None
@@ -392,9 +397,7 @@ class BacktestEngine:
             minutes=config.theoretical_trade.max_trade_duration_minutes
         ):
             close_reason = "TIMEOUT"
-            raw_exit = self._executable_close(
-                position.direction, candle.close, instrument, costs
-            )
+            raw_exit = self._executable_close(position.direction, candle.close, instrument, costs)
         if close_reason is None or raw_exit is None:
             return None
         return self._close(
@@ -427,9 +430,7 @@ class BacktestEngine:
         costs: BacktestCosts,
     ) -> BacktestTrade:
         slippage = BacktestEngine._slippage_amount(costs, instrument, position.volume)
-        exit_price = (
-            raw_exit - slippage if position.direction == "BUY" else raw_exit + slippage
-        )
+        exit_price = raw_exit - slippage if position.direction == "BUY" else raw_exit + slippage
         pnl_points = (
             (exit_price - position.entry_price) / instrument.point
             if position.direction == "BUY"
@@ -449,6 +450,24 @@ class BacktestEngine:
             volume=position.volume,
         )
         net = gross - commission
+        r_multiple = net / position.risk_amount
+        stop_distance = abs(position.entry_price - position.stop_loss)
+        take_distance = abs(position.take_profit - position.entry_price)
+        if close_reason == "STOP_LOSS" and r_multiple < -(Decimal("1") + THEORETICAL_R_TOLERANCE):
+            raise InvalidBacktestResult(
+                f"Invalid theoretical STOP_LOSS: r_multiple={r_multiple} is below -1.05R"
+            )
+        if close_reason == "TAKE_PROFIT":
+            if stop_distance <= 0:
+                raise InvalidBacktestResult(
+                    "Invalid theoretical TAKE_PROFIT: stop distance must be positive"
+                )
+            maximum_r = take_distance / stop_distance + THEORETICAL_R_TOLERANCE
+            if r_multiple > maximum_r:
+                raise InvalidBacktestResult(
+                    f"Invalid theoretical TAKE_PROFIT: r_multiple={r_multiple} exceeds {maximum_r}R"
+                )
+
         return BacktestTrade(
             direction=position.direction,
             signal_reason=position.signal_reason,
@@ -466,7 +485,7 @@ class BacktestEngine:
             commission=commission,
             net_pnl=net,
             pnl_points=pnl_points,
-            r_multiple=net / position.risk_amount,
+            r_multiple=r_multiple,
             mfe_points=position.mfe_points,
             mae_points=position.mae_points,
             duration_seconds=int((closed_at - position.opened_at).total_seconds()),
@@ -527,9 +546,7 @@ class BacktestEngine:
             cumulative += trade.net_pnl
             peak = max(peak, cumulative)
             max_drawdown = max(max_drawdown, peak - cumulative)
-            equity_curve.append(
-                {"time": trade.closed_at, "value": initial_capital + cumulative}
-            )
+            equity_curve.append({"time": trade.closed_at, "value": initial_capital + cumulative})
             current_losses = current_losses + 1 if trade.net_pnl < 0 else 0
             current_wins = current_wins + 1 if trade.net_pnl > 0 else 0
             max_losses = max(max_losses, current_losses)
@@ -568,22 +585,16 @@ class BacktestEngine:
             "direction_breakdown": {
                 direction: {
                     "trades": len(direction_trades),
-                    "net_pnl": sum(
-                        (trade.net_pnl for trade in direction_trades), Decimal("0")
-                    ),
+                    "net_pnl": sum((trade.net_pnl for trade in direction_trades), Decimal("0")),
                     "win_rate": (
-                        Decimal(
-                            sum(1 for trade in direction_trades if trade.net_pnl > 0) * 100
-                        )
+                        Decimal(sum(1 for trade in direction_trades if trade.net_pnl > 0) * 100)
                         / len(direction_trades)
                         if direction_trades
                         else None
                     ),
                 }
                 for direction in ("BUY", "SELL")
-                if (direction_trades := [
-                    trade for trade in trades if trade.direction == direction
-                ])
+                if (direction_trades := [trade for trade in trades if trade.direction == direction])
             },
             "close_reason_counts": {
                 reason: sum(1 for trade in trades if trade.close_reason == reason)
@@ -592,26 +603,26 @@ class BacktestEngine:
             "year_breakdown": {
                 year: {
                     "trades": len(period_trades),
-                    "net_pnl": sum(
-                        (trade.net_pnl for trade in period_trades), Decimal("0")
-                    ),
+                    "net_pnl": sum((trade.net_pnl for trade in period_trades), Decimal("0")),
                 }
                 for year in sorted({trade.closed_at.strftime("%Y") for trade in trades})
-                if (period_trades := [
-                    trade for trade in trades if trade.closed_at.strftime("%Y") == year
-                ])
+                if (
+                    period_trades := [
+                        trade for trade in trades if trade.closed_at.strftime("%Y") == year
+                    ]
+                )
             },
             "month_breakdown": {
                 month: {
                     "trades": len(period_trades),
-                    "net_pnl": sum(
-                        (trade.net_pnl for trade in period_trades), Decimal("0")
-                    ),
+                    "net_pnl": sum((trade.net_pnl for trade in period_trades), Decimal("0")),
                 }
                 for month in sorted({trade.closed_at.strftime("%Y-%m") for trade in trades})
-                if (period_trades := [
-                    trade for trade in trades if trade.closed_at.strftime("%Y-%m") == month
-                ])
+                if (
+                    period_trades := [
+                        trade for trade in trades if trade.closed_at.strftime("%Y-%m") == month
+                    ]
+                )
             },
             "equity_curve": equity_curve,
         }
@@ -628,9 +639,7 @@ class BacktestEngine:
             return costs.slippage_points * instrument.point
         base = max(costs.taker_slippage, costs.slippage_small)
         medium_impact = (
-            costs.medium_impact
-            if costs.medium_impact is not None
-            else costs.slippage_medium
+            costs.medium_impact if costs.medium_impact is not None else costs.slippage_medium
         )
         if costs.impact_model != "sqrt" or volume is None or instrument.volume_min <= 0:
             return base + medium_impact

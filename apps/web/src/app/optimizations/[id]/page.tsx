@@ -8,6 +8,7 @@ import { api } from "@/lib/api";
 import { displayJson, displayValue } from "@/lib/display";
 import { normalizeBotConfig } from "@/lib/config";
 import type {
+  Bot,
   OptimizationLlmContext,
   OptimizationResultsExport,
   OptimizationRun,
@@ -33,6 +34,11 @@ export default function OptimizationDetailPage() {
       ["PENDING", "RUNNING", "CANCEL_REQUESTED"].includes(query.state.data?.status ?? "")
         ? 2000
         : false,
+  });
+  const bot = useQuery({
+    queryKey: ["bot", run.data?.bot_id],
+    queryFn: () => api<Bot>(`/api/v1/bots/${run.data!.bot_id}`),
+    enabled: Boolean(run.data?.bot_id),
   });
   const strategyTrialQuery = useQuery({
     queryKey: ["optimization-trials", id, "STRATEGY_SEARCH"],
@@ -60,6 +66,7 @@ export default function OptimizationDetailPage() {
     return <div className="error-box">{run.error?.message ?? "Optimization unavailable"}</div>;
   }
   const configSnapshot = normalizeBotConfig(data.config_snapshot);
+  const optimizationName = bot.data?.name;
   const canCancel = ["PENDING", "RUNNING"].includes(data.status);
   const canApplyBest = Boolean(
     !applyBusy
@@ -158,13 +165,14 @@ export default function OptimizationDetailPage() {
   }
 
   async function exportResultsToJson() {
+    if (!optimizationName) return;
     try {
       const payload = await loadExport();
       const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
       const url = URL.createObjectURL(blob);
       const anchor = document.createElement("a");
       anchor.href = url;
-      anchor.download = exportFilename(configSnapshot.strategy.name, configSnapshot.market.symbol, id);
+      anchor.download = exportFilename(optimizationName, id);
       anchor.click();
       URL.revokeObjectURL(url);
       setExportMessage(`Exported ${payload.trials.length} trials to JSON.`);
@@ -186,13 +194,14 @@ export default function OptimizationDetailPage() {
   }
 
   async function exportLlmContextToJson() {
+    if (!optimizationName) return;
     try {
       const payload = await loadLlmContext();
       const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
       const url = URL.createObjectURL(blob);
       const anchor = document.createElement("a");
       anchor.href = url;
-      anchor.download = llmContextFilename(configSnapshot.strategy.name, configSnapshot.market.symbol, id);
+      anchor.download = llmContextFilename(optimizationName, id);
       anchor.click();
       URL.revokeObjectURL(url);
       setExportMessage(`Exported LLM context with ${llmContextTrialCount(payload)} trials.`);
@@ -223,7 +232,7 @@ export default function OptimizationDetailPage() {
       <header className="page-header">
         <div>
           <span className="eyebrow">OPTIMIZATION RESULT</span>
-          <h1>{configSnapshot.market.symbol} M1</h1>
+          <h1>{optimizationName ?? "Loading bot name..."}</h1>
           <p>
             {configSnapshot.strategy.name} | {new Date(data.date_from).toLocaleString()}
             {" - "}{new Date(data.date_to).toLocaleString()}
@@ -242,14 +251,14 @@ export default function OptimizationDetailPage() {
             <div className="download-menu-panel">
               <span className="download-menu-heading">Download as...</span>
               <button
-                disabled={exportBusy}
+                disabled={exportBusy || !optimizationName}
                 onClick={() => runDownloadMenuAction(exportResultsToJson)}
                 type="button"
               >
                 Results JSON
               </button>
               <button
-                disabled={exportBusy}
+                disabled={exportBusy || !optimizationName}
                 onClick={() => runDownloadMenuAction(exportLlmContextToJson)}
                 type="button"
               >
@@ -288,6 +297,7 @@ export default function OptimizationDetailPage() {
         </div>
       </header>
       {data.error && <div className="error-box">{data.error}</div>}
+      {bot.error && <div className="error-box">Could not load the optimization bot name.</div>}
       {applyError && <div className="error-box">{applyError}</div>}
       {exportError && <div className="error-box">{exportError}</div>}
       {exportMessage && <div className="panel">{exportMessage}</div>}
@@ -698,14 +708,18 @@ async function writeClipboardText(value: string): Promise<void> {
   }
 }
 
-function exportFilename(strategy: string, symbol: string, optimizationId: string): string {
-  const safe = `${strategy}-${symbol}`.replace(/[^a-zA-Z0-9_-]+/g, "-").toLowerCase();
+function exportFilename(optimizationName: string, optimizationId: string): string {
+  const safe = safeFilenamePart(optimizationName);
   return `${safe}-optimization-${optimizationId.slice(0, 8)}.json`;
 }
 
-function llmContextFilename(strategy: string, symbol: string, optimizationId: string): string {
-  const safe = `${strategy}-${symbol}`.replace(/[^a-zA-Z0-9_-]+/g, "-").toLowerCase();
+function llmContextFilename(optimizationName: string, optimizationId: string): string {
+  const safe = safeFilenamePart(optimizationName);
   return `${safe}-optimization-${optimizationId.slice(0, 8)}-llm-context.json`;
+}
+
+function safeFilenamePart(value: string): string {
+  return value.trim().replace(/[^a-zA-Z0-9_-]+/g, "-").replace(/^-+|-+$/g, "").toLowerCase();
 }
 
 function llmContextTrialCount(payload: OptimizationLlmContext): number {

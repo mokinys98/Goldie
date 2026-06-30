@@ -103,9 +103,7 @@ def test_oanda_error_includes_response_message(monkeypatch) -> None:
         status_code=403,
         text='{"errorMessage":"Insufficient authorization to perform request."}',
         headers={"RequestID": "request-123"},
-        json=lambda: {
-            "errorMessage": "Insufficient authorization to perform request."
-        },
+        json=lambda: {"errorMessage": "Insufficient authorization to perform request."},
     )
 
     def raise_for_status() -> None:
@@ -155,9 +153,7 @@ def test_instrument_403_explains_account_is_not_api_tradable(monkeypatch) -> Non
     monkeypatch.setattr(
         provider,
         "_get",
-        lambda *args, **kwargs: (_ for _ in ()).throw(
-            OandaApiError("forbidden", status_code=403)
-        ),
+        lambda *args, **kwargs: (_ for _ in ()).throw(OandaApiError("forbidden", status_code=403)),
     )
 
     with pytest.raises(OandaConfigurationError, match="may not be API-tradable"):
@@ -426,3 +422,47 @@ def test_binance_provider_paginates_klines(monkeypatch) -> None:
     assert calls[0]["symbol"] == "BTCUSDT"
     assert calls[0]["interval"] == "1m"
     assert calls[0]["limit"] == 1000
+
+
+def test_binance_instrument_uses_exchange_tick_and_quantity_filters(monkeypatch) -> None:
+    settings = CollectorSettings(
+        api_url="https://goldie-api.example",
+        agent_token="agent-token",
+        oanda_api_token="oanda-token",
+        oanda_account_id="practice-account",
+        provider="binance_spot",
+        provider_environment="spot",
+        provider_symbol="BTCUSDT",
+        canonical_symbol="BTCUSDT",
+    )
+    provider = BinanceSpotProvider(settings)
+    monkeypatch.setattr(
+        provider,
+        "_get",
+        lambda *_args, **_kwargs: {
+            "symbols": [
+                {
+                    "status": "TRADING",
+                    "baseAsset": "BTC",
+                    "quoteAsset": "USDT",
+                    "filters": [
+                        {"filterType": "PRICE_FILTER", "tickSize": "0.01000000"},
+                        {
+                            "filterType": "LOT_SIZE",
+                            "minQty": "0.00001000",
+                            "stepSize": "0.00001000",
+                        },
+                    ],
+                }
+            ]
+        },
+    )
+
+    instrument = provider.validate_instrument()
+
+    assert instrument.pip_location == -2
+    assert instrument.display_precision == 2
+    assert instrument.minimum_trade_size == Decimal("0.00001")
+    assert instrument.trade_units_precision == 5
+    assert instrument.provider_metadata["tick_size"] == "0.01"
+    assert instrument.provider_metadata["price_precision"] == 2

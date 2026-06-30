@@ -91,9 +91,7 @@ class OandaProvider:
     def validate_account_access(self) -> None:
         payload = self._get("/v3/accounts")
         authorized_ids = {
-            str(account.get("id"))
-            for account in payload.get("accounts", [])
-            if account.get("id")
+            str(account.get("id")) for account in payload.get("accounts", []) if account.get("id")
         }
         if self.settings.oanda_account_id not in authorized_ids:
             visible = ", ".join(sorted(authorized_ids)) or "none"
@@ -129,9 +127,7 @@ class OandaProvider:
         )
         if item is None:
             available = sorted(
-                str(instrument["name"])
-                for instrument in rows
-                if instrument.get("name")
+                str(instrument["name"]) for instrument in rows if instrument.get("name")
             )
             available_text = ", ".join(available[:50]) if available else "none"
             raise OandaConfigurationError(
@@ -254,8 +250,7 @@ class OandaProvider:
             batch = [
                 candle
                 for item in payload.get("candles", [])
-                if (candle := self.parse_candle(item)) is not None
-                and candle.opened_at < boundary
+                if (candle := self.parse_candle(item)) is not None and candle.opened_at < boundary
             ]
             if not batch:
                 break
@@ -271,8 +266,10 @@ class OandaProvider:
     def market_is_closed(self, now: datetime | None = None) -> bool:
         value = (now or datetime.now(UTC)).astimezone(UTC)
         weekday = value.weekday()
-        return weekday == 5 or (weekday == 4 and value.hour >= 22) or (
-            weekday == 6 and value.hour < 22
+        return (
+            weekday == 5
+            or (weekday == 4 and value.hour >= 22)
+            or (weekday == 6 and value.hour < 22)
         )
 
 
@@ -315,18 +312,38 @@ class BinanceSpotProvider:
             raise ProviderConfigurationError(
                 f"{self.settings.provider_symbol} is not a trading Binance spot symbol"
             )
+        filters = {
+            value.get("filterType"): value
+            for value in item.get("filters", [])
+            if isinstance(value, dict) and value.get("filterType")
+        }
+        price_filter = filters.get("PRICE_FILTER", {})
+        lot_size_filter = filters.get("LOT_SIZE", {})
+        tick_size = Decimal(str(price_filter.get("tickSize", "0"))).normalize()
+        if tick_size <= 0:
+            raise ProviderConfigurationError(
+                f"{self.settings.provider_symbol} has no valid Binance PRICE_FILTER tickSize"
+            )
+        pip_location = tick_size.as_tuple().exponent
+        price_precision = max(0, -pip_location)
+        minimum_trade_size = Decimal(str(lot_size_filter.get("minQty", "0"))).normalize()
+        step_size = Decimal(str(lot_size_filter.get("stepSize", "0"))).normalize()
+        trade_units_precision = max(0, -step_size.as_tuple().exponent) if step_size > 0 else 8
         return Instrument(
             canonical_symbol=self.settings.canonical_symbol,
             provider_symbol=self.settings.provider_symbol,
-            display_precision=8,
-            pip_location=-8,
-            minimum_trade_size=None,
-            trade_units_precision=8,
+            display_precision=price_precision,
+            pip_location=pip_location,
+            minimum_trade_size=minimum_trade_size if minimum_trade_size > 0 else None,
+            trade_units_precision=trade_units_precision,
             margin_rate=None,
             provider_metadata={
                 "base_asset": item.get("baseAsset"),
                 "quote_asset": item.get("quoteAsset"),
                 "permissions": item.get("permissions", []),
+                "tick_size": str(tick_size),
+                "price_precision": price_precision,
+                "quantity_step_size": str(step_size) if step_size > 0 else None,
             },
         )
 
@@ -375,8 +392,7 @@ class BinanceSpotProvider:
             batch = [
                 candle
                 for item in payload
-                if (candle := self.parse_kline(item)) is not None
-                and candle.opened_at < boundary
+                if (candle := self.parse_kline(item)) is not None and candle.opened_at < boundary
             ]
             if not batch:
                 break
@@ -402,7 +418,5 @@ PROVIDERS: dict[str, type[MarketDataProvider]] = {
 def create_provider(settings: CollectorSettings) -> MarketDataProvider:
     provider_class = PROVIDERS.get(settings.provider)
     if provider_class is None:
-        raise ProviderConfigurationError(
-            f"Unsupported market data provider: {settings.provider}"
-        )
+        raise ProviderConfigurationError(f"Unsupported market data provider: {settings.provider}")
     return provider_class(settings)

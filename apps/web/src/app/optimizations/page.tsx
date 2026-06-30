@@ -4,7 +4,6 @@ import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "@/lib/api";
-import { normalizeBotConfig } from "@/lib/config";
 import type {
   Bot,
   OptimizationLlmContext,
@@ -113,16 +112,16 @@ export default function OptimizationsPage() {
 
     try {
       for (const item of selectedRows) {
-        const config = normalizeBotConfig(item.config_snapshot);
         const isLlmContext = kind === "llm-context";
+        const optimizationName = botNames.get(item.bot_id)
+          ?? (await api<Bot>(`/api/v1/bots/${item.bot_id}`)).name;
         const payload = isLlmContext
           ? await api<OptimizationLlmContext>(`/api/v1/optimizations/${item.id}/llm-context`)
           : await api<OptimizationResultsExport>(`/api/v1/optimizations/${item.id}/export`);
         downloadJson(
           payload,
           optimizationExportFilename(
-            config.strategy.name,
-            config.market.symbol,
+            optimizationName,
             item.id,
             isLlmContext,
           ),
@@ -325,12 +324,15 @@ function downloadJson(payload: unknown, filename: string) {
 }
 
 function optimizationExportFilename(
-  strategy: string,
-  symbol: string,
+  optimizationName: string,
   optimizationId: string,
   llmContext: boolean,
 ): string {
-  const safe = `${strategy}-${symbol}`.replace(/[^a-zA-Z0-9_-]+/g, "-").toLowerCase();
+  const safe = optimizationName
+    .trim()
+    .replace(/[^a-zA-Z0-9_-]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .toLowerCase();
   const suffix = llmContext ? "-llm-context" : "";
   return `${safe}-optimization-${optimizationId.slice(0, 8)}${suffix}.json`;
 }
