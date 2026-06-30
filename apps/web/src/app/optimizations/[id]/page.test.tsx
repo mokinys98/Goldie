@@ -91,6 +91,10 @@ const optimization = {
     },
   },
   config_snapshot: {},
+  search_space_snapshot: [
+    { name: "fast_ema_period", type: "integer", minimum: 5, maximum: 20 },
+    { name: "min_trend_points", type: "number", minimum: 1e-9, maximum: 100 },
+  ],
   fill_mode: "simulated",
 } as unknown as OptimizationRun;
 
@@ -118,6 +122,18 @@ describe("OptimizationDetailPage", () => {
     expect(screen.getByText("1.345678 s")).toBeInTheDocument();
     expect(screen.getByText("0.045678 s")).toBeInTheDocument();
     expect(screen.getByText("1.789012 s")).toBeInTheDocument();
+    expect(document.querySelector("#performance-timings")).toHaveStyle({
+      gridTemplateColumns: "repeat(3, 1fr)",
+    });
+  });
+
+  it("renders the immutable Optuna search-space snapshot", () => {
+    render(<OptimizationDetailPage />);
+
+    expect(screen.getByRole("heading", { name: "Optuna strategy ranges" })).toBeInTheDocument();
+    expect(screen.getByText("fast ema period")).toBeInTheDocument();
+    expect(screen.getByText("5 – 20")).toBeInTheDocument();
+    expect(screen.getByText("0 – 100")).toBeInTheDocument();
   });
 
   it("renders phase progress and the winning fixed config", () => {

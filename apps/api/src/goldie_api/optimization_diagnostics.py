@@ -1170,6 +1170,12 @@ def build_llm_context(db: Session, optimization: OptimizationRun) -> dict[str, A
     selected_summary = selected_trial.summary if selected_trial is not None else {}
     feed = db.get(MarketFeed, optimization.market_feed_id)
     strategy = (optimization.config_snapshot or {}).get("strategy") or {}
+    optuna_strategy_ranges = (
+        optimization.search_space_snapshot
+        or decision_context.get("search_space")
+        or summary.get("search_space")
+        or []
+    )
     return jsonable_encoder(
         {
             "schema_version": "goldie.optimization-llm-context.v3",
@@ -1214,11 +1220,8 @@ def build_llm_context(db: Session, optimization: OptimizationRun) -> dict[str, A
                     "phase": dict(Counter(trial.phase for trial in trials)),
                 },
             },
-            "search_space": (
-                decision_context.get("search_space")
-                or summary.get("search_space")
-                or []
-            ),
+            "search_space": optuna_strategy_ranges,
+            "optuna_strategy_ranges": optuna_strategy_ranges,
             "fixed_config_grid": (
                 decision_context.get("fixed_config_grid")
                 or summary.get("fixed_config_grid")

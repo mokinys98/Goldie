@@ -784,6 +784,7 @@ def test_optimization_api_and_execution_flow(monkeypatch) -> None:
         trials = client.get(f"/api/v1/optimizations/{optimization_id}/trials", headers=headers)
         assert detail.status_code == 200
         assert detail.json()["status"] == "SUCCEEDED"
+        assert detail.json()["search_space_snapshot"]
         assert detail.json()["best_candidate"]["sampled_parameters"]
         assert detail.json()["summary"]["execution_model"]["fill_mode"] == "simulated"
         timings = detail.json()["summary"]["timings"]
@@ -881,6 +882,12 @@ def test_optimization_api_and_execution_flow(monkeypatch) -> None:
         assert llm_context.status_code == 200
         llm_body = llm_context.json()
         assert llm_body["schema_version"] == "goldie.optimization-llm-context.v3"
+        assert llm_body["optuna_strategy_ranges"]
+        assert (
+            llm_body["optuna_strategy_ranges"]
+            == detail.json()["search_space_snapshot"]
+        )
+        assert llm_body["search_space"] == llm_body["optuna_strategy_ranges"]
         assert llm_body["top_trials"]
         assert llm_body["worst_trials"]
         assert llm_body["validation_winners"]

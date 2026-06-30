@@ -538,6 +538,7 @@ class OptimizationRunRead(OrmModel):
     min_qty_threshold: Decimal
     min_qty_check: bool
     config_snapshot: dict
+    search_space_snapshot: list[dict] = Field(default_factory=list)
     progress: dict
     best_candidate: dict
     summary: dict

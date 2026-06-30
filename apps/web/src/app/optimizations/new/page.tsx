@@ -32,6 +32,7 @@ export default function NewOptimizationPage() {
   const router = useRouter();
   const [profileKey, setProfileKey] = useState<OptimizationProfileKey>("realistic");
   const [selectedBotIds, setSelectedBotIds] = useState<string[]>([]);
+  const [botSearch, setBotSearch] = useState("");
   const [configIds, setConfigIds] = useState<Record<string, string>>({});
   const [dateFrom, setDateFrom] = useState(profileDate("2023-01-01"));
   const [dateTo, setDateTo] = useState(profileDate("2025-01-01"));
@@ -66,6 +67,13 @@ export default function NewOptimizationPage() {
     })),
   });
   const selectedBots = (bots.data ?? []).filter((bot) => selectedBotIds.includes(bot.id));
+  const normalizedBotSearch = botSearch.trim().toLocaleLowerCase();
+  const filteredBots = (bots.data ?? []).filter((bot) => {
+    if (!normalizedBotSearch) return true;
+    const feed = feeds.data?.find((item) => item.id === bot.market_feed_id);
+    return bot.name.toLocaleLowerCase().includes(normalizedBotSearch)
+      || feed?.provider_symbol.toLocaleLowerCase().includes(normalizedBotSearch);
+  });
   const configsByBot = new Map(
     selectedBotIds.map((selectedBotId, index) => [selectedBotId, configQueries[index]?.data ?? []]),
   );
@@ -445,10 +453,22 @@ export default function NewOptimizationPage() {
                   </button>
                 </div>
               </div>
+              <label className="optimization-bot-search">
+                Search bot
+                <input
+                  type="search"
+                  placeholder="Name or market symbol..."
+                  value={botSearch}
+                  onChange={(event) => setBotSearch(event.target.value)}
+                />
+              </label>
               {bots.isLoading && <span className="muted">Loading bots...</span>}
               {!bots.isLoading && !bots.data?.length && <span className="muted">No bots available.</span>}
+              {!bots.isLoading && !!bots.data?.length && !filteredBots.length && (
+                <span className="muted">No bots match this search.</span>
+              )}
               <div className="selection-list optimization-bot-list">
-                {(bots.data ?? []).map((bot) => {
+                {filteredBots.map((bot) => {
                   const feed = feeds.data?.find((item) => item.id === bot.market_feed_id);
                   return (
                     <label className="checkbox-row bulk-option" key={bot.id}>

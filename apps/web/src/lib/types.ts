@@ -508,6 +508,15 @@ export type OptimizationTrialTimings = {
   backtest_seconds: number;
 };
 
+export type OptimizationSearchParameter = {
+  name: string;
+  type?: string;
+  minimum?: number;
+  maximum?: number;
+  choices?: Array<string | number | boolean>;
+  default?: string | number | boolean;
+};
+
 export type OptimizationRun = {
   id: string;
   bot_id: string;
@@ -533,6 +542,7 @@ export type OptimizationRun = {
   min_qty_threshold: string | number;
   min_qty_check: boolean;
   config_snapshot: BotConfig;
+  search_space_snapshot: OptimizationSearchParameter[];
   progress: {
     phase?: "STRATEGY_SEARCH" | "FIXED_CONFIG_VALIDATION";
     completed_trials?: number;
@@ -566,13 +576,7 @@ export type OptimizationRun = {
     failed_trials?: number;
     duration_seconds?: number;
     timings?: OptimizationRunTimings;
-    search_space?: Array<{
-      name: string;
-      type?: string;
-      minimum?: number;
-      maximum?: number;
-      choices?: Array<string | number | boolean>;
-    }>;
+    search_space?: OptimizationSearchParameter[];
     execution_model?: Record<string, string | number | boolean>;
     top_candidates?: Array<{
       trial_number: number;
@@ -666,6 +670,7 @@ export type OptimizationLlmContext = {
   data_quality: Record<string, unknown>;
   objective: Record<string, unknown>;
   search_space: Array<Record<string, unknown>>;
+  optuna_strategy_ranges: Array<Record<string, unknown>>;
   fixed_config_grid: Array<Record<string, unknown>>;
   best_candidate: Record<string, unknown>;
   top_trials: Array<Record<string, unknown>>;

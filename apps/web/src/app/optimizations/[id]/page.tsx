@@ -71,6 +71,9 @@ export default function OptimizationDetailPage() {
   const fixedTradeOverrides = data.best_candidate.fixed_config_overrides?.theoretical_trade;
   const researchQuality = data.summary.research_quality_gates;
   const objectiveFormula = getObjectiveFormula(data);
+  const searchSpace = data.search_space_snapshot?.length
+    ? data.search_space_snapshot
+    : data.summary.search_space ?? [];
 
   async function cancel() {
     if (!window.confirm("Cancel this optimization?")) return;
@@ -348,7 +351,11 @@ export default function OptimizationDetailPage() {
           />
         </div>
       )}
-      <div className="split-layout collector-section">
+      <div
+        id="performance-timings"
+        className="split-layout collector-section"
+        style={{ gridTemplateColumns: "repeat(3, 1fr)" }}
+      >
         {(data.summary.search_period || data.summary.validation_period) && (
           <div className="panel collector-section">
             <h2>Optimization periods</h2>
@@ -372,9 +379,32 @@ export default function OptimizationDetailPage() {
             <div><dt>Total</dt><dd>{formatSeconds(timings?.total_seconds)}</dd></div>
           </div>
         </div>
+        <div className="panel collector-section">
+          <h2>Optuna strategy ranges</h2>
+          {!searchSpace.length ? (
+            <p className="muted">No search-space snapshot is available.</p>
+          ) : (
+            <div className="table-wrap borderless">
+              <table>
+                <thead>
+                  <tr><th>Parameter</th><th>Type</th><th>Search range</th></tr>
+                </thead>
+                <tbody>
+                  {searchSpace.map((parameter) => (
+                    <tr key={parameter.name}>
+                      <td>{parameter.name.replaceAll("_", " ")}</td>
+                      <td>{parameter.type ?? "--"}</td>
+                      <td>{formatSearchRange(parameter)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
       </div>
       {(data.summary.data_profile || data.summary.robustness || data.summary.parameter_insights) && (
-        <div className="split-layout collector-section" style={{ gridTemplateColumns: 'repeat(3, 1fr)'}}>
+        <div id="collector-section" className="split-layout collector-section" style={{ gridTemplateColumns: 'repeat(3, 1fr)'}}>
           {data.summary.data_profile && (
             <JsonPanel title="Data profile" value={data.summary.data_profile} />
           )}
@@ -576,6 +606,20 @@ function ResearchReadinessPanel({ quality }: { quality: ResearchQualityGates }) 
 
 function formatSeconds(value: number | undefined): string {
   return value === undefined ? "--" : `${value.toFixed(6)} s`;
+}
+
+function formatSearchRange(parameter: {
+  minimum?: number;
+  maximum?: number;
+  choices?: Array<string | number | boolean>;
+}): string {
+  if (parameter.choices?.length) {
+    return parameter.choices.map(displayValue).join(", ");
+  }
+  if (parameter.minimum !== undefined && parameter.maximum !== undefined) {
+    return `${displayValue(parameter.minimum)} – ${displayValue(parameter.maximum)}`;
+  }
+  return "--";
 }
 
 function formatScore(value: string | number | null | undefined): string {
