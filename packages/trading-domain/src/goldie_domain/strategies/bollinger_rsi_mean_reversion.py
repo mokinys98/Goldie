@@ -1,6 +1,6 @@
 from datetime import datetime
 from decimal import Decimal
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -54,6 +54,10 @@ class BollingerRsiParameters(BaseModel):
         default=True,
         description="Use candle high/low for a band touch instead of requiring the close outside.",
     )
+    trade_direction: Literal["BOTH", "BUY_ONLY", "SELL_ONLY"] = Field(
+        default="BOTH",
+        description="Allowed trade direction: BOTH, BUY_ONLY, or SELL_ONLY.",
+    )
 
     @model_validator(mode="after")
     def validate_thresholds(self) -> "BollingerRsiParameters":
@@ -105,11 +109,26 @@ class BollingerRsiMeanReversionStrategy(PreparedStrategy):
             rsi=str(rsi_value),
             atr=str(atr_value),
             recommended_stop_points=str(atr_value * parameters.atr_stop_multiplier / context.point),
+            trade_direction=parameters.trade_direction,
         )
-        if buy_price <= bands.lower and rsi_value <= parameters.buy_rsi_max:
+        allow_buy = parameters.trade_direction in ("BOTH", "BUY_ONLY")
+        allow_sell = parameters.trade_direction in ("BOTH", "SELL_ONLY")
+
+        buy_signal = buy_price <= bands.lower and rsi_value <= parameters.buy_rsi_max
+        sell_signal = sell_price >= bands.upper and rsi_value >= parameters.sell_rsi_min
+
+        if buy_signal and allow_buy:
             return self._finish(SignalType.BUY, "BB_RSI_BUY", context, config, guard)
-        if sell_price >= bands.upper and rsi_value >= parameters.sell_rsi_min:
+        if sell_signal and allow_sell:
             return self._finish(SignalType.SELL, "BB_RSI_SELL", context, config, guard)
+        if buy_signal or sell_signal:
+            return self._finish(
+                SignalType.NO_TRADE,
+                "BB_RSI_DIRECTION_FILTERED",
+                context,
+                config,
+                guard,
+            )
         return self._finish(
             SignalType.NO_TRADE, "BB_RSI_CONDITIONS_NOT_MET", context, config, guard
         )
@@ -138,6 +157,8 @@ class _FastBollingerRsiEvaluator(FastGuardedEvaluator):
         self.rsi = FastRollingRsi(period=parameters.rsi_period)
         self.buy_rsi_max = float(parameters.buy_rsi_max)
         self.sell_rsi_min = float(parameters.sell_rsi_min)
+        self.allow_buy = parameters.trade_direction in ("BOTH", "BUY_ONLY")
+        self.allow_sell = parameters.trade_direction in ("BOTH", "SELL_ONLY")
 
     def evaluate(
         self, candle: CandleInput, observed_at: datetime
@@ -155,10 +176,15 @@ class _FastBollingerRsiEvaluator(FastGuardedEvaluator):
         lower, upper = bands
         buy_price = float(candle.low) if self.parameters.require_touch_band else close
         sell_price = float(candle.high) if self.parameters.require_touch_band else close
-        if buy_price <= lower and rsi_value <= self.buy_rsi_max:
+        buy_signal = buy_price <= lower and rsi_value <= self.buy_rsi_max
+        sell_signal = sell_price >= upper and rsi_value >= self.sell_rsi_min
+
+        if buy_signal and self.allow_buy:
             return SignalType.BUY, "BB_RSI_BUY"
-        if sell_price >= upper and rsi_value >= self.sell_rsi_min:
+        if sell_signal and self.allow_sell:
             return SignalType.SELL, "BB_RSI_SELL"
+        if buy_signal or sell_signal:
+            return SignalType.NO_TRADE, "BB_RSI_DIRECTION_FILTERED"
         return SignalType.NO_TRADE, "BB_RSI_CONDITIONS_NOT_MET"
 
 

@@ -112,6 +112,31 @@ def test_strategy_ranges_override_catalog_search_space() -> None:
     assert fast_ema["maximum"] == 12
 
 
+def test_bb_rsi_search_space_includes_trade_direction_choices() -> None:
+    from goldie_domain import BotConfiguration
+
+    config = BotConfiguration.model_validate(
+        {
+            "strategy": {
+                "name": "bb_rsi_mean_reversion",
+                "parameters": {},
+            }
+        }
+    )
+
+    trade_direction = next(
+        parameter
+        for parameter in build_search_space(config)
+        if parameter["name"] == "trade_direction"
+    )
+
+    assert trade_direction == {
+        "name": "trade_direction",
+        "type": "string",
+        "choices": ["BOTH", "BUY_ONLY", "SELL_ONLY"],
+    }
+
+
 def test_optimization_period_is_split_without_overlap() -> None:
     date_from = datetime(2026, 1, 1, tzinfo=UTC)
     date_to = date_from + timedelta(days=10)

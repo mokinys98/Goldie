@@ -11,6 +11,7 @@ from goldie_domain import (
     strategy_catalog,
 )
 from goldie_domain.strategies import (
+    BollingerRsiParameters,
     BollingerSqueezeBreakoutParameters,
     FvgMaVolumeProfileParameters,
     PineBollingerRsiStochParameters,
@@ -64,6 +65,100 @@ def market(closes: list[str]) -> MarketContext:
         point=Decimal("0.1"),
         candles=candles,
     )
+
+
+def bb_rsi_config(**parameters) -> BotConfiguration:
+    values = {
+        "bollinger_period": 4,
+        "bollinger_deviations": "1",
+        "rsi_period": 2,
+        "buy_rsi_max": "100",
+        "sell_rsi_min": "100",
+        "atr_period": 2,
+        "atr_stop_multiplier": "1.5",
+        "require_touch_band": False,
+        **parameters,
+    }
+    return BotConfiguration.model_validate(
+        {
+            "market": {"symbol": "XAUUSD", "timeframe": "M1"},
+            "strategy": {"name": "bb_rsi_mean_reversion", "parameters": values},
+            "filters": {"max_spread_points": 100, "stale_after_seconds": 15},
+            "session": {
+                "timezone": "UTC",
+                "start_time": "00:00:00",
+                "end_time": "23:59:59",
+            },
+        }
+    )
+
+
+def test_bb_rsi_trade_direction_validation_and_required_candles() -> None:
+    strategy = get_strategy("bb_rsi_mean_reversion")
+    defaults = BollingerRsiParameters(bollinger_period=4, rsi_period=2, atr_period=2)
+
+    assert defaults.trade_direction == "BOTH"
+    assert BollingerRsiParameters(trade_direction="BUY_ONLY").trade_direction == "BUY_ONLY"
+    assert BollingerRsiParameters(trade_direction="SELL_ONLY").trade_direction == "SELL_ONLY"
+    with pytest.raises(ValidationError):
+        BollingerRsiParameters(trade_direction="INVALID")  # type: ignore[arg-type]
+
+    required = strategy.required_candles(defaults)
+    assert required == 4
+    assert (
+        strategy.required_candles(defaults.model_copy(update={"trade_direction": "BUY_ONLY"}))
+        == required
+    )
+    assert (
+        strategy.required_candles(defaults.model_copy(update={"trade_direction": "SELL_ONLY"}))
+        == required
+    )
+
+
+@pytest.mark.parametrize(
+    ("closes", "trade_direction", "expected_signal", "expected_reason"),
+    [
+        (["10", "10", "10", "8"], "BUY_ONLY", "BUY", "BB_RSI_BUY"),
+        (
+            ["10", "10", "10", "8"],
+            "SELL_ONLY",
+            "NO_TRADE",
+            "BB_RSI_DIRECTION_FILTERED",
+        ),
+        (["10", "10", "10", "12"], "SELL_ONLY", "SELL", "BB_RSI_SELL"),
+        (
+            ["10", "10", "10", "12"],
+            "BUY_ONLY",
+            "NO_TRADE",
+            "BB_RSI_DIRECTION_FILTERED",
+        ),
+    ],
+)
+def test_bb_rsi_trade_direction_and_fast_evaluator_parity(
+    closes: list[str],
+    trade_direction: str,
+    expected_signal: str,
+    expected_reason: str,
+) -> None:
+    strategy = get_strategy("bb_rsi_mean_reversion")
+    context = market(closes)
+    config = bb_rsi_config(trade_direction=trade_direction)
+
+    decision = strategy.evaluate(context, config)
+    evaluator = strategy.create_fast_backtest_evaluator(
+        config,
+        point=context.point,
+        spread_points=(context.ask - context.bid) / context.point,
+    )
+    signal = reason = None
+    for candle in context.candles:
+        signal, reason = evaluator.evaluate(candle, candle.opened_at + timedelta(minutes=1))
+
+    assert decision.signal == expected_signal
+    assert decision.reason_code == expected_reason
+    assert decision.inputs["trade_direction"] == trade_direction
+    assert signal == decision.signal
+    assert reason == decision.reason_code
 
 
 def test_registry_catalog_and_duplicate_protection() -> None:
