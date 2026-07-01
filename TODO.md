@@ -1,19 +1,12 @@
-Trumpas kontrolinis sąrašas (veiksmai):
+R:R filter must not mark trials as FAILED.
 
-1. Surink ir patikrink duomenų kokybę.
-2. Apibrėžk trading assumptions (slippage, fill rules, komisijos).
-3. Implementuok greitą baseline backtester.
-4. Paleisk sanity check su keliomis strategijomis/periodais.
-5. Jei baseline OK → pridėk execution realism ir parametrų paiešką.
-6. Atlik walk‑forward / OOS ir koreguok modelius pagal overfitting indikatorius.
-7. Automatinis logging, versijavimas, reproducibility.
-8. Paruošk santrauką su aiškiais KPI ir veiksmų planu gyvai prekybai.
-Praktiniai patarimai dėl laiko taupymo:
+Do not sample stop_loss_points and take_profit_points independently and then fail invalid combinations.
 
-Start small: pirmasis sprintas — tik baseline ir duomenų patikra.
-Profiling + paralelizacija: identifikuok lėtus kaštus, palygink lokalų vs cloud.
-Panaudok sanity‑samples: vietoj pilnos istorijos testuok su reprezentatyviais segmentais.
-Automatizuok eksperimentus: CI‑style runs, rezultatai į DB/CSV su metaduomenimis.
-
-// Padaryti Optimatizacijų profilį, kas tas yra fill ? Ar pas mus jis yra ..
-
+Instead:
+1. Sample stop_loss_points first.
+2. Sample risk_reward_ratio between 1.5 and 4.0.
+3. Derive take_profit_points = round_to_step(stop_loss_points * risk_reward_ratio, 50).
+4. Store both values in config_overrides.theoretical_trade.
+5. Invalid combinations should be impossible.
+6. If a combination somehow cannot be created, use TrialPruned, not FAILED.
+7. Failed trial count should represent real code/runtime errors only.
