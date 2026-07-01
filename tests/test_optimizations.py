@@ -12,6 +12,9 @@ os.environ["LOCAL_ADMIN_PASSWORD"] = "test-password"
 os.environ["AGENT_SERVICE_TOKEN"] = "test-agent-token"
 
 import pytest
+import tiktoken
+from toon import decode as decode_toon
+from toon import encode as encode_toon
 from fastapi.testclient import TestClient
 from goldie_api.db import Base, SessionLocal, engine
 from goldie_api.main import app
@@ -40,6 +43,7 @@ from goldie_api.optimizations import (
     sample_parameters,
     sample_trade_overrides,
     split_optimization_period,
+    validate_reward_risk_ratio,
     validate_trial_summary,
 )
 
@@ -186,6 +190,49 @@ def test_trade_ranges_are_added_to_search_space_and_sampled_as_overrides() -> No
         defaults=config.strategy.parameters,
     )
     assert "theoretical_trade.stop_loss_points" not in sampled_strategy
+
+
+@pytest.mark.parametrize(
+    ("stop_loss_points", "take_profit_points"),
+    [("100", "150"), ("45", "180")],
+)
+def test_reward_risk_ratio_accepts_inclusive_limits(
+    stop_loss_points: str, take_profit_points: str
+) -> None:
+    from goldie_domain import BotConfiguration
+
+    config = BotConfiguration.model_validate(
+        {
+            "theoretical_trade": {
+                "stop_loss_points": stop_loss_points,
+                "take_profit_points": take_profit_points,
+            }
+        }
+    )
+
+    validate_reward_risk_ratio(config)
+
+
+@pytest.mark.parametrize(
+    ("stop_loss_points", "take_profit_points"),
+    [("100", "149.99"), ("45", "195")],
+)
+def test_reward_risk_ratio_rejects_values_outside_limits(
+    stop_loss_points: str, take_profit_points: str
+) -> None:
+    from goldie_domain import BotConfiguration
+
+    config = BotConfiguration.model_validate(
+        {
+            "theoretical_trade": {
+                "stop_loss_points": stop_loss_points,
+                "take_profit_points": take_profit_points,
+            }
+        }
+    )
+
+    with pytest.raises(ValueError, match="must be between 1.5 and 4.0"):
+        validate_reward_risk_ratio(config)
 
 
 def login(client: TestClient) -> dict[str, str]:
@@ -435,6 +482,13 @@ def test_trial_with_impossible_expectancy_r_is_invalid() -> None:
         validate_trial_summary({"expectancy_r": "-368308477"})
 
     validate_trial_summary({"expectancy_r": "10"})
+
+
+def test_trial_with_more_than_five_percent_ambiguous_exits_is_invalid() -> None:
+    with pytest.raises(ValueError, match=r"ambiguous_exit_pct=5\.01 exceeds 5%"):
+        validate_trial_summary({"ambiguous_exit_pct": "5.01"})
+
+    validate_trial_summary({"ambiguous_exit_pct": "5"})
 
 
 def test_backtest_diagnostics_compacts_trade_behavior() -> None:
@@ -753,6 +807,23 @@ def test_llm_context_v3_compacts_trials_and_aggregates_best_trades() -> None:
     assert all("trades" not in trial for trial in payload["top_trials"])
     assert remaining_deleted_trial_trades == 0
 
+    toon_text = encode_toon(payload)
+    formatted_json = json.dumps(payload, ensure_ascii=False, indent=2)
+    compact_json = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+    encoding = tiktoken.get_encoding("o200k_base")
+    toon_tokens = len(encoding.encode(toon_text))
+    formatted_json_tokens = len(encoding.encode(formatted_json))
+    compact_json_tokens = len(encoding.encode(compact_json))
+    assert decode_toon(toon_text) == payload
+    assert len(toon_text.encode("utf-8")) < len(formatted_json.encode("utf-8"))
+    assert toon_tokens < formatted_json_tokens, {
+        "toon_tokens": toon_tokens,
+        "compact_json_tokens": compact_json_tokens,
+        "formatted_json_tokens": formatted_json_tokens,
+        "saved_tokens": formatted_json_tokens - toon_tokens,
+        "saved_percent": round((1 - toon_tokens / formatted_json_tokens) * 100, 2),
+    }
+
 
 def test_optimization_api_and_execution_flow(monkeypatch) -> None:
     Base.metadata.drop_all(engine)
@@ -972,6 +1043,17 @@ def test_optimization_api_and_execution_flow(monkeypatch) -> None:
             in llm_body["parameter_stability"]["distributions"]
         )
         assert llm_body["parameter_stability"]["stable_candidates"]
+        llm_context_toon = client.get(
+            f"/api/v1/optimizations/{optimization_id}/llm-context?format=toon",
+            headers=headers,
+        )
+        assert llm_context_toon.status_code == 200
+        assert llm_context_toon.headers["content-type"] == "text/toon; charset=utf-8"
+        assert llm_context_toon.text.startswith(
+            "schema_version: goldie.optimization-llm-context.v3"
+        )
+        assert decode_toon(llm_context_toon.text) == llm_body
+
         atr_quantiles = llm_body["data_quality"]["atr_quantiles"]
         assert atr_quantiles["period"] == 14
         assert atr_quantiles["unit"] == "points"

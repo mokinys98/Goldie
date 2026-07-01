@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { api } from "@/lib/api";
+import { api, downloadAuthenticated } from "@/lib/api";
 import type {
   Bot,
   OptimizationLlmContext,
@@ -104,7 +104,7 @@ export default function OptimizationsPage() {
     });
   }
 
-  async function exportSelected(kind: "results" | "llm-context") {
+  async function exportSelected(kind: "results" | "llm-context" | "llm-context-toon") {
     if (!selectedRows.length || exportBusy) return;
     setExportBusy(true);
     setExportError(null);
@@ -112,9 +112,16 @@ export default function OptimizationsPage() {
 
     try {
       for (const item of selectedRows) {
-        const isLlmContext = kind === "llm-context";
+        const isLlmContext = kind !== "results";
         const optimizationName = botNames.get(item.bot_id)
           ?? (await api<Bot>(`/api/v1/bots/${item.bot_id}`)).name;
+        if (kind === "llm-context-toon") {
+          await downloadAuthenticated(
+            `/api/v1/optimizations/${item.id}/llm-context?format=toon`,
+            optimizationExportFilename(optimizationName, item.id, "toon"),
+          );
+          continue;
+        }
         const payload = isLlmContext
           ? await api<OptimizationLlmContext>(`/api/v1/optimizations/${item.id}/llm-context`)
           : await api<OptimizationResultsExport>(`/api/v1/optimizations/${item.id}/export`);
@@ -123,7 +130,7 @@ export default function OptimizationsPage() {
           optimizationExportFilename(
             optimizationName,
             item.id,
-            isLlmContext,
+            isLlmContext ? "json" : "results",
           ),
         );
       }
@@ -231,6 +238,14 @@ export default function OptimizationsPage() {
                     {exportBusy ? "Preparing..." : "LLM context JSON"}
                   </button>
                   <button
+                    className="button button-secondary"
+                    disabled={exportBusy}
+                    onClick={() => void exportSelected("llm-context-toon")}
+                    type="button"
+                  >
+                    {exportBusy ? "Preparing..." : "LLM context TOON"}
+                  </button>
+                  <button
                     className="button button-ghost"
                     disabled={exportBusy}
                     onClick={() => setSelectedIds(new Set())}
@@ -326,13 +341,14 @@ function downloadJson(payload: unknown, filename: string) {
 function optimizationExportFilename(
   optimizationName: string,
   optimizationId: string,
-  llmContext: boolean,
+  format: "results" | "json" | "toon",
 ): string {
   const safe = optimizationName
     .trim()
     .replace(/[^a-zA-Z0-9_-]+/g, "-")
     .replace(/^-+|-+$/g, "")
     .toLowerCase();
-  const suffix = llmContext ? "-llm-context" : "";
-  return `${safe}-optimization-${optimizationId.slice(0, 8)}${suffix}.json`;
+  const suffix = format === "results" ? "" : "-llm-context";
+  const extension = format === "toon" ? "toon" : "json";
+  return `${safe}-optimization-${optimizationId.slice(0, 8)}${suffix}.${extension}`;
 }

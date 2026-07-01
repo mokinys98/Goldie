@@ -5,13 +5,17 @@ import OptimizationDetailPage from "./page";
 
 const useQuery = vi.fn();
 const api = vi.fn();
+const downloadAuthenticated = vi.fn();
 
 vi.mock("next/navigation", () => ({ useParams: () => ({ id: "optimization-1" }) }));
 vi.mock("@tanstack/react-query", () => ({
   useQuery: (options: unknown) => useQuery(options),
   useQueryClient: () => ({ invalidateQueries: vi.fn() }),
 }));
-vi.mock("@/lib/api", () => ({ api: (...args: unknown[]) => api(...args) }));
+vi.mock("@/lib/api", () => ({
+  api: (...args: unknown[]) => api(...args),
+  downloadAuthenticated: (...args: unknown[]) => downloadAuthenticated(...args),
+}));
 vi.mock("@/lib/config", () => ({
   normalizeBotConfig: () => ({
     market: { symbol: "EURUSD" },
@@ -102,6 +106,7 @@ describe("OptimizationDetailPage", () => {
   beforeEach(() => {
     cleanup();
     api.mockReset();
+    downloadAuthenticated.mockReset();
     useQuery.mockImplementation(({ queryKey }: { queryKey: string[] }) => (
       queryKey[0] === "optimization"
         ? { data: optimization, isLoading: false, error: null }
@@ -161,6 +166,7 @@ describe("OptimizationDetailPage", () => {
     expect(
       screen.getAllByRole("button", { name: "LLM context JSON" }).at(0),
     ).toBeEnabled();
+    expect(screen.getByRole("button", { name: "LLM context TOON" })).toBeEnabled();
     expect(
       screen.getAllByRole("button", { name: "Results JSON" }).at(1),
     ).toBeEnabled();
@@ -198,6 +204,24 @@ describe("OptimizationDetailPage", () => {
     await waitFor(() => expect(click).toHaveBeenCalledOnce());
     expect(createObjectUrl).toHaveBeenCalledOnce();
     expect(revokeObjectUrl).toHaveBeenCalledWith("blob:test");
+  });
+
+  it("downloads the LLM context as TOON from the API", async () => {
+    downloadAuthenticated.mockResolvedValueOnce(undefined);
+    render(<OptimizationDetailPage />);
+
+    fireEvent.click(screen.getByLabelText("Download optimization data"));
+    fireEvent.click(screen.getByRole("button", { name: "LLM context TOON" }));
+
+    await waitFor(() => {
+      expect(downloadAuthenticated).toHaveBeenCalledWith(
+        "/api/v1/optimizations/optimization-1/llm-context?format=toon",
+        "prefix-alpha-bot-optimization-optimiza-llm-context.toon",
+      );
+    });
+    expect(
+      screen.getByText("Exported token-optimized LLM context to TOON."),
+    ).toBeInTheDocument();
   });
 
   it("copies results with the fallback clipboard path when Clipboard API is unavailable", async () => {

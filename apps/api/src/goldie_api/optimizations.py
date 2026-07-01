@@ -44,6 +44,9 @@ CANDIDATE_VALIDATION_PHASE = "CANDIDATE_VALIDATION"
 VALIDATION_PHASES = (CANDIDATE_VALIDATION_PHASE, FIXED_CONFIG_VALIDATION_PHASE)
 VALIDATION_CANDIDATE_LIMIT = 5
 MAX_ABS_EXPECTANCY_R = Decimal("10")
+MIN_REWARD_RISK_RATIO = Decimal("1.5")
+MAX_REWARD_RISK_RATIO = Decimal("4.0")
+MAX_AMBIGUOUS_EXIT_PCT = Decimal("5")
 
 logger = logging.getLogger(__name__)
 
@@ -97,6 +100,12 @@ def compute_balanced_score(summary: dict[str, Any]) -> Decimal:
 
 
 def validate_trial_summary(summary: dict[str, Any]) -> None:
+    ambiguous_exit_pct = _as_decimal(summary.get("ambiguous_exit_pct"))
+    if ambiguous_exit_pct > MAX_AMBIGUOUS_EXIT_PCT:
+        raise ValueError(
+            "Invalid optimization candidate: "
+            f"ambiguous_exit_pct={ambiguous_exit_pct} exceeds {MAX_AMBIGUOUS_EXIT_PCT}%"
+        )
     expectancy_r = summary.get("expectancy_r")
     if expectancy_r is None:
         return
@@ -105,6 +114,18 @@ def validate_trial_summary(summary: dict[str, Any]) -> None:
         raise ValueError(
             "Invalid optimization trial: "
             f"abs(expectancy_r)={abs(value)} exceeds {MAX_ABS_EXPECTANCY_R}"
+        )
+
+
+def validate_reward_risk_ratio(config: BotConfiguration) -> None:
+    stop_loss = config.theoretical_trade.stop_loss_points
+    take_profit = config.theoretical_trade.take_profit_points
+    ratio = take_profit / stop_loss
+    if not MIN_REWARD_RISK_RATIO <= ratio <= MAX_REWARD_RISK_RATIO:
+        raise ValueError(
+            "Invalid optimization trial: "
+            f"take_profit_points / stop_loss_points={ratio} must be between "
+            f"{MIN_REWARD_RISK_RATIO} and {MAX_REWARD_RISK_RATIO}"
         )
 
 
@@ -804,6 +825,8 @@ def execute_optimization(db: Session, optimization_id: uuid.UUID) -> None:
                     config_overrides.get("theoretical_trade", {})
                 )
                 trial_bot_config = BotConfiguration.model_validate(trial_config)
+                if config_overrides:
+                    validate_reward_risk_ratio(trial_bot_config)
                 result = BacktestEngine().run_stream(
                     candles=iter(search_candles),
                     total_candles=search_total_candles,
@@ -985,6 +1008,8 @@ def execute_optimization(db: Session, optimization_id: uuid.UUID) -> None:
                     config_overrides.get("theoretical_trade", {})
                 )
                 trial_bot_config = BotConfiguration.model_validate(trial_config)
+                if config_overrides:
+                    validate_reward_risk_ratio(trial_bot_config)
                 result = BacktestEngine().run_stream(
                     candles=iter(validation_candles),
                     total_candles=validation_total_candles,

@@ -14,9 +14,10 @@ dependencies = [
   "psycopg[binary]>=3.2,<4",
   "pydantic-settings>=2.7,<3",
   "PyJWT>=2.10,<3",
+  "python-toon>=0.1,<1",
   "redis>=5.2,<7",
   "sqlalchemy>=2.0,<3",
-  "uvicorn[standard]>=0.34,<1"
+  "uvicorn[standard]>=0.34,<1",
 ]
 
 [project.scripts]
@@ -26,7 +27,8 @@ goldie-replay-backtest = "goldie_api.replay_backtest:main"
 dev = [
   "httpx>=0.28,<1",
   "pytest>=8.3,<9",
-  "pytest-cov>=6,<8"
+  "pytest-cov>=6,<8",
+  "tiktoken>=0.9,<1",
 ]
 
 [tool.hatch.build.targets.wheel]

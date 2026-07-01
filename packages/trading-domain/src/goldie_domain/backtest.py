@@ -73,6 +73,7 @@ class BacktestTrade:
     mfe_points: Decimal
     mae_points: Decimal
     duration_seconds: int
+    ambiguous_exit: bool = False
 
 
 @dataclass(frozen=True)
@@ -390,6 +391,8 @@ class BacktestEngine:
         close_reason = None
         raw_exit = None
         if stop_hit:
+            # OHLC candles do not reveal whether TP or SL was reached first.
+            # Conservatively assume SL was first whenever both were touched.
             close_reason, raw_exit = "STOP_LOSS", position.stop_loss
         elif take_hit:
             close_reason, raw_exit = "TAKE_PROFIT", position.take_profit
@@ -407,6 +410,7 @@ class BacktestEngine:
             close_reason=close_reason,
             instrument=instrument,
             costs=costs,
+            ambiguous_exit=stop_hit and take_hit,
         )
 
     @staticmethod
@@ -428,6 +432,7 @@ class BacktestEngine:
         close_reason: str,
         instrument: BacktestInstrument,
         costs: BacktestCosts,
+        ambiguous_exit: bool = False,
     ) -> BacktestTrade:
         slippage = BacktestEngine._slippage_amount(costs, instrument, position.volume)
         exit_price = raw_exit - slippage if position.direction == "BUY" else raw_exit + slippage
@@ -489,6 +494,7 @@ class BacktestEngine:
             mfe_points=position.mfe_points,
             mae_points=position.mae_points,
             duration_seconds=int((closed_at - position.opened_at).total_seconds()),
+            ambiguous_exit=ambiguous_exit,
         )
 
     @staticmethod
@@ -555,10 +561,19 @@ class BacktestEngine:
         def average(values: list[Decimal]) -> Decimal | None:
             return sum(values, Decimal("0")) / len(values) if values else None
 
+        ambiguous_exit_count = sum(1 for trade in trades if trade.ambiguous_exit)
+        ambiguous_exit_pct = (
+            Decimal(ambiguous_exit_count * 100) / len(trades) if trades else Decimal("0")
+        )
+
         return {
             "total_trades": len(trades),
             "wins": len(wins),
             "losses": len(losses),
+            "same_candle_tp_sl_touch_count": ambiguous_exit_count,
+            "same_candle_tp_sl_touch_pct": ambiguous_exit_pct,
+            "ambiguous_exit_count": ambiguous_exit_count,
+            "ambiguous_exit_pct": ambiguous_exit_pct,
             "win_rate": Decimal(len(wins) * 100) / len(trades) if trades else None,
             "average_win": average([trade.net_pnl for trade in wins]),
             "average_loss": average([trade.net_pnl for trade in losses]),

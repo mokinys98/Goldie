@@ -36,6 +36,10 @@ CORE_TRIAL_METRICS = (
     "commission",
     "max_consecutive_losses",
     "average_duration_seconds",
+    "same_candle_tp_sl_touch_count",
+    "same_candle_tp_sl_touch_pct",
+    "ambiguous_exit_count",
+    "ambiguous_exit_pct",
 )
 
 VALIDATION_PHASES = {"CANDIDATE_VALIDATION", "FIXED_CONFIG_VALIDATION"}
@@ -263,6 +267,10 @@ def build_backtest_diagnostics(
             "max_drawdown_pct": summary.get("max_drawdown_pct"),
             "profit_factor": summary.get("profit_factor"),
             "win_rate": summary.get("win_rate"),
+            "same_candle_tp_sl_touch_count": summary.get("same_candle_tp_sl_touch_count"),
+            "same_candle_tp_sl_touch_pct": summary.get("same_candle_tp_sl_touch_pct"),
+            "ambiguous_exit_count": summary.get("ambiguous_exit_count"),
+            "ambiguous_exit_pct": summary.get("ambiguous_exit_pct"),
         },
         "r_multiple_summary": {
             "average": summary.get("expectancy_r"),

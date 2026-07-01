@@ -146,6 +146,11 @@ def test_same_candle_stop_and_take_uses_stop_first() -> None:
     )
     assert result.trades[0].close_reason == "STOP_LOSS"
     assert result.trades[0].net_pnl < 0
+    assert result.trades[0].ambiguous_exit is True
+    assert result.summary["same_candle_tp_sl_touch_count"] == 1
+    assert result.summary["same_candle_tp_sl_touch_pct"] == Decimal("100")
+    assert result.summary["ambiguous_exit_count"] == 1
+    assert result.summary["ambiguous_exit_pct"] == Decimal("100")
 
 
 def test_theoretical_stop_loss_rejects_loss_below_minus_1_05r() -> None:

@@ -1,11 +1,12 @@
 import uuid
 from datetime import UTC, datetime, timedelta
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from goldie_domain import BotConfiguration
 from redis import Redis
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
+from toon import encode as encode_toon
 
 from ..db import get_db
 from ..models import (
@@ -180,14 +181,18 @@ def export_optimization_results(
     return build_optimization_export(db, optimization)
 
 
-@router.get("/{optimization_id}/llm-context")
+@router.get("/{optimization_id}/llm-context", response_model=None)
 def read_optimization_llm_context(
     optimization_id: uuid.UUID,
+    format: str = Query(default="json", pattern="^(json|toon)$"),
     db: Session = Depends(get_db),
     _: User = Depends(get_current_user),
-) -> dict:
+) -> dict | Response:
     optimization = get_optimization(db, optimization_id)
-    return build_llm_context(db, optimization)
+    payload = build_llm_context(db, optimization)
+    if format == "toon":
+        return Response(content=encode_toon(payload), media_type="text/toon")
+    return payload
 
 
 @router.get("/{optimization_id}/trials", response_model=OptimizationTrialPage)

@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useRef, useState } from "react";
-import { api } from "@/lib/api";
+import { api, downloadAuthenticated } from "@/lib/api";
 import { displayJson, displayValue } from "@/lib/display";
 import { normalizeBotConfig } from "@/lib/config";
 import type {
@@ -223,6 +223,24 @@ export default function OptimizationDetailPage() {
     }
   }
 
+  async function exportLlmContextToToon() {
+    if (!optimizationName) return;
+    setExportBusy(true);
+    setExportMessage(null);
+    setExportError(null);
+    try {
+      await downloadAuthenticated(
+        `/api/v1/optimizations/${id}/llm-context?format=toon`,
+        llmContextToonFilename(optimizationName, id),
+      );
+      setExportMessage("Exported token-optimized LLM context to TOON.");
+    } catch (reason) {
+      setExportError(reason instanceof Error ? reason.message : "Could not export TOON context");
+    } finally {
+      setExportBusy(false);
+    }
+  }
+
   async function copyLlmContextToClipboard() {
     try {
       const payload = await loadLlmContext();
@@ -276,6 +294,13 @@ export default function OptimizationDetailPage() {
                 type="button"
               >
                 LLM context JSON
+              </button>
+              <button
+                disabled={exportBusy || !optimizationName}
+                onClick={() => runDownloadMenuAction(exportLlmContextToToon)}
+                type="button"
+              >
+                LLM context TOON
               </button>
               <span className="download-menu-divider" />
               <span className="download-menu-heading">Copy as...</span>
@@ -735,6 +760,11 @@ function exportFilename(optimizationName: string, optimizationId: string): strin
 function llmContextFilename(optimizationName: string, optimizationId: string): string {
   const safe = safeFilenamePart(optimizationName);
   return `${safe}-optimization-${optimizationId.slice(0, 8)}-llm-context.json`;
+}
+
+function llmContextToonFilename(optimizationName: string, optimizationId: string): string {
+  const safe = safeFilenamePart(optimizationName);
+  return `${safe}-optimization-${optimizationId.slice(0, 8)}-llm-context.toon`;
 }
 
 function safeFilenamePart(value: string): string {
