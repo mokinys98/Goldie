@@ -99,6 +99,7 @@ class StrategyProfile(Base, TimestampMixin):
     status: Mapped[str] = mapped_column(String(20), default="DRAFT", index=True)
     config: Mapped[dict] = mapped_column(JSON)
     optimization_ranges: Mapped[dict] = mapped_column(JSON, default=dict)
+    trade_ranges: Mapped[dict] = mapped_column(JSON, default=dict)
 
 
 class Run(Base, TimestampMixin):

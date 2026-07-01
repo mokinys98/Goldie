@@ -127,6 +127,7 @@ def create_optimization(
         search_space_snapshot=build_search_space(
             BotConfiguration.model_validate(config.config),
             strategy_profile.optimization_ranges if strategy_profile else None,
+            strategy_profile.trade_ranges if strategy_profile else None,
         ),
         progress={"completed_trials": 0, "total_trials": payload.n_trials},
         best_candidate={},
@@ -196,7 +197,7 @@ def list_optimization_trials(
     limit: int = Query(default=100, ge=1, le=500),
     phase: str | None = Query(
         default=None,
-        pattern="^(STRATEGY_SEARCH|FIXED_CONFIG_VALIDATION)$",
+        pattern="^(STRATEGY_SEARCH|CANDIDATE_VALIDATION|FIXED_CONFIG_VALIDATION)$",
     ),
     db: Session = Depends(get_db),
     _: User = Depends(get_current_user),

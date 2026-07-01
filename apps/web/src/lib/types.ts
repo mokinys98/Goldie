@@ -79,6 +79,15 @@ export type OptimizationParameterRange = {
 
 export type OptimizationRanges = Record<string, OptimizationParameterRange>;
 
+export type TradeOptimizationRange = OptimizationParameterRange & {
+  step: number;
+};
+
+export type TradeRanges = Partial<Record<
+  "stop_loss_points" | "take_profit_points",
+  TradeOptimizationRange
+>>;
+
 export type StrategyMetadata = {
   name: string;
   description: string;
@@ -94,6 +103,7 @@ export type StrategyProfile = {
   status: "DRAFT" | "ACTIVE" | "ARCHIVED";
   config: BotConfig;
   optimization_ranges: OptimizationRanges;
+  trade_ranges: TradeRanges;
   bot_count: number;
   created_at: string;
   updated_at: string;
@@ -513,6 +523,7 @@ export type OptimizationSearchParameter = {
   type?: string;
   minimum?: number;
   maximum?: number;
+  step?: number;
   choices?: Array<string | number | boolean>;
   default?: string | number | boolean;
 };
@@ -544,7 +555,7 @@ export type OptimizationRun = {
   config_snapshot: BotConfig;
   search_space_snapshot: OptimizationSearchParameter[];
   progress: {
-    phase?: "STRATEGY_SEARCH" | "FIXED_CONFIG_VALIDATION";
+    phase?: "STRATEGY_SEARCH" | "CANDIDATE_VALIDATION" | "FIXED_CONFIG_VALIDATION";
     completed_trials?: number;
     successful_trials?: number;
     failed_trials?: number;
@@ -561,6 +572,12 @@ export type OptimizationRun = {
     metrics?: Record<string, unknown>;
     summary?: Record<string, unknown>;
     fixed_config_overrides?: {
+      theoretical_trade?: {
+        stop_loss_points?: string | number;
+        take_profit_points?: string | number;
+      };
+    };
+    config_overrides?: {
       theoretical_trade?: {
         stop_loss_points?: string | number;
         take_profit_points?: string | number;
@@ -617,7 +634,7 @@ export type OptimizationTrial = {
   id: string;
   optimization_run_id: string;
   trial_number: number;
-  phase: "STRATEGY_SEARCH" | "FIXED_CONFIG_VALIDATION";
+  phase: "STRATEGY_SEARCH" | "CANDIDATE_VALIDATION" | "FIXED_CONFIG_VALIDATION";
   config_overrides: {
     theoretical_trade?: {
       stop_loss_points?: string | number;

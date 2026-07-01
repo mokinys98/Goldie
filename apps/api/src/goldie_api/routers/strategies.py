@@ -163,6 +163,12 @@ def create_profile(
                 for name, value in payload.optimization_ranges.items()
             }
         ),
+        trade_ranges=jsonable_encoder(
+            {
+                name: value.model_dump(mode="json")
+                for name, value in payload.trade_ranges.items()
+            }
+        ),
     )
     db.add(row)
     db.flush()
@@ -208,6 +214,8 @@ def update_profile(
     values.pop("config", None)
     optimization_ranges = payload.optimization_ranges
     values.pop("optimization_ranges", None)
+    trade_ranges = payload.trade_ranges
+    values.pop("trade_ranges", None)
     if optimization_ranges is not None:
         strategy_name = (
             config.strategy.name
@@ -260,6 +268,13 @@ def update_profile(
             {
                 name: value.model_dump(mode="json")
                 for name, value in optimization_ranges.items()
+            }
+        )
+    if trade_ranges is not None:
+        row.trade_ranges = jsonable_encoder(
+            {
+                name: value.model_dump(mode="json")
+                for name, value in trade_ranges.items()
             }
         )
     add_audit(

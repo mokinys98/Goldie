@@ -22,22 +22,30 @@ import type {
   OptimizationRanges,
   StrategyMetadata,
   StrategyParameterMetadata,
+  TradeRanges,
 } from "@/lib/types";
 import { FieldHelp } from "./field-help";
 
 const EMPTY_OPTIMIZATION_RANGES: OptimizationRanges = {};
+const EMPTY_TRADE_RANGES: TradeRanges = {};
 
 export function StrategyConfigForm({
   initialConfig = defaultBotConfig,
   initialOptimizationRanges = EMPTY_OPTIMIZATION_RANGES,
+  initialTradeRanges = EMPTY_TRADE_RANGES,
   submitLabel,
   onSubmit,
   onImportedFileName,
 }: {
   initialConfig?: BotConfig;
   initialOptimizationRanges?: OptimizationRanges;
+  initialTradeRanges?: TradeRanges;
   submitLabel: string;
-  onSubmit: (config: BotConfig, optimizationRanges: OptimizationRanges) => Promise<void>;
+  onSubmit: (
+    config: BotConfig,
+    optimizationRanges: OptimizationRanges,
+    tradeRanges: TradeRanges,
+  ) => Promise<void>;
   onImportedFileName?: (name: string) => void;
 }) {
   const initial = normalizeBotConfig(initialConfig);
@@ -45,6 +53,7 @@ export function StrategyConfigForm({
   const [optimizationRanges, setOptimizationRanges] = useState<OptimizationRanges>(
     initialOptimizationRanges,
   );
+  const [tradeRanges, setTradeRanges] = useState<TradeRanges>(initialTradeRanges);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
@@ -68,13 +77,18 @@ export function StrategyConfigForm({
     form.reset(normalizeBotConfig(initialConfig));
     setStrategyName(initialConfig.strategy.name);
     setOptimizationRanges(initialOptimizationRanges);
-  }, [form, initialConfig, initialOptimizationRanges]);
+    setTradeRanges(initialTradeRanges);
+  }, [form, initialConfig, initialOptimizationRanges, initialTradeRanges]);
 
   async function submit(values: BotConfig) {
     setBusy(true);
     setError("");
     try {
-      await onSubmit(values, resolvedOptimizationRanges(selected, optimizationRanges));
+      await onSubmit(
+        values,
+        resolvedOptimizationRanges(selected, optimizationRanges),
+        tradeRanges,
+      );
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "Could not save strategy");
     } finally {
@@ -88,6 +102,7 @@ export function StrategyConfigForm({
     form.setValue("strategy.name", name);
     form.setValue("strategy.parameters", metadata?.defaults ?? {});
     setOptimizationRanges(defaultOptimizationRanges(metadata));
+    setTradeRanges({});
   }
 
   async function importConfiguration(file: File | undefined) {
@@ -109,6 +124,7 @@ export function StrategyConfigForm({
         (item) => item.name === normalized.strategy.name,
       );
       setOptimizationRanges(defaultOptimizationRanges(importedMetadata));
+      setTradeRanges({});
       onImportedFileName?.(strategyNameFromFile(file.name));
       setNotice(`Imported ${file.name}. Review the settings before saving.`);
     } catch (reason) {
@@ -221,6 +237,32 @@ export function StrategyConfigForm({
         <NumberField label="Risk per trade %" path="theoretical_trade.risk_per_trade_pct" metadata={meta("theoretical_trade", "risk_per_trade_pct")} register={form.register} />
         <NumberField label="Maximum duration minutes" path="theoretical_trade.max_trade_duration_minutes" metadata={meta("theoretical_trade", "max_trade_duration_minutes")} register={form.register} integer />
         <NumberField label="Maximum open shadow positions" path="theoretical_trade.max_open_shadow_positions" metadata={meta("theoretical_trade", "max_open_shadow_positions")} register={form.register} integer />
+      </fieldset>
+      <fieldset>
+        <legend>Trade exit optimization</legend>
+        <p className="fieldset-description">
+          Enabled exits are sampled with Optuna. Disabled exits keep their configured value.
+        </p>
+        <TradeRangeField
+          label="Stop loss points"
+          range={tradeRanges.stop_loss_points}
+          fixedValue={form.watch("theoretical_trade.stop_loss_points")}
+          onChange={(range) => setTradeRanges((current) => updateTradeRange(
+            current,
+            "stop_loss_points",
+            range,
+          ))}
+        />
+        <TradeRangeField
+          label="Take profit points"
+          range={tradeRanges.take_profit_points}
+          fixedValue={form.watch("theoretical_trade.take_profit_points")}
+          onChange={(range) => setTradeRanges((current) => updateTradeRange(
+            current,
+            "take_profit_points",
+            range,
+          ))}
+        />
       </fieldset>
       {error && <div className="error-box">{error}</div>}
       {notice && <div className="success-box">{notice}</div>}
@@ -341,6 +383,81 @@ function resolvedOptimizationRanges(
   ranges: OptimizationRanges,
 ): OptimizationRanges {
   return { ...defaultOptimizationRanges(metadata), ...ranges };
+}
+
+function updateTradeRange(
+  ranges: TradeRanges,
+  name: keyof TradeRanges,
+  range: TradeRanges[typeof name],
+): TradeRanges {
+  if (range) return { ...ranges, [name]: range };
+  const next = { ...ranges };
+  delete next[name];
+  return next;
+}
+
+function TradeRangeField({
+  label,
+  range,
+  fixedValue,
+  onChange,
+}: {
+  label: string;
+  range?: { minimum: number; maximum: number; step: number };
+  fixedValue: number;
+  onChange: (range: { minimum: number; maximum: number; step: number } | undefined) => void;
+}) {
+  const enabled = Boolean(range);
+  const current = range ?? { minimum: Number(fixedValue), maximum: Number(fixedValue), step: 1 };
+  return (
+    <div className="parameter-range-row">
+      <label className="checkbox-row">
+        <input
+          aria-label={`Optimize ${label}`}
+          type="checkbox"
+          checked={enabled}
+          onChange={(event) => onChange(event.target.checked ? current : undefined)}
+        />
+        Optimize {label}
+      </label>
+      <label>
+        {label} Min
+        <input
+          aria-label={`${label} Min`}
+          type="number"
+          min="0"
+          step="any"
+          disabled={!enabled}
+          value={current.minimum}
+          onChange={(event) => onChange({ ...current, minimum: Number(event.target.value) })}
+        />
+      </label>
+      <label>
+        {label} Max
+        <input
+          aria-label={`${label} Max`}
+          type="number"
+          min="0"
+          step="any"
+          disabled={!enabled}
+          value={current.maximum}
+          onChange={(event) => onChange({ ...current, maximum: Number(event.target.value) })}
+        />
+      </label>
+      <label>
+        {label} Step
+        <input
+          aria-label={`${label} Step`}
+          type="number"
+          min="0"
+          step="any"
+          disabled={!enabled}
+          value={current.step}
+          onChange={(event) => onChange({ ...current, step: Number(event.target.value) })}
+        />
+      </label>
+    </div>
+  );
 }
 
 function NumberField({ label, path, metadata, register, integer = false }: { label: string; path: Parameters<Register>[0]; metadata?: StrategyParameterMetadata; register: Register; integer?: boolean }) {

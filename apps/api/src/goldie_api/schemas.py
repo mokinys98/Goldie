@@ -1,6 +1,7 @@
 import uuid
 from datetime import datetime
 from decimal import Decimal
+from typing import Literal
 
 from goldie_domain.config import BotConfiguration
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -72,6 +73,23 @@ class OptimizationParameterRange(BaseModel):
         return self
 
 
+class TradeOptimizationRange(BaseModel):
+    minimum: float = Field(gt=0, le=100000)
+    maximum: float = Field(gt=0, le=100000)
+    step: float = Field(gt=0, le=100000)
+
+    @model_validator(mode="after")
+    def valid_range(self) -> "TradeOptimizationRange":
+        minimum = Decimal(str(self.minimum))
+        maximum = Decimal(str(self.maximum))
+        step = Decimal(str(self.step))
+        if minimum > maximum:
+            raise ValueError("minimum must not exceed maximum")
+        if (maximum - minimum) % step != 0:
+            raise ValueError("maximum - minimum must be divisible by step")
+        return self
+
+
 class StrategyProfileCreate(BaseModel):
     name: str = Field(min_length=2, max_length=120)
     description: str = Field(default="", max_length=2000)
@@ -79,6 +97,9 @@ class StrategyProfileCreate(BaseModel):
     optimization_ranges: dict[str, OptimizationParameterRange] = Field(
         default_factory=dict
     )
+    trade_ranges: dict[
+        Literal["stop_loss_points", "take_profit_points"], TradeOptimizationRange
+    ] = Field(default_factory=dict)
 
 
 class StrategyProfileUpdate(BaseModel):
@@ -86,6 +107,9 @@ class StrategyProfileUpdate(BaseModel):
     description: str | None = Field(default=None, max_length=2000)
     config: BotConfiguration | None = None
     optimization_ranges: dict[str, OptimizationParameterRange] | None = None
+    trade_ranges: dict[
+        Literal["stop_loss_points", "take_profit_points"], TradeOptimizationRange
+    ] | None = None
 
 
 class StrategyProfileRead(OrmModel):
@@ -97,6 +121,9 @@ class StrategyProfileRead(OrmModel):
     optimization_ranges: dict[str, OptimizationParameterRange] = Field(
         default_factory=dict
     )
+    trade_ranges: dict[
+        Literal["stop_loss_points", "take_profit_points"], TradeOptimizationRange
+    ] = Field(default_factory=dict)
     created_at: datetime
     updated_at: datetime
     bot_count: int = 0

@@ -199,7 +199,9 @@ function Metric({ label, value }: { label: string; value: string | number }) {
 }
 
 function phaseScoreLabel(phase: OptimizationTrial["phase"]): string {
-  return phase === "FIXED_CONFIG_VALIDATION" ? "Validation" : "Search";
+  return phase === "FIXED_CONFIG_VALIDATION" || phase === "CANDIDATE_VALIDATION"
+    ? "Validation"
+    : "Search";
 }
 
 function formatScore(value: string | number | null | undefined): string {

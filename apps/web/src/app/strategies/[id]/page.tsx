@@ -83,9 +83,10 @@ export default function StrategyDetailPage() {
           <StrategyConfigForm
             initialConfig={data.config}
             initialOptimizationRanges={data.optimization_ranges}
+            initialTradeRanges={data.trade_ranges}
             submitLabel="Save strategy"
             onImportedFileName={setName}
-            onSubmit={async (config: BotConfig, optimizationRanges) => {
+            onSubmit={async (config: BotConfig, optimizationRanges, tradeRanges) => {
               await api(`/api/v1/strategy-profiles/${id}`, {
                 method: "PATCH",
                 body: JSON.stringify({
@@ -93,6 +94,7 @@ export default function StrategyDetailPage() {
                   description,
                   config,
                   optimization_ranges: optimizationRanges,
+                  trade_ranges: tradeRanges,
                 }),
               });
               setEditing(false);

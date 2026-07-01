@@ -40,13 +40,10 @@ OPTIMIZATION_COMMIT_INTERVAL = 5
 OPTIMIZATION_CANCEL_CHECK_INTERVAL = 5
 STRATEGY_SEARCH_PHASE = "STRATEGY_SEARCH"
 FIXED_CONFIG_VALIDATION_PHASE = "FIXED_CONFIG_VALIDATION"
+CANDIDATE_VALIDATION_PHASE = "CANDIDATE_VALIDATION"
+VALIDATION_PHASES = (CANDIDATE_VALIDATION_PHASE, FIXED_CONFIG_VALIDATION_PHASE)
 VALIDATION_CANDIDATE_LIMIT = 5
 MAX_ABS_EXPECTANCY_R = Decimal("10")
-FIXED_CONFIG_MULTIPLIERS = (
-    Decimal("0.75"),
-    Decimal("1.0"),
-    Decimal("1.25"),
-)
 
 logger = logging.getLogger(__name__)
 
@@ -116,31 +113,10 @@ def split_optimization_period(date_from, date_to):
     return (date_from, split_at), (split_at, date_to)
 
 
-def build_fixed_config_pairs(config: BotConfiguration) -> list[dict[str, Any]]:
-    stop_loss = config.theoretical_trade.stop_loss_points
-    take_profit = config.theoretical_trade.take_profit_points
-    pairs: list[dict[str, Any]] = []
-    seen: set[tuple[Decimal, Decimal]] = set()
-    for stop_multiplier in FIXED_CONFIG_MULTIPLIERS:
-        for take_multiplier in FIXED_CONFIG_MULTIPLIERS:
-            values = (stop_loss * stop_multiplier, take_profit * take_multiplier)
-            if values in seen:
-                continue
-            seen.add(values)
-            pairs.append(
-                {
-                    "theoretical_trade": {
-                        "stop_loss_points": values[0],
-                        "take_profit_points": values[1],
-                    }
-                }
-            )
-    return pairs
-
-
 def build_search_space(
     config: BotConfiguration,
     optimization_ranges: dict[str, dict[str, Any]] | None = None,
+    trade_ranges: dict[str, dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     metadata = _catalog_entry(config.strategy.name)
     defaults = config.strategy.parameters
@@ -187,6 +163,17 @@ def build_search_space(
             if name in defaults:
                 parameter["default"] = defaults[name]
             search_space.append(parameter)
+    for name, configured_range in (trade_ranges or {}).items():
+        search_space.append(
+            {
+                "name": f"theoretical_trade.{name}",
+                "type": "number",
+                "minimum": configured_range["minimum"],
+                "maximum": configured_range["maximum"],
+                "step": configured_range["step"],
+                "default": float(getattr(config.theoretical_trade, name)),
+            }
+        )
     return search_space
 
 
@@ -197,7 +184,12 @@ def sample_parameters(
     defaults: dict[str, Any],
 ) -> dict[str, Any]:
     sampled = copy.deepcopy(defaults)
-    parameter_names = {parameter["name"] for parameter in search_space}
+    strategy_space = [
+        parameter
+        for parameter in search_space
+        if not parameter["name"].startswith("theoretical_trade.")
+    ]
+    parameter_names = {parameter["name"] for parameter in strategy_space}
     dependencies = {
         "medium_ema_period": "fast_ema_period",
         "slow_ema_period": "medium_ema_period",
@@ -213,7 +205,7 @@ def sample_parameters(
         dependencies["sell_rsi_min"] = "buy_rsi_max"
     if {"sell_rsi_max", "buy_rsi_min"} <= parameter_names and "sell_rsi_min" not in parameter_names:
         dependencies["sell_rsi_max"] = "buy_rsi_min"
-    positions = {parameter["name"]: index for index, parameter in enumerate(search_space)}
+    positions = {parameter["name"]: index for index, parameter in enumerate(strategy_space)}
 
     def dependency_order(parameter: dict[str, Any]) -> tuple[int, int]:
         depth = 0
@@ -227,7 +219,7 @@ def sample_parameters(
 
     # Catalog property order is not an API guarantee. Sample constrained lower/upper
     # values before the parameters whose ranges depend on them.
-    ordered_search_space = sorted(search_space, key=dependency_order)
+    ordered_search_space = sorted(strategy_space, key=dependency_order)
     for parameter in ordered_search_space:
         name = parameter["name"]
         if "choices" in parameter:
@@ -288,9 +280,31 @@ def sample_parameters(
     return sampled
 
 
+def sample_trade_overrides(
+    trial: optuna.Trial,
+    *,
+    search_space: Sequence[dict[str, Any]],
+) -> dict[str, Any]:
+    sampled: dict[str, Any] = {}
+    prefix = "theoretical_trade."
+    for parameter in search_space:
+        name = parameter["name"]
+        if not name.startswith(prefix):
+            continue
+        field_name = name.removeprefix(prefix)
+        sampled[field_name] = trial.suggest_float(
+            name,
+            float(parameter["minimum"]),
+            float(parameter["maximum"]),
+            step=float(parameter["step"]),
+        )
+    return {"theoretical_trade": sampled} if sampled else {}
+
+
 def _candidate_payload(
     trial_number: int,
     sampled_parameters: dict[str, Any],
+    config_overrides: dict[str, Any],
     score: Decimal,
     metrics: dict[str, Any],
     summary: dict[str, Any],
@@ -299,6 +313,7 @@ def _candidate_payload(
         {
             "trial_number": trial_number,
             "sampled_parameters": sampled_parameters,
+            "config_overrides": config_overrides,
             "score": score,
             "metrics": metrics,
             "summary": summary,
@@ -424,14 +439,18 @@ def _top_candidates(
     db: Session,
     optimization_id: uuid.UUID,
     limit: int = 5,
-    phase: str | None = None,
+    phase: str | Sequence[str] | None = None,
 ) -> list[dict[str, Any]]:
     filters = [
         OptimizationTrial.optimization_run_id == optimization_id,
         OptimizationTrial.status == "SUCCEEDED",
     ]
     if phase is not None:
-        filters.append(OptimizationTrial.phase == phase)
+        filters.append(
+            OptimizationTrial.phase.in_(phase)
+            if not isinstance(phase, str)
+            else OptimizationTrial.phase == phase
+        )
     rows = list(
         db.scalars(
             select(OptimizationTrial)
@@ -496,7 +515,7 @@ def _terminal_summary_payload(
         "execution_model": execution_model,
         "top_candidates": _top_candidates(db, optimization.id, phase=STRATEGY_SEARCH_PHASE),
         "validation_candidates": _top_candidates(
-            db, optimization.id, phase=FIXED_CONFIG_VALIDATION_PHASE
+            db, optimization.id, phase=VALIDATION_PHASES
         ),
     }
     if timings is not None:
@@ -577,7 +596,6 @@ def execute_optimization(db: Session, optimization_id: uuid.UUID) -> None:
     validation_succeeded = 0
     validation_failed = 0
     search_space: list[dict[str, Any]] = []
-    fixed_config_pairs: list[dict[str, Any]] = []
     search_period = None
     validation_period = None
     search_total_candles = 0
@@ -728,7 +746,7 @@ def execute_optimization(db: Session, optimization_id: uuid.UUID) -> None:
                         search_period=search_period,
                         validation_period=validation_period,
                         search_space=search_space,
-                        fixed_config_grid=fixed_config_pairs,
+                        fixed_config_grid=[],
                         search_total_candles=search_total_candles,
                         validation_total_candles=validation_total_candles,
                         execution_model=_execution_model_payload(optimization),
@@ -754,13 +772,17 @@ def execute_optimization(db: Session, optimization_id: uuid.UUID) -> None:
                 search_space=search_space,
                 defaults=config.strategy.parameters,
             )
+            config_overrides = sample_trade_overrides(
+                optuna_trial,
+                search_space=search_space,
+            )
             sampling_seconds = monotonic() - sampling_started
             timings["optuna_sampling_seconds"] += sampling_seconds
             trial_row = OptimizationTrial(
                 optimization_run_id=optimization.id,
                 trial_number=optuna_trial.number,
                 phase=STRATEGY_SEARCH_PHASE,
-                config_overrides={},
+                config_overrides=jsonable_encoder(config_overrides),
                 status="RUNNING",
                 sampled_parameters=jsonable_encoder(sampled_parameters),
                 metrics={
@@ -778,6 +800,9 @@ def execute_optimization(db: Session, optimization_id: uuid.UUID) -> None:
             try:
                 trial_config = copy.deepcopy(optimization.config_snapshot)
                 trial_config["strategy"]["parameters"] = sampled_parameters
+                trial_config["theoretical_trade"].update(
+                    config_overrides.get("theoretical_trade", {})
+                )
                 trial_bot_config = BotConfiguration.model_validate(trial_config)
                 result = BacktestEngine().run_stream(
                     candles=iter(search_candles),
@@ -818,6 +843,7 @@ def execute_optimization(db: Session, optimization_id: uuid.UUID) -> None:
                 candidate = _candidate_payload(
                     optuna_trial.number,
                     trial_row.sampled_parameters,
+                    trial_row.config_overrides,
                     score,
                     trial_row.metrics,
                     trial_row.summary,
@@ -874,11 +900,10 @@ def execute_optimization(db: Session, optimization_id: uuid.UUID) -> None:
         if not search_candidates:
             raise ValueError("No successful strategy candidates were produced")
 
-        fixed_config_pairs = build_fixed_config_pairs(config)
-        validation_total = len(search_candidates) * len(fixed_config_pairs)
+        validation_total = len(search_candidates)
         total_trials = optimization.n_trials + validation_total
         optimization.progress = {
-            "phase": FIXED_CONFIG_VALIDATION_PHASE,
+            "phase": CANDIDATE_VALIDATION_PHASE,
             "completed_trials": succeeded + failed,
             "successful_trials": succeeded,
             "failed_trials": failed,
@@ -893,160 +918,161 @@ def execute_optimization(db: Session, optimization_id: uuid.UUID) -> None:
         validation_best: dict[str, Any] = {}
         validation_index = 0
         for search_candidate in search_candidates:
-            for fixed_config_overrides in fixed_config_pairs:
-                if _is_cancellation_checkpoint(validation_index) and _should_cancel(
-                    db, optimization.id
-                ):
-                    optimization = db.get(OptimizationRun, optimization.id)
-                    if optimization:
-                        optimization.status = "CANCELLED"
-                        optimization.completed_at = utc_now()
-                        optimization.summary = _terminal_summary_payload(
-                            db,
-                            optimization,
-                            completed_trials=succeeded + validation_succeeded,
-                            failed_trials=failed + validation_failed,
-                            strategy_completed_trials=succeeded,
-                            strategy_failed_trials=failed,
-                            validation_completed_trials=validation_succeeded,
-                            validation_failed_trials=validation_failed,
-                            duration_seconds=int(monotonic() - started),
-                            search_period=search_period,
-                            validation_period=validation_period,
-                            search_space=search_space,
-                            fixed_config_grid=fixed_config_pairs,
-                            search_total_candles=search_total_candles,
-                            validation_total_candles=validation_total_candles,
-                            execution_model=_execution_model_payload(optimization),
-                        )
-                        run = db.get(Run, optimization.run_id)
-                        if run:
-                            run.status = "CANCELLED"
-                            run.ended_at = optimization.completed_at
-                        _persist_terminal_timings(
-                            db,
-                            optimization,
-                            timings=timings,
-                            started=started,
-                            succeeded=succeeded + validation_succeeded,
-                            failed=failed + validation_failed,
-                        )
-                    return
-
-                trial_number = optimization.n_trials + validation_index
-                validation_index += 1
-                trial_row = OptimizationTrial(
-                    optimization_run_id=optimization.id,
-                    trial_number=trial_number,
-                    phase=FIXED_CONFIG_VALIDATION_PHASE,
-                    config_overrides=jsonable_encoder(fixed_config_overrides),
-                    status="RUNNING",
-                    sampled_parameters=search_candidate.sampled_parameters,
-                    metrics={
-                        "timings": {
-                            "sampling_seconds": 0.0,
-                            "backtest_seconds": 0.0,
-                        }
-                    },
-                    summary={},
-                    started_at=utc_now(),
-                )
-                db.add(trial_row)
-                backtest_started = monotonic()
-                try:
-                    trial_config = copy.deepcopy(optimization.config_snapshot)
-                    trial_config["strategy"]["parameters"] = search_candidate.sampled_parameters
-                    trial_config["theoretical_trade"].update(
-                        fixed_config_overrides["theoretical_trade"]
-                    )
-                    trial_bot_config = BotConfiguration.model_validate(trial_config)
-                    result = BacktestEngine().run_stream(
-                        candles=iter(validation_candles),
-                        total_candles=validation_total_candles,
-                        config=trial_bot_config,
-                        instrument=instrument,
-                        costs=costs,
-                        initial_capital=optimization.initial_capital,
-                        use_fast_strategy=True,
-                        collect_reason_counts=True,
-                    )
-                    validate_trial_summary(result.summary)
-                    backtest_seconds = monotonic() - backtest_started
-                    timings["backtest_seconds"] += backtest_seconds
-                    score = compute_balanced_score(result.summary)
-                    metrics = build_trial_metrics(
-                        result.summary,
-                        timings={
-                            "sampling_seconds": 0.0,
-                            "backtest_seconds": _seconds(backtest_seconds),
-                        },
-                        reason_counts=result.reason_counts,
-                        condition_counts=result.condition_counts,
-                    )
-                    trial_row.status = "SUCCEEDED"
-                    trial_row.score = score
-                    trial_row.metrics = metrics
-                    trial_row.summary = jsonable_encoder(result.summary)
-                    trial_row.completed_at = utc_now()
-                    db.flush()
-                    insert_optimization_trial_trades(
+            if _is_cancellation_checkpoint(validation_index) and _should_cancel(
+                db, optimization.id
+            ):
+                optimization = db.get(OptimizationRun, optimization.id)
+                if optimization:
+                    optimization.status = "CANCELLED"
+                    optimization.completed_at = utc_now()
+                    optimization.summary = _terminal_summary_payload(
                         db,
-                        trial_row.id,
-                        result.trades,
-                        trial_bot_config,
+                        optimization,
+                        completed_trials=succeeded + validation_succeeded,
+                        failed_trials=failed + validation_failed,
+                        strategy_completed_trials=succeeded,
+                        strategy_failed_trials=failed,
+                        validation_completed_trials=validation_succeeded,
+                        validation_failed_trials=validation_failed,
+                        duration_seconds=int(monotonic() - started),
+                        search_period=search_period,
+                        validation_period=validation_period,
+                        search_space=search_space,
+                        fixed_config_grid=[],
+                        search_total_candles=search_total_candles,
+                        validation_total_candles=validation_total_candles,
+                        execution_model=_execution_model_payload(optimization),
                     )
-                    validation_succeeded += 1
-                    candidate = jsonable_encoder(
-                        {
-                            "trial_number": trial_number,
-                            "sampled_parameters": search_candidate.sampled_parameters,
-                            "fixed_config_overrides": fixed_config_overrides,
-                            "score": score,
-                            "metrics": metrics,
-                            "summary": result.summary,
-                            "search_score": search_candidate.score,
-                            "search_metrics": search_candidate.metrics,
-                            "validation_score": score,
-                            "validation_metrics": metrics,
-                        }
+                    run = db.get(Run, optimization.run_id)
+                    if run:
+                        run.status = "CANCELLED"
+                        run.ended_at = optimization.completed_at
+                    _persist_terminal_timings(
+                        db,
+                        optimization,
+                        timings=timings,
+                        started=started,
+                        succeeded=succeeded + validation_succeeded,
+                        failed=failed + validation_failed,
                     )
-                    if not validation_best or float(candidate["score"]) > float(
-                        validation_best["score"]
-                    ):
-                        validation_best = candidate
-                        optimization.best_candidate = candidate
-                except Exception as exc:
-                    backtest_seconds = monotonic() - backtest_started
-                    timings["backtest_seconds"] += backtest_seconds
-                    validation_failed += 1
-                    trial_row.status = "FAILED"
-                    trial_row.metrics = {
-                        "timings": {
-                            "sampling_seconds": 0.0,
-                            "backtest_seconds": _seconds(backtest_seconds),
-                        }
-                    }
-                    trial_row.error = str(exc)[:4000]
-                    trial_row.completed_at = utc_now()
+                return
 
-                validation_completed = validation_succeeded + validation_failed
-                optimization.progress = {
-                    "phase": FIXED_CONFIG_VALIDATION_PHASE,
-                    "completed_trials": succeeded + failed + validation_completed,
-                    "successful_trials": succeeded + validation_succeeded,
-                    "failed_trials": failed + validation_failed,
-                    "total_trials": total_trials,
-                    "strategy_trials_completed": succeeded + failed,
-                    "strategy_trials_total": optimization.n_trials,
-                    "validation_trials_completed": validation_completed,
-                    "validation_trials_total": validation_total,
+            config_overrides = search_candidate.config_overrides or {}
+            trial_number = optimization.n_trials + validation_index
+            validation_index += 1
+            trial_row = OptimizationTrial(
+                optimization_run_id=optimization.id,
+                trial_number=trial_number,
+                phase=CANDIDATE_VALIDATION_PHASE,
+                config_overrides=jsonable_encoder(config_overrides),
+                status="RUNNING",
+                sampled_parameters=search_candidate.sampled_parameters,
+                metrics={
+                    "timings": {
+                        "sampling_seconds": 0.0,
+                        "backtest_seconds": 0.0,
+                    }
+                },
+                summary={},
+                started_at=utc_now(),
+            )
+            db.add(trial_row)
+            backtest_started = monotonic()
+            try:
+                trial_config = copy.deepcopy(optimization.config_snapshot)
+                trial_config["strategy"]["parameters"] = search_candidate.sampled_parameters
+                trial_config["theoretical_trade"].update(
+                    config_overrides.get("theoretical_trade", {})
+                )
+                trial_bot_config = BotConfiguration.model_validate(trial_config)
+                result = BacktestEngine().run_stream(
+                    candles=iter(validation_candles),
+                    total_candles=validation_total_candles,
+                    config=trial_bot_config,
+                    instrument=instrument,
+                    costs=costs,
+                    initial_capital=optimization.initial_capital,
+                    use_fast_strategy=True,
+                    collect_reason_counts=True,
+                )
+                validate_trial_summary(result.summary)
+                backtest_seconds = monotonic() - backtest_started
+                timings["backtest_seconds"] += backtest_seconds
+                score = compute_balanced_score(result.summary)
+                metrics = build_trial_metrics(
+                    result.summary,
+                    timings={
+                        "sampling_seconds": 0.0,
+                        "backtest_seconds": _seconds(backtest_seconds),
+                    },
+                    reason_counts=result.reason_counts,
+                    condition_counts=result.condition_counts,
+                )
+                trial_row.status = "SUCCEEDED"
+                trial_row.score = score
+                trial_row.metrics = metrics
+                trial_row.summary = jsonable_encoder(result.summary)
+                trial_row.completed_at = utc_now()
+                db.flush()
+                insert_optimization_trial_trades(
+                    db,
+                    trial_row.id,
+                    result.trades,
+                    trial_bot_config,
+                )
+                validation_succeeded += 1
+                candidate = jsonable_encoder(
+                    {
+                        "trial_number": trial_number,
+                        "sampled_parameters": search_candidate.sampled_parameters,
+                        "config_overrides": config_overrides,
+                        "fixed_config_overrides": config_overrides,
+                        "score": score,
+                        "metrics": metrics,
+                        "summary": result.summary,
+                        "search_score": search_candidate.score,
+                        "search_metrics": search_candidate.metrics,
+                        "validation_score": score,
+                        "validation_metrics": metrics,
+                    }
+                )
+                if not validation_best or float(candidate["score"]) > float(
+                    validation_best["score"]
+                ):
+                    validation_best = candidate
+                    optimization.best_candidate = candidate
+            except Exception as exc:
+                backtest_seconds = monotonic() - backtest_started
+                timings["backtest_seconds"] += backtest_seconds
+                validation_failed += 1
+                trial_row.status = "FAILED"
+                trial_row.metrics = {
+                    "timings": {
+                        "sampling_seconds": 0.0,
+                        "backtest_seconds": _seconds(backtest_seconds),
+                    }
                 }
-                completed = succeeded + failed + validation_completed
-                if _is_commit_checkpoint(completed, total_trials):
-                    _commit_timed(db, timings)
+                trial_row.error = str(exc)[:4000]
+                trial_row.completed_at = utc_now()
+
+            validation_completed = validation_succeeded + validation_failed
+            optimization.progress = {
+                "phase": CANDIDATE_VALIDATION_PHASE,
+                "completed_trials": succeeded + failed + validation_completed,
+                "successful_trials": succeeded + validation_succeeded,
+                "failed_trials": failed + validation_failed,
+                "total_trials": total_trials,
+                "strategy_trials_completed": succeeded + failed,
+                "strategy_trials_total": optimization.n_trials,
+                "validation_trials_completed": validation_completed,
+                "validation_trials_total": validation_total,
+            }
+            completed = succeeded + failed + validation_completed
+            if _is_commit_checkpoint(completed, total_trials):
+                _commit_timed(db, timings)
 
         if not validation_best:
-            raise ValueError("No successful fixed config validation trials were produced")
+            raise ValueError("No successful candidate validation trials were produced")
 
         optimization.status = "SUCCEEDED"
         optimization.completed_at = utc_now()
@@ -1064,7 +1090,7 @@ def execute_optimization(db: Session, optimization_id: uuid.UUID) -> None:
             search_period=search_period,
             validation_period=validation_period,
             search_space=search_space,
-            fixed_config_grid=fixed_config_pairs,
+            fixed_config_grid=[],
             search_total_candles=search_total_candles,
             validation_total_candles=validation_total_candles,
             execution_model=_execution_model_payload(optimization),
@@ -1102,7 +1128,7 @@ def execute_optimization(db: Session, optimization_id: uuid.UUID) -> None:
                 search_period=search_period,
                 validation_period=validation_period,
                 search_space=search_space,
-                fixed_config_grid=fixed_config_pairs,
+                fixed_config_grid=[],
                 search_total_candles=search_total_candles,
                 validation_total_candles=validation_total_candles,
                 execution_model=_execution_model_payload(optimization),

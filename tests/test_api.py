@@ -632,7 +632,73 @@ def create_strategy(
     profile = created.json()
     assert profile["status"] == "ACTIVE"
     assert profile["config"]["strategy"]["name"] == "basic_momentum"
+    assert profile["trade_ranges"] == {}
     return profile
+
+
+def test_strategy_trade_ranges_validation_and_partial_configuration() -> None:
+    Base.metadata.drop_all(engine)
+    Base.metadata.create_all(engine)
+    with TestClient(app) as client:
+        headers = login(client)
+        profile = create_strategy(client, headers, "Trade range strategy")
+        endpoint = f"/api/v1/strategy-profiles/{profile['id']}"
+
+        one_range = client.patch(
+            endpoint,
+            headers=headers,
+            json={
+                "trade_ranges": {
+                    "stop_loss_points": {
+                        "minimum": 45,
+                        "maximum": 70,
+                        "step": 2.5,
+                    }
+                }
+            },
+        )
+        assert one_range.status_code == 200
+        assert one_range.json()["trade_ranges"] == {
+            "stop_loss_points": {"minimum": 45, "maximum": 70, "step": 2.5}
+        }
+
+        both_ranges = client.patch(
+            endpoint,
+            headers=headers,
+            json={
+                "trade_ranges": {
+                    "stop_loss_points": {
+                        "minimum": 45,
+                        "maximum": 70,
+                        "step": 2.5,
+                    },
+                    "take_profit_points": {
+                        "minimum": 115,
+                        "maximum": 200,
+                        "step": 2.5,
+                    },
+                }
+            },
+        )
+        assert both_ranges.status_code == 200
+        assert set(both_ranges.json()["trade_ranges"]) == {
+            "stop_loss_points",
+            "take_profit_points",
+        }
+
+        invalid_ranges = [
+            {"minimum": 70, "maximum": 45, "step": 2.5},
+            {"minimum": 45, "maximum": 70, "step": 0},
+            {"minimum": 45, "maximum": 70, "step": 3},
+            {"minimum": 45, "maximum": 100001, "step": 1},
+        ]
+        for invalid in invalid_ranges:
+            response = client.patch(
+                endpoint,
+                headers=headers,
+                json={"trade_ranges": {"stop_loss_points": invalid}},
+            )
+            assert response.status_code == 422
 
 
 def test_create_bot_links_selected_strategy() -> None:

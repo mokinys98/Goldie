@@ -140,4 +140,31 @@ describe("StrategyConfigForm JSON transfer", () => {
     fireEvent.change(direction, { target: { value: "SELL_ONLY" } });
     expect(direction).toHaveValue("SELL_ONLY");
   });
+
+  it("submits independently enabled trade exit ranges", async () => {
+    const onSubmit = vi.fn().mockResolvedValue(undefined);
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={client}>
+        <StrategyConfigForm submitLabel="Save" onSubmit={onSubmit} />
+      </QueryClientProvider>,
+    );
+
+    fireEvent.click(await screen.findByLabelText("Optimize Stop loss points"));
+    fireEvent.change(screen.getByLabelText("Stop loss points Min"), {
+      target: { value: "45" },
+    });
+    fireEvent.change(screen.getByLabelText("Stop loss points Max"), {
+      target: { value: "70" },
+    });
+    fireEvent.change(screen.getByLabelText("Stop loss points Step"), {
+      target: { value: "2.5" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    await waitFor(() => expect(onSubmit).toHaveBeenCalled());
+    expect(onSubmit.mock.calls[0][2]).toEqual({
+      stop_loss_points: { minimum: 45, maximum: 70, step: 2.5 },
+    });
+  });
 });

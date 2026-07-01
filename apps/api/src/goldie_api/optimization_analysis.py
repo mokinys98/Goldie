@@ -31,6 +31,13 @@ ANALYSIS_METRICS = (
 )
 
 
+def _trial_parameters(trial: OptimizationTrial) -> dict[str, Any]:
+    values = dict(trial.sampled_parameters or {})
+    for name, value in (trial.config_overrides or {}).get("theoretical_trade", {}).items():
+        values[f"theoretical_trade.{name}"] = value
+    return values
+
+
 def _number(value: Any) -> float | None:
     if value is None or isinstance(value, bool):
         return None
@@ -91,7 +98,7 @@ def _parameter_analysis(trials: list[OptimizationTrial]) -> dict[str, Any]:
     for trial in trials:
         if trial.status != "SUCCEEDED":
             continue
-        for name, value in (trial.sampled_parameters or {}).items():
+        for name, value in _trial_parameters(trial).items():
             values[name].append(value)
 
     result: dict[str, Any] = {}
@@ -118,11 +125,17 @@ def _candidate_validation_analysis(trials: list[OptimizationTrial]) -> list[dict
     for trial in trials:
         if trial.status != "SUCCEEDED":
             continue
-        key = json.dumps(trial.sampled_parameters or {}, sort_keys=True, separators=(",", ":"))
+        key_values = (
+            trial.sampled_parameters or {}
+            if trial.phase == "FIXED_CONFIG_VALIDATION"
+            else _trial_parameters(trial)
+        )
+        key = json.dumps(key_values, sort_keys=True, separators=(",", ":"))
         group = groups.setdefault(
             key,
             {
                 "sampled_parameters": trial.sampled_parameters or {},
+                "config_overrides": trial.config_overrides or {},
                 "search_trials": [],
                 "validation_trials": [],
             },
@@ -183,7 +196,11 @@ def build_optimization_export(
     )
     phases = {
         phase: [trial for trial in trials if trial.phase == phase]
-        for phase in ("STRATEGY_SEARCH", "FIXED_CONFIG_VALIDATION")
+        for phase in (
+            "STRATEGY_SEARCH",
+            "CANDIDATE_VALIDATION",
+            "FIXED_CONFIG_VALIDATION",
+        )
     }
     trial_payloads = [
         {

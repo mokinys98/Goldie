@@ -38,6 +38,15 @@ CORE_TRIAL_METRICS = (
     "average_duration_seconds",
 )
 
+VALIDATION_PHASES = {"CANDIDATE_VALIDATION", "FIXED_CONFIG_VALIDATION"}
+
+
+def _trial_parameters(trial: OptimizationTrial) -> dict[str, Any]:
+    values = dict(trial.sampled_parameters or {})
+    for name, value in (trial.config_overrides or {}).get("theoretical_trade", {}).items():
+        values[f"theoretical_trade.{name}"] = value
+    return values
+
 MIN_VALIDATION_TRADES_WARN = 30
 MIN_VALIDATION_TRADES_BLOCK = 10
 DEGRADATION_WARN_PCT = 35
@@ -487,7 +496,7 @@ def build_parameter_insights(trials: list[OptimizationTrial]) -> dict[str, Any]:
     def summarize_bucket(bucket: list[OptimizationTrial]) -> dict[str, Any]:
         values: dict[str, list[Any]] = defaultdict(list)
         for trial in bucket:
-            for name, value in (trial.sampled_parameters or {}).items():
+            for name, value in _trial_parameters(trial).items():
                 values[name].append(value)
         result: dict[str, Any] = {}
         for name, parameter_values in sorted(values.items()):
@@ -506,12 +515,12 @@ def build_parameter_insights(trials: list[OptimizationTrial]) -> dict[str, Any]:
 
     correlations: dict[str, float] = {}
     parameter_names = sorted(
-        {name for trial in succeeded for name in (trial.sampled_parameters or {}).keys()}
+        {name for trial in succeeded for name in _trial_parameters(trial)}
     )
     scores = [_score(trial.score) for trial in succeeded]
     mean_score = _average(scores)
     for name in parameter_names:
-        values = [_number((trial.sampled_parameters or {}).get(name)) for trial in succeeded]
+        values = [_number(_trial_parameters(trial).get(name)) for trial in succeeded]
         if not values or any(value is None for value in values):
             continue
         numeric_values = [value for value in values if value is not None]
@@ -542,7 +551,7 @@ def build_parameter_distributions(trials: list[OptimizationTrial]) -> dict[str, 
     for trial in trials:
         if trial.status != "SUCCEEDED" or trial.phase != "STRATEGY_SEARCH":
             continue
-        for name, value in (trial.sampled_parameters or {}).items():
+        for name, value in _trial_parameters(trial).items():
             values[name].append(value)
 
     result: dict[str, Any] = {}
@@ -566,26 +575,41 @@ def build_parameter_distributions(trials: list[OptimizationTrial]) -> dict[str, 
 
 def build_robustness(trials: list[OptimizationTrial]) -> dict[str, Any]:
     search_by_parameters: dict[str, OptimizationTrial] = {}
+    legacy_search_by_parameters: dict[str, OptimizationTrial] = {}
     for trial in _successful_trials(trials):
         if trial.phase != "STRATEGY_SEARCH":
             continue
         key = json.dumps(
-            jsonable_encoder(trial.sampled_parameters or {}),
+            jsonable_encoder(_trial_parameters(trial)),
             sort_keys=True,
             separators=(",", ":"),
         )
         search_by_parameters[key] = trial
-
-    candidates = []
-    for trial in _successful_trials(trials):
-        if trial.phase != "FIXED_CONFIG_VALIDATION":
-            continue
-        key = json.dumps(
+        legacy_key = json.dumps(
             jsonable_encoder(trial.sampled_parameters or {}),
             sort_keys=True,
             separators=(",", ":"),
         )
-        search_trial = search_by_parameters.get(key)
+        legacy_search_by_parameters[legacy_key] = trial
+
+    candidates = []
+    for trial in _successful_trials(trials):
+        if trial.phase not in VALIDATION_PHASES:
+            continue
+        key = json.dumps(
+            jsonable_encoder(
+                _trial_parameters(trial)
+                if trial.phase == "CANDIDATE_VALIDATION"
+                else trial.sampled_parameters or {}
+            ),
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        search_trial = (
+            search_by_parameters.get(key)
+            if trial.phase == "CANDIDATE_VALIDATION"
+            else legacy_search_by_parameters.get(key)
+        )
         search_score = _number(search_trial.score if search_trial else None)
         validation_score = _number(trial.score)
         degradation = (
@@ -693,7 +717,7 @@ def build_research_quality_gates(
     robustness: dict[str, Any],
 ) -> dict[str, Any]:
     succeeded = _successful_trials(trials)
-    validation_trials = [trial for trial in succeeded if trial.phase == "FIXED_CONFIG_VALIDATION"]
+    validation_trials = [trial for trial in succeeded if trial.phase in VALIDATION_PHASES]
     total_trials = len(trials)
     failed_trials = len([trial for trial in trials if trial.status == "FAILED"])
     failed_ratio = failed_trials / total_trials if total_trials else 0
@@ -1018,7 +1042,7 @@ def build_llm_context(db: Session, optimization: OptimizationRun) -> dict[str, A
     )
     succeeded = _successful_trials(trials)
     search_trials = [trial for trial in succeeded if trial.phase == "STRATEGY_SEARCH"]
-    validation_trials = [trial for trial in succeeded if trial.phase == "FIXED_CONFIG_VALIDATION"]
+    validation_trials = [trial for trial in succeeded if trial.phase in VALIDATION_PHASES]
     ranked_search = sorted(search_trials, key=lambda trial: _score(trial.score), reverse=True)
     ranked_validation = sorted(
         validation_trials,

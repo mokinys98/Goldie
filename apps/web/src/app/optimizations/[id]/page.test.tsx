@@ -133,18 +133,20 @@ describe("OptimizationDetailPage", () => {
   it("renders the immutable Optuna search-space snapshot", () => {
     render(<OptimizationDetailPage />);
 
-    expect(screen.getByRole("heading", { name: "Optuna strategy ranges" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Optuna search ranges" })).toBeInTheDocument();
     expect(screen.getByText("fast ema period")).toBeInTheDocument();
     expect(screen.getByText("5 – 20")).toBeInTheDocument();
     expect(screen.getByText("0 – 100")).toBeInTheDocument();
   });
 
-  it("renders phase progress and the winning fixed config", () => {
+  it("renders phase progress and the winning trade exits", () => {
     render(<OptimizationDetailPage />);
 
     expect(screen.getAllByText("12 / 12 trials").length).toBeGreaterThan(0);
     expect(screen.getAllByText("45 / 45 trials").length).toBeGreaterThan(0);
-    expect(screen.getAllByRole("heading", { name: "Best fixed config" }).length).toBeGreaterThan(0);
+    expect(
+      screen.getAllByRole("heading", { name: "Optimized trade exits" }).length,
+    ).toBeGreaterThan(0);
     expect(screen.getAllByText("37.5").length).toBeGreaterThan(0);
   });
 
@@ -168,9 +170,23 @@ describe("OptimizationDetailPage", () => {
   });
 
   it("uses the bot name and optimization prefix for downloaded JSON", async () => {
+    if (!URL.createObjectURL) {
+      Object.defineProperty(URL, "createObjectURL", {
+        configurable: true,
+        value: vi.fn(),
+      });
+    }
+    if (!URL.revokeObjectURL) {
+      Object.defineProperty(URL, "revokeObjectURL", {
+        configurable: true,
+        value: vi.fn(),
+      });
+    }
     const createObjectUrl = vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:test");
     const revokeObjectUrl = vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => undefined);
-    const click = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(function () {
+    const click = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(function (
+      this: HTMLAnchorElement,
+    ) {
       expect(this.download).toBe("prefix-alpha-bot-optimization-optimiza.json");
     });
     api.mockResolvedValueOnce({ trials: [] });

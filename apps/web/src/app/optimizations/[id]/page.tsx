@@ -51,14 +51,21 @@ export default function OptimizationDetailPage() {
         : false,
   });
   const validationTrialQuery = useQuery({
-    queryKey: ["optimization-trials", id, "FIXED_CONFIG_VALIDATION"],
+    queryKey: ["optimization-trials", id, "CANDIDATE_VALIDATION"],
     queryFn: () => api<OptimizationTrialPage>(
-      `/api/v1/optimizations/${id}/trials?limit=500&phase=FIXED_CONFIG_VALIDATION`,
+      `/api/v1/optimizations/${id}/trials?limit=500&phase=CANDIDATE_VALIDATION`,
     ),
     refetchInterval:
       run.data && ["PENDING", "RUNNING", "CANCEL_REQUESTED"].includes(run.data.status)
         ? 3000
         : false,
+  });
+  const legacyValidationTrialQuery = useQuery({
+    queryKey: ["optimization-trials", id, "FIXED_CONFIG_VALIDATION"],
+    queryFn: () => api<OptimizationTrialPage>(
+      `/api/v1/optimizations/${id}/trials?limit=500&phase=FIXED_CONFIG_VALIDATION`,
+    ),
+    refetchInterval: false,
   });
   const data = run.data;
   if (run.isLoading) return <div className="panel">Loading optimization...</div>;
@@ -74,8 +81,12 @@ export default function OptimizationDetailPage() {
   );
   const timings = data.summary.timings;
   const strategyTrials = strategyTrialQuery.data?.items ?? [];
-  const validationTrials = validationTrialQuery.data?.items ?? [];
-  const fixedTradeOverrides = data.best_candidate.fixed_config_overrides?.theoretical_trade;
+  const validationTrials = [
+    ...(validationTrialQuery.data?.items ?? []),
+    ...(legacyValidationTrialQuery.data?.items ?? []),
+  ];
+  const tradeOverrides = data.best_candidate.config_overrides?.theoretical_trade
+    ?? data.best_candidate.fixed_config_overrides?.theoretical_trade;
   const researchQuality = data.summary.research_quality_gates;
   const objectiveFormula = getObjectiveFormula(data);
   const searchSpace = data.search_space_snapshot?.length
@@ -117,7 +128,9 @@ export default function OptimizationDetailPage() {
         },
         theoretical_trade: {
           ...configSnapshot.theoretical_trade,
-          ...(current.best_candidate.fixed_config_overrides?.theoretical_trade ?? {}),
+          ...(current.best_candidate.config_overrides?.theoretical_trade
+            ?? current.best_candidate.fixed_config_overrides?.theoretical_trade
+            ?? {}),
         },
       };
       const created = await api<{ id: string }>(`/api/v1/bots/${current.bot_id}/config-versions`, {
@@ -355,7 +368,7 @@ export default function OptimizationDetailPage() {
             total={data.progress.strategy_trials_total}
           />
           <PhaseProgress
-            label="Fixed config validation"
+            label="Candidate validation"
             completed={data.progress.validation_trials_completed ?? 0}
             total={data.progress.validation_trials_total ?? 0}
           />
@@ -374,7 +387,7 @@ export default function OptimizationDetailPage() {
                 <div><dt>Strategy search</dt><dd>{formatPeriod(data.summary.search_period)}</dd></div>
               )}
               {data.summary.validation_period && (
-                <div><dt>Fixed config validation</dt><dd>{formatPeriod(data.summary.validation_period)}</dd></div>
+                <div><dt>Candidate validation</dt><dd>{formatPeriod(data.summary.validation_period)}</dd></div>
               )}
             </div>
           </div>
@@ -390,7 +403,7 @@ export default function OptimizationDetailPage() {
           </div>
         </div>
         <div className="panel collector-section">
-          <h2>Optuna strategy ranges</h2>
+          <h2>Optuna search ranges</h2>
           {!searchSpace.length ? (
             <p className="muted">No search-space snapshot is available.</p>
           ) : (
@@ -454,16 +467,16 @@ export default function OptimizationDetailPage() {
           )}
         </div>
         <div className="panel">
-          <h2>{fixedTradeOverrides ? "Best fixed config" : "Fixed config outside search"}</h2>
+          <h2>{tradeOverrides ? "Optimized trade exits" : "Fixed trade exits"}</h2>
           <div className="key-values">
             <div><dt>session</dt><dd>{configSnapshot.session.timezone}</dd></div>
             <div>
               <dt>stop_loss_points</dt>
-              <dd>{displayValue(fixedTradeOverrides?.stop_loss_points ?? configSnapshot.theoretical_trade.stop_loss_points)}</dd>
+              <dd>{displayValue(tradeOverrides?.stop_loss_points ?? configSnapshot.theoretical_trade.stop_loss_points)}</dd>
             </div>
             <div>
               <dt>take_profit_points</dt>
-              <dd>{displayValue(fixedTradeOverrides?.take_profit_points ?? configSnapshot.theoretical_trade.take_profit_points)}</dd>
+              <dd>{displayValue(tradeOverrides?.take_profit_points ?? configSnapshot.theoretical_trade.take_profit_points)}</dd>
             </div>
             <div>
               <dt>risk_per_trade_pct</dt>
@@ -539,7 +552,7 @@ export default function OptimizationDetailPage() {
       </div>
       {validationTrials.length > 0 && (
         <div className="panel collector-section">
-          <h2>Fixed config validation ({validationTrials.length})</h2>
+          <h2>Candidate validation ({validationTrials.length})</h2>
           <div className="table-wrap borderless">
             <table>
               <thead><tr><th>Trial</th><th>Stop loss</th><th>Take profit</th><th>Status</th><th>Validation objective score</th><th>Net P&amp;L</th><th>Drawdown</th><th>Trades</th></tr></thead>
@@ -621,13 +634,15 @@ function formatSeconds(value: number | undefined): string {
 function formatSearchRange(parameter: {
   minimum?: number;
   maximum?: number;
+  step?: number;
   choices?: Array<string | number | boolean>;
 }): string {
   if (parameter.choices?.length) {
     return parameter.choices.map(displayValue).join(", ");
   }
   if (parameter.minimum !== undefined && parameter.maximum !== undefined) {
-    return `${displayValue(parameter.minimum)} – ${displayValue(parameter.maximum)}`;
+    const range = `${displayValue(parameter.minimum)} – ${displayValue(parameter.maximum)}`;
+    return parameter.step === undefined ? range : `${range} (step ${displayValue(parameter.step)})`;
   }
   return "--";
 }
@@ -648,11 +663,15 @@ function getObjectiveFormula(data: OptimizationRun): string {
 function bestScoreSource(data: OptimizationRun): string {
   if (
     data.best_candidate.validation_score !== undefined
+    || data.best_candidate.config_overrides
     || data.best_candidate.fixed_config_overrides
   ) {
-    return "Best fixed config validation trial";
+    return "Best candidate validation trial";
   }
-  if (data.progress.phase === "FIXED_CONFIG_VALIDATION") {
+  if (
+    data.progress.phase === "CANDIDATE_VALIDATION"
+    || data.progress.phase === "FIXED_CONFIG_VALIDATION"
+  ) {
     return "Best strategy search candidate pending validation";
   }
   return "Best strategy search trial";
@@ -723,5 +742,9 @@ function safeFilenamePart(value: string): string {
 }
 
 function llmContextTrialCount(payload: OptimizationLlmContext): number {
-  return payload.top_trials.length + payload.validation_winners.length + payload.worst_trials.length;
+  const legacyTrials = (payload as unknown as { trials?: unknown[] }).trials;
+  if (legacyTrials) return legacyTrials.length;
+  return (payload.top_trials ?? []).length
+    + (payload.validation_winners ?? []).length
+    + (payload.worst_trials ?? []).length;
 }

@@ -34,11 +34,11 @@ from goldie_api.optimizations import (
     OPTIMIZATION_COMMIT_INTERVAL,
     _is_cancellation_checkpoint,
     _is_commit_checkpoint,
-    build_fixed_config_pairs,
     build_search_space,
     compute_balanced_score,
     execute_optimization,
     sample_parameters,
+    sample_trade_overrides,
     split_optimization_period,
     validate_trial_summary,
 )
@@ -147,21 +147,45 @@ def test_optimization_period_is_split_without_overlap() -> None:
     assert validation_period == (search_period[1], date_to)
 
 
-def test_fixed_config_grid_contains_nine_unique_pairs() -> None:
+def test_trade_ranges_are_added_to_search_space_and_sampled_as_overrides() -> None:
     from goldie_domain import BotConfiguration
 
-    pairs = build_fixed_config_pairs(BotConfiguration())
-    values = {
-        (
-            pair["theoretical_trade"]["stop_loss_points"],
-            pair["theoretical_trade"]["take_profit_points"],
-        )
-        for pair in pairs
-    }
+    config = BotConfiguration()
+    search_space = build_search_space(
+        config,
+        trade_ranges={
+            "stop_loss_points": {"minimum": 45, "maximum": 70, "step": 2.5},
+        },
+    )
+    stop_loss = next(
+        item for item in search_space if item["name"] == "theoretical_trade.stop_loss_points"
+    )
 
-    assert len(pairs) == 9
-    assert len(values) == 9
-    assert (Decimal("70.0"), Decimal("100.0")) in values
+    class StepTrial:
+        def suggest_float(
+            self, name: str, lower: float, upper: float, *, step: float
+        ) -> float:
+            assert name == "theoretical_trade.stop_loss_points"
+            assert (lower, upper, step) == (45.0, 70.0, 2.5)
+            return 52.5
+
+    assert stop_loss == {
+        "name": "theoretical_trade.stop_loss_points",
+        "type": "number",
+        "minimum": 45,
+        "maximum": 70,
+        "step": 2.5,
+        "default": 70.0,
+    }
+    assert sample_trade_overrides(StepTrial(), search_space=search_space) == {
+        "theoretical_trade": {"stop_loss_points": 52.5}
+    }
+    sampled_strategy = sample_parameters(
+        FractionTrial(0.5),
+        search_space=search_space,
+        defaults=config.strategy.parameters,
+    )
+    assert "theoretical_trade.stop_loss_points" not in sampled_strategy
 
 
 def login(client: TestClient) -> dict[str, str]:
@@ -809,6 +833,18 @@ def test_optimization_api_and_execution_flow(monkeypatch) -> None:
         with SessionLocal() as db:
             optimization = db.get(OptimizationRun, optimization_id)
             optimization.status = "RUNNING"
+            from goldie_domain import BotConfiguration
+
+            optimization.search_space_snapshot = build_search_space(
+                BotConfiguration.model_validate(optimization.config_snapshot),
+                trade_ranges={
+                    "stop_loss_points": {
+                        "minimum": 60,
+                        "maximum": 80,
+                        "step": 5,
+                    }
+                },
+            )
             db.commit()
             execute_optimization(db, optimization_id)
 
@@ -846,24 +882,33 @@ def test_optimization_api_and_execution_flow(monkeypatch) -> None:
             "validation_robustness",
             "risk_profile",
         }
-        assert committed_progress == [0, 5, 10, 12, 15, 20, 25, 30, 35, 40, 45, 50, 55, 57]
+        assert committed_progress == [0, 5, 10, 12, 15, 17]
         assert trials.status_code == 200
-        assert trials.json()["total"] == 57
+        assert trials.json()["total"] == 17
         strategy_trials = client.get(
             f"/api/v1/optimizations/{optimization_id}/trials?phase=STRATEGY_SEARCH",
             headers=headers,
         )
         validation_trials = client.get(
-            f"/api/v1/optimizations/{optimization_id}/trials?phase=FIXED_CONFIG_VALIDATION",
+            f"/api/v1/optimizations/{optimization_id}/trials?phase=CANDIDATE_VALIDATION",
             headers=headers,
         )
         assert strategy_trials.json()["total"] == 12
-        assert validation_trials.json()["total"] == 45
+        assert validation_trials.json()["total"] == 5
         assert all(
-            item["config_overrides"]["theoretical_trade"]
+            item["config_overrides"]["theoretical_trade"]["stop_loss_points"]
+            in {60, 65, 70, 75, 80}
             for item in validation_trials.json()["items"]
         )
-        assert detail.json()["best_candidate"]["fixed_config_overrides"]
+        assert all(
+            any(
+                search["sampled_parameters"] == validation["sampled_parameters"]
+                and search["config_overrides"] == validation["config_overrides"]
+                for search in strategy_trials.json()["items"]
+            )
+            for validation in validation_trials.json()["items"]
+        )
+        assert detail.json()["best_candidate"]["config_overrides"]["theoretical_trade"]
         assert detail.json()["best_candidate"]["validation_score"]
         assert (
             detail.json()["summary"]["search_period"]["date_to"]
@@ -897,9 +942,9 @@ def test_optimization_api_and_execution_flow(monkeypatch) -> None:
         export_body = exported.json()
         assert export_body["schema_version"] == "goldie.optimization-results.v2"
         assert export_body["optimization"]["id"] == str(optimization_id)
-        assert len(export_body["trials"]) == 57
+        assert len(export_body["trials"]) == 17
         assert export_body["analysis"]["phases"]["STRATEGY_SEARCH"]["trial_count"] == 12
-        assert export_body["analysis"]["phases"]["FIXED_CONFIG_VALIDATION"]["trial_count"] == 45
+        assert export_body["analysis"]["phases"]["CANDIDATE_VALIDATION"]["trial_count"] == 5
         assert export_body["analysis"]["parameter_distributions"]
         assert export_body["analysis"]["candidate_validation"]
         assert export_body["analysis"]["parameter_insights"]
@@ -922,6 +967,10 @@ def test_optimization_api_and_execution_flow(monkeypatch) -> None:
         assert llm_body["objective"]["trial_counts"]["phase"]["STRATEGY_SEARCH"] == 12
         assert llm_body["parameter_stability"]["insights"]
         assert llm_body["parameter_stability"]["distributions"]
+        assert (
+            "theoretical_trade.stop_loss_points"
+            in llm_body["parameter_stability"]["distributions"]
+        )
         assert llm_body["parameter_stability"]["stable_candidates"]
         atr_quantiles = llm_body["data_quality"]["atr_quantiles"]
         assert atr_quantiles["period"] == 14
@@ -958,7 +1007,7 @@ def test_optimization_api_and_execution_flow(monkeypatch) -> None:
             stored_trials = (
                 db.query(OptimizationTrial).filter_by(optimization_run_id=optimization_id).count()
             )
-            assert stored_trials == 57
+            assert stored_trials == 17
 
 
 def test_research_quality_gates_block_weak_validation_sample_and_degradation() -> None:
@@ -1085,18 +1134,6 @@ def test_optimization_fails_when_all_validation_trials_fail(monkeypatch) -> None
             return real_run_stream(engine, *args, **kwargs)
 
         monkeypatch.setattr(
-            optimization_module,
-            "build_fixed_config_pairs",
-            lambda bot_config: [
-                {
-                    "theoretical_trade": {
-                        "stop_loss_points": bot_config.theoretical_trade.stop_loss_points,
-                        "take_profit_points": bot_config.theoretical_trade.take_profit_points,
-                    }
-                }
-            ],
-        )
-        monkeypatch.setattr(
             optimization_module.BacktestEngine,
             "run_stream",
             fail_validation,
@@ -1110,4 +1147,4 @@ def test_optimization_fails_when_all_validation_trials_fail(monkeypatch) -> None
         detail = client.get(f"/api/v1/optimizations/{optimization_id}", headers=headers)
         assert detail.json()["status"] == "FAILED"
         assert detail.json()["summary"]["validation_failed_trials"] == 1
-        assert "No successful fixed config validation trials" in detail.json()["error"]
+        assert "No successful candidate validation trials" in detail.json()["error"]
