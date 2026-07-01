@@ -2,7 +2,7 @@ import copy
 import logging
 import uuid
 from collections.abc import Sequence
-from decimal import Decimal
+from decimal import Decimal, ROUND_HALF_UP
 from time import monotonic
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -46,6 +46,7 @@ VALIDATION_CANDIDATE_LIMIT = 5
 MAX_ABS_EXPECTANCY_R = Decimal("10")
 MIN_REWARD_RISK_RATIO = Decimal("1.5")
 MAX_REWARD_RISK_RATIO = Decimal("4.0")
+TAKE_PROFIT_STEP = Decimal("50")
 MAX_AMBIGUOUS_EXIT_PCT = Decimal("5")
 
 logger = logging.getLogger(__name__)
@@ -129,6 +130,12 @@ def validate_reward_risk_ratio(config: BotConfiguration) -> None:
         )
 
 
+def round_to_step(value: Decimal, step: Decimal) -> Decimal:
+    if step <= 0:
+        raise optuna.TrialPruned("Trade parameter step must be positive")
+    return (value / step).quantize(Decimal("1"), rounding=ROUND_HALF_UP) * step
+
+
 def split_optimization_period(date_from, date_to):
     split_at = date_from + (date_to - date_from) * 4 / 5
     return (date_from, split_at), (split_at, date_to)
@@ -185,6 +192,9 @@ def build_search_space(
                 parameter["default"] = defaults[name]
             search_space.append(parameter)
     for name, configured_range in (trade_ranges or {}).items():
+        # take_profit_points is derived from stop loss and a sampled R:R ratio.
+        if name == "take_profit_points":
+            continue
         search_space.append(
             {
                 "name": f"theoretical_trade.{name}",
@@ -306,20 +316,45 @@ def sample_trade_overrides(
     *,
     search_space: Sequence[dict[str, Any]],
 ) -> dict[str, Any]:
-    sampled: dict[str, Any] = {}
     prefix = "theoretical_trade."
-    for parameter in search_space:
-        name = parameter["name"]
-        if not name.startswith(prefix):
-            continue
-        field_name = name.removeprefix(prefix)
-        sampled[field_name] = trial.suggest_float(
-            name,
-            float(parameter["minimum"]),
-            float(parameter["maximum"]),
-            step=float(parameter["step"]),
+    stop_parameter = next(
+        (
+            parameter
+            for parameter in search_space
+            if parameter["name"] == f"{prefix}stop_loss_points"
+        ),
+        None,
+    )
+    if stop_parameter is None:
+        return {}
+    stop_loss = Decimal(
+        str(
+            trial.suggest_float(
+                f"{prefix}stop_loss_points",
+                float(stop_parameter["minimum"]),
+                float(stop_parameter["maximum"]),
+                step=float(stop_parameter["step"]),
+            )
         )
-    return {"theoretical_trade": sampled} if sampled else {}
+    )
+    risk_reward_ratio = Decimal(
+        str(
+            trial.suggest_float(
+                f"{prefix}risk_reward_ratio",
+                float(MIN_REWARD_RISK_RATIO),
+                float(MAX_REWARD_RISK_RATIO),
+            )
+        )
+    )
+    take_profit = round_to_step(stop_loss * risk_reward_ratio, TAKE_PROFIT_STEP)
+    if stop_loss <= 0 or take_profit <= 0:
+        raise optuna.TrialPruned("Could not create positive stop loss/take profit values")
+    return {
+        "theoretical_trade": {
+            "stop_loss_points": float(stop_loss),
+            "take_profit_points": float(take_profit),
+        }
+    }
 
 
 def _candidate_payload(
@@ -825,8 +860,6 @@ def execute_optimization(db: Session, optimization_id: uuid.UUID) -> None:
                     config_overrides.get("theoretical_trade", {})
                 )
                 trial_bot_config = BotConfiguration.model_validate(trial_config)
-                if config_overrides:
-                    validate_reward_risk_ratio(trial_bot_config)
                 result = BacktestEngine().run_stream(
                     candles=iter(search_candles),
                     total_candles=search_total_candles,
@@ -874,6 +907,19 @@ def execute_optimization(db: Session, optimization_id: uuid.UUID) -> None:
                 if not best_payload or float(candidate["score"]) > float(best_payload["score"]):
                     best_payload = candidate
                     optimization.best_candidate = candidate
+            except optuna.TrialPruned as exc:
+                backtest_seconds = monotonic() - backtest_started
+                timings["backtest_seconds"] += backtest_seconds
+                trial_row.status = "PRUNED"
+                trial_row.metrics = {
+                    "timings": {
+                        "sampling_seconds": _seconds(sampling_seconds),
+                        "backtest_seconds": _seconds(backtest_seconds),
+                    }
+                }
+                trial_row.error = str(exc)[:4000]
+                trial_row.completed_at = utc_now()
+                study.tell(optuna_trial, state=optuna.trial.TrialState.PRUNED)
             except Exception as exc:
                 backtest_seconds = monotonic() - backtest_started
                 timings["backtest_seconds"] += backtest_seconds
@@ -889,19 +935,19 @@ def execute_optimization(db: Session, optimization_id: uuid.UUID) -> None:
                 trial_row.completed_at = utc_now()
                 study.tell(optuna_trial, state=optuna.trial.TrialState.FAIL)
 
+            completed = trial_index + 1
             optimization.progress = {
                 "phase": STRATEGY_SEARCH_PHASE,
-                "completed_trials": succeeded + failed,
+                "completed_trials": completed,
                 "successful_trials": succeeded,
                 "failed_trials": failed,
                 "total_trials": optimization.n_trials,
-                "strategy_trials_completed": succeeded + failed,
+                "strategy_trials_completed": completed,
                 "strategy_trials_total": optimization.n_trials,
                 "validation_trials_completed": 0,
                 "validation_trials_total": 0,
             }
             optimization.best_candidate = best_payload
-            completed = succeeded + failed
             if _is_commit_checkpoint(completed, optimization.n_trials):
                 _commit_timed(db, timings)
 
@@ -1008,8 +1054,6 @@ def execute_optimization(db: Session, optimization_id: uuid.UUID) -> None:
                     config_overrides.get("theoretical_trade", {})
                 )
                 trial_bot_config = BotConfiguration.model_validate(trial_config)
-                if config_overrides:
-                    validate_reward_risk_ratio(trial_bot_config)
                 result = BacktestEngine().run_stream(
                     candles=iter(validation_candles),
                     total_candles=validation_total_candles,

@@ -167,11 +167,14 @@ def test_trade_ranges_are_added_to_search_space_and_sampled_as_overrides() -> No
 
     class StepTrial:
         def suggest_float(
-            self, name: str, lower: float, upper: float, *, step: float
+            self, name: str, lower: float, upper: float, *, step: float | None = None
         ) -> float:
-            assert name == "theoretical_trade.stop_loss_points"
-            assert (lower, upper, step) == (45.0, 70.0, 2.5)
-            return 52.5
+            if name == "theoretical_trade.stop_loss_points":
+                assert (lower, upper, step) == (45.0, 70.0, 2.5)
+                return 52.5
+            assert name == "theoretical_trade.risk_reward_ratio"
+            assert (lower, upper, step) == (1.5, 4.0, None)
+            return 2.0
 
     assert stop_loss == {
         "name": "theoretical_trade.stop_loss_points",
@@ -182,7 +185,10 @@ def test_trade_ranges_are_added_to_search_space_and_sampled_as_overrides() -> No
         "default": 70.0,
     }
     assert sample_trade_overrides(StepTrial(), search_space=search_space) == {
-        "theoretical_trade": {"stop_loss_points": 52.5}
+        "theoretical_trade": {
+            "stop_loss_points": 52.5,
+            "take_profit_points": 100.0,
+        }
     }
     sampled_strategy = sample_parameters(
         FractionTrial(0.5),
